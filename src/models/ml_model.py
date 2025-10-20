@@ -62,6 +62,10 @@ class MLPredictor:
 
         # Encode result labels
         y_result_encoded = self.label_encoder.fit_transform(y_result)
+        # Log training label distribution
+        counts = y_result.value_counts()
+        total = len(y_result)
+        print("Training label distribution:", {k: f"{int(v)} ({v/total:.1%})" for k, v in counts.items()})
 
         print(f"Training on {len(training_data)} matches with {len(self.feature_columns)} features")
 

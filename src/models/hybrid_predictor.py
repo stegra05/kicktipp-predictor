@@ -42,6 +42,36 @@ class HybridPredictor:
         # Confidence threshold for adaptive safe strategy
         self.confidence_threshold: float = 0.4
 
+        # Unified grid size
+        self.max_goals = 8
+
+        # Try load best params from config
+        try:
+            import os, json
+            cfg_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config")
+            cfg_yaml = os.path.join(cfg_dir, "best_params.yaml")
+            cfg_json = os.path.join(cfg_dir, "best_params.json")
+            params = None
+            if yaml is not None and os.path.exists(cfg_yaml):
+                with open(cfg_yaml, "r", encoding="utf-8") as f:
+                    params = yaml.safe_load(f)
+            elif os.path.exists(cfg_json):
+                with open(cfg_json, "r", encoding="utf-8") as f:
+                    params = json.load(f)
+            if isinstance(params, dict):
+                self.ml_weight = float(params.get("ml_weight", self.ml_weight))
+                self.poisson_weight = 1.0 - self.ml_weight
+                self.prob_blend_alpha = float(params.get("prob_blend_alpha", self.prob_blend_alpha))
+                self.min_lambda = float(params.get("min_lambda", self.min_lambda))
+                self.goal_temperature = float(params.get("goal_temperature", self.goal_temperature))
+                self.confidence_threshold = float(params.get("confidence_threshold", self.confidence_threshold))
+        except Exception:
+            pass
+
+        print(f"[HybridPredictor] params ml_weight={self.ml_weight:.2f} poisson_weight={self.poisson_weight:.2f} "
+              f"alpha={self.prob_blend_alpha:.2f} min_lambda={self.min_lambda:.2f} temp={self.goal_temperature:.2f} "
+              f"conf_thr={self.confidence_threshold:.2f} max_goals={self.max_goals}")
+
 
     def train(self, matches_df: pd.DataFrame):
         """
@@ -101,10 +131,9 @@ class HybridPredictor:
             away_lambda *= self.goal_temperature
 
             # Build probability grid with DC correction
-            max_goals = 7
-            grid = np.zeros((max_goals, max_goals))
-            for hg in range(max_goals):
-                for ag in range(max_goals):
+            grid = np.zeros((self.max_goals, self.max_goals))
+            for hg in range(self.max_goals):
+                for ag in range(self.max_goals):
                     p = poisson.pmf(hg, max(home_lambda, 1e-9)) * poisson.pmf(ag, max(away_lambda, 1e-9))
                     # Apply DC correction using rho from PoissonPredictor
                     rho = getattr(self.poisson_predictor, 'rho', 0.0)
@@ -279,13 +308,12 @@ class HybridPredictor:
             optimized = pred.copy()
 
             # Always optimize for points
-            max_goals = 7
             hg = float(pred['home_expected_goals'])
             ag = float(pred['away_expected_goals'])
-            grid = np.zeros((max_goals, max_goals))
+            grid = np.zeros((self.max_goals, self.max_goals))
             rho = getattr(self.poisson_predictor, 'rho', 0.0)
-            for h in range(max_goals):
-                for a in range(max_goals):
+            for h in range(self.max_goals):
+                for a in range(self.max_goals):
                     p = poisson.pmf(h, max(hg, 1e-9)) * poisson.pmf(a, max(ag, 1e-9))
                     if h == 0 and a == 0:
                         p *= (1.0 + rho)

@@ -89,6 +89,8 @@ def composite_objective(avg_points: float,
                         away_pred: float,
                         home_act: float,
                         away_act: float,
+                        act_D: float,
+                        act_A: float,
                         weights: Dict[str, float]) -> float:
     # Goal mean penalty beyond ±10%
     home_pen = max(0.0, abs(home_pred - home_act) / max(home_act, 1e-6) - 0.10)
@@ -100,10 +102,13 @@ def composite_objective(avg_points: float,
     away_penalty = max(0.0, 0.25 - pred_A)
     zero_pen = max(0.0, zero_zero_rate - 0.15)
 
+    drift_pen = (weights.get('draw_drift', 0.0) * abs(pred_D - act_D) +
+                 weights.get('away_drift', 0.0) * abs(pred_A - act_A))
     penalty = (weights['goal'] * goal_pen +
                weights['draw'] * draw_pen +
                weights['away'] * away_penalty +
-               weights['zero'] * zero_pen)
+               weights['zero'] * zero_pen +
+               drift_pen)
 
     return avg_points - penalty
 
@@ -158,7 +163,15 @@ def evaluate_params(params: Dict[str, float],
         home_acts.append(hact)
         away_acts.append(aact)
 
-        obj = composite_objective(pts, z0, pH, pD, pA, hpred, apred, hact, aact, weights)
+        # Actual outcome shares for drift penalties
+        def outc(h, a):
+            return 'H' if h > a else ('D' if h == a else 'A')
+        act_outcomes = [outc(int(a['home_score']), int(a['away_score'])) for a in acts]
+        act_H = act_outcomes.count('H') / max(len(act_outcomes), 1)
+        act_D = act_outcomes.count('D') / max(len(act_outcomes), 1)
+        act_A = act_outcomes.count('A') / max(len(act_outcomes), 1)
+
+        obj = composite_objective(pts, z0, pH, pD, pA, hpred, apred, hact, aact, act_D, act_A, weights)
         fold_objs.append(obj)
 
     avg_points = float(np.mean(fold_points))
@@ -179,7 +192,7 @@ def evaluate_params(params: Dict[str, float],
     )
 
 
-def successive_halving(features_df, n_splits: int, max_trials: int) -> Dict[str, float]:
+def successive_halving(features_df, n_splits: int, max_trials: int, progress_interval: int = 10) -> Dict[str, float]:
     data_fetcher = DataFetcher()
     feature_engineer = FeatureEngineer()
 
@@ -194,7 +207,7 @@ def successive_halving(features_df, n_splits: int, max_trials: int) -> Dict[str,
     strategies = ['safe', 'conservative']
     thresholds = [0.40, 0.45, 0.50, 0.55]
 
-    weights = {'goal': 0.2, 'draw': 0.2, 'away': 0.2, 'zero': 0.2}
+    weights = {'goal': 0.2, 'draw': 0.2, 'away': 0.2, 'zero': 0.2, 'draw_drift': 0.2, 'away_drift': 0.2}
 
     # Prepare logging
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -227,16 +240,14 @@ def successive_halving(features_df, n_splits: int, max_trials: int) -> Dict[str,
 
     # Coarse pass over the (possibly sampled) grid
     candidates: List[Tuple[TrialResult, str, float]] = []
-    # Progress accounting: number of trials and fold-trainings
     total_trials = len(grid)
     try:
         n_splits = tscv.get_n_splits(features_df)
     except Exception:
         n_splits = 3
-    total_trainings = total_trials * n_splits
-    trials_done = 0
     trainings_done = 0
-    for w, a, m, t, strategy, thr in grid:
+    best_so_far: TrialResult | None = None
+    for idx, (w, a, m, t, strategy, thr) in enumerate(grid, start=1):
         params = {
             'ml_weight': w,
             'prob_blend_alpha': a,
@@ -246,12 +257,12 @@ def successive_halving(features_df, n_splits: int, max_trials: int) -> Dict[str,
         trial = evaluate_params(params, features_df, tscv, strategy, thr, weights)
         log_trial(trial, strategy, thr)
         candidates.append((trial, strategy, thr))
-        # Update progress
-        trials_done += 1
+        # Condensed progress
         trainings_done += n_splits
-        remaining_trials = total_trials - trials_done
-        remaining_trainings = max(0, total_trainings - trainings_done)
-        print(f"Progress: {trials_done}/{total_trials} trials done, {remaining_trials} left; ~{remaining_trainings} fold-trainings remaining")
+        if best_so_far is None or trial.obj_score > best_so_far.obj_score:
+            best_so_far = trial
+        if (idx % max(1, progress_interval) == 0) or idx == total_trials:
+            print(f"[TUNE] {idx}/{total_trials} trials | best obj={best_so_far.obj_score:.3f} pts={best_so_far.avg_points:.3f}")
 
     # Keep top 50% by objective
     candidates.sort(key=lambda x: x[0].obj_score, reverse=True)
@@ -324,6 +335,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--max-trials', type=int, default=0, help='Max parameter combos to evaluate (0 = full grid)')
     parser.add_argument('--n-splits', type=int, default=3, help='TimeSeriesSplit folds')
+    parser.add_argument('--progress-interval', type=int, default=10, help='Trials per progress print')
     args = parser.parse_args()
 
     # Load data
@@ -339,7 +351,7 @@ def main():
     features_df = feature_engineer.create_features_from_matches(all_matches)
     print(f"Created {len(features_df)} samples")
 
-    best = successive_halving(features_df, n_splits=args.n_splits, max_trials=args.max_trials)
+    best = successive_halving(features_df, n_splits=args.n_splits, max_trials=args.max_trials, progress_interval=args.progress_interval)
     print("\nBest configuration:")
     for k, v in best.items():
         print(f"  {k}: {v}")

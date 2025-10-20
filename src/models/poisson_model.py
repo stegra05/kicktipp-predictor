@@ -17,6 +17,7 @@ class PoissonPredictor:
         self.league_avg_goals = 0.0
         # Dixon-Coles low-score interaction parameter
         self.rho = 0.0
+        self.max_goals = 8
 
     def train(self, matches_df: pd.DataFrame):
         """
@@ -48,8 +49,8 @@ class PoissonPredictor:
             self.team_attack[team] = 1.0
             self.team_defense[team] = 1.0
 
-        # Iteratively update strengths (simplified Dixon-Coles approach)
-        for iteration in range(10):
+        # Iteratively update strengths (opponent-adjusted updates)
+        for _ in range(8):
             new_attack = {}
             new_defense = {}
 
@@ -57,28 +58,29 @@ class PoissonPredictor:
                 home_matches = matches[matches['home_team'] == team]
                 away_matches = matches[matches['away_team'] == team]
 
-                # Attack strength: goals scored relative to opponent defense
-                goals_scored_home = home_matches['home_score'].sum()
-                goals_scored_away = away_matches['away_score'].sum()
-
-                total_goals_scored = goals_scored_home + goals_scored_away
-                total_team_matches = len(home_matches) + len(away_matches)
-
-                if total_team_matches > 0:
-                    avg_goals_scored = total_goals_scored / total_team_matches
-                    new_attack[team] = avg_goals_scored / self.league_avg_goals
+                # Attack: goals scored normalized by opponents' current defense
+                gs_home = home_matches['home_score'].sum()
+                gs_away = away_matches['away_score'].sum()
+                denom_attack = 0.0
+                for _, m in home_matches.iterrows():
+                    denom_attack += self.team_defense.get(m['away_team'], 1.0)
+                for _, m in away_matches.iterrows():
+                    denom_attack += self.team_defense.get(m['home_team'], 1.0)
+                if denom_attack > 0:
+                    new_attack[team] = (gs_home + gs_away) / denom_attack / max(self.league_avg_goals, 1e-9)
                 else:
                     new_attack[team] = 1.0
 
-                # Defense strength: goals conceded relative to opponent attack
-                goals_conceded_home = home_matches['away_score'].sum()
-                goals_conceded_away = away_matches['home_score'].sum()
-
-                total_goals_conceded = goals_conceded_home + goals_conceded_away
-
-                if total_team_matches > 0:
-                    avg_goals_conceded = total_goals_conceded / total_team_matches
-                    new_defense[team] = avg_goals_conceded / self.league_avg_goals
+                # Defense: goals conceded normalized by opponents' current attack
+                gc_home = home_matches['away_score'].sum()
+                gc_away = away_matches['home_score'].sum()
+                denom_def = 0.0
+                for _, m in home_matches.iterrows():
+                    denom_def += self.team_attack.get(m['away_team'], 1.0)
+                for _, m in away_matches.iterrows():
+                    denom_def += self.team_attack.get(m['home_team'], 1.0)
+                if denom_def > 0:
+                    new_defense[team] = (gc_home + gc_away) / denom_def / max(self.league_avg_goals, 1e-9)
                 else:
                     new_defense[team] = 1.0
 
@@ -155,11 +157,10 @@ class PoissonPredictor:
         away_expected = self.league_avg_goals * away_attack * home_defense
 
         # Calculate probabilities for different scorelines
-        max_goals = 10
-        score_probabilities = np.zeros((max_goals, max_goals))
+        score_probabilities = np.zeros((self.max_goals, self.max_goals))
 
-        for home_goals in range(max_goals):
-            for away_goals in range(max_goals):
+        for home_goals in range(self.max_goals):
+            for away_goals in range(self.max_goals):
                 prob_home = poisson.pmf(home_goals, home_expected)
                 prob_away = poisson.pmf(away_goals, away_expected)
                 p = prob_home * prob_away

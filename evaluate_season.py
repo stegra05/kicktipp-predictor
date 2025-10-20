@@ -78,9 +78,11 @@ def main():
             print(f"Could not generate features for matchday {matchday}.")
             continue
 
-        # Train Poisson component on finished historical matches for realistic λs
+        # Train Poisson on finished historical matches strictly before this matchday's latest match
         import pandas as pd
-        hist_df = pd.DataFrame([m for m in historical_matches if m['is_finished']])
+        md_max_date = max(m['date'] for m in matchday_matches)
+        hist_prior = [m for m in historical_matches if m['is_finished'] and m.get('date') is not None and m['date'] < md_max_date]
+        hist_df = pd.DataFrame(hist_prior)
         predictor.poisson_predictor.train(hist_df)
 
         # Generate predictions (maximize points by default)
@@ -152,9 +154,63 @@ def main():
         metrics['matchday_stats'][pred['matchday']]['matches'] += 1
 
     # Print Report
-    print("\n" + "="*80)
-    print("SEASON PERFORMANCE SUMMARY")
-    print("="*80)
+    # Calibration and debug for season
+    import numpy as np, csv, os, json
+    def outcome_idx(h, a): return 0 if h > a else (1 if h == a else 2)
+    probs = [[p['home_win_probability'], p['draw_probability'], p['away_win_probability']] for p in all_predictions]
+    actual_idx = [outcome_idx(p['actual_home_score'], p['actual_away_score']) for p in all_predictions]
+    brier = float(np.mean([np.sum((np.eye(3)[ai] - np.array(pr))**2) for pr, ai in zip(probs, actual_idx)]))
+    print("\n--- CALIBRATION (Season) ---")
+    print(f"Brier score: {brier:.3f}")
+
+    # Reliability (3 bins)
+    def reliability(scores):
+        arr = np.array(scores)
+        if len(arr)==0: return []
+        qs = np.quantile(arr[:,0], [0, 1/3, 2/3, 1])
+        rows=[]
+        for lo, hi in zip(qs[:-1], qs[1:]):
+            m = (arr[:,0]>=lo) & (arr[:,0]<=hi)
+            if m.sum()==0: continue
+            rows.append((arr[m,0].mean(), arr[m,1].mean(), int(m.sum())))
+        return rows
+    H_rel = reliability([(pr[0], 1 if ai==0 else 0) for pr, ai in zip(probs, actual_idx)])
+    D_rel = reliability([(pr[1], 1 if ai==1 else 0) for pr, ai in zip(probs, actual_idx)])
+    A_rel = reliability([(pr[2], 1 if ai==2 else 0) for pr, ai in zip(probs, actual_idx)])
+    print("H reliability:", ", ".join([f"{c:.2f}~{a:.2f}(n={n})" for c,a,n in H_rel]))
+    print("D reliability:", ", ".join([f"{c:.2f}~{a:.2f}(n={n})" for c,a,n in D_rel]))
+    print("A reliability:", ", ".join([f"{c:.2f}~{a:.2f}(n={n})" for c,a,n in A_rel]))
+
+    # Per-match debug
+    dbg_path = os.path.join('data','predictions','debug_season.csv')
+    os.makedirs(os.path.dirname(dbg_path), exist_ok=True)
+    with open(dbg_path, 'w', newline='', encoding='utf-8') as f:
+        w = csv.writer(f)
+        w.writerow(['matchday','home','away','pred_h','pred_a','act_h','act_a','lambda_h','lambda_a','pH','pD','pA','confidence','points'])
+        for p in all_predictions:
+            w.writerow([p['matchday'], p['home_team'], p['away_team'],
+                        p['predicted_home_score'], p['predicted_away_score'],
+                        p['actual_home_score'], p['actual_away_score'],
+                        f"{p['home_expected_goals']:.3f}", f"{p['away_expected_goals']:.3f}",
+                        f"{p['home_win_probability']:.3f}", f"{p['draw_probability']:.3f}", f"{p['away_win_probability']:.3f}",
+                        f"{p.get('confidence',0):.3f}", p['points_earned']])
+    print(f"Wrote per-match debug: {dbg_path}")
+
+    # Persist run meta
+    meta_path = os.path.join('data','predictions','run_meta.json')
+    meta = {
+        'script': 'evaluate_season.py',
+        'ml_weight': predictor.ml_weight,
+        'poisson_weight': predictor.poisson_weight,
+        'prob_blend_alpha': predictor.prob_blend_alpha,
+        'min_lambda': predictor.min_lambda,
+        'goal_temperature': predictor.goal_temperature,
+        'confidence_threshold': predictor.confidence_threshold,
+        'max_goals': getattr(predictor, 'max_goals', 8)
+    }
+    with open(meta_path, 'w', encoding='utf-8') as f:
+        json.dump(meta, f, indent=2, default=str)
+    print(f"Wrote run meta: {meta_path}")
 
     print("\n--- OVERALL PERFORMANCE ---")
     print(f"Evaluated Matchdays: {first_matchday} - {last_matchday}")

@@ -69,14 +69,16 @@ class FeatureEngineer:
         home_team = match['home_team']
         away_team = match['away_team']
 
-        # Get team histories
-        home_history = [m for m in historical_matches if
-                       (m['home_team'] == home_team or m['away_team'] == home_team)
-                       and m['is_finished']]
+        # Restrict to finished matches strictly before current match date
+        ref_hist = [m for m in historical_matches
+                    if m.get('is_finished') and m.get('date') is not None and m['date'] < match['date']]
 
-        away_history = [m for m in historical_matches if
-                       (m['home_team'] == away_team or m['away_team'] == away_team)
-                       and m['is_finished']]
+        # Get team histories from ref_hist only
+        home_history = [m for m in ref_hist if
+                       (m['home_team'] == home_team or m['away_team'] == home_team)]
+
+        away_history = [m for m in ref_hist if
+                       (m['home_team'] == away_team or m['away_team'] == away_team)]
 
         # Need at least some history
         if len(home_history) < 3 or len(away_history) < 3:
@@ -98,7 +100,7 @@ class FeatureEngineer:
         features.update(self._get_momentum_features(away_team, away_history, prefix='away'))
 
         # Head-to-head features
-        features.update(self._get_h2h_features(home_team, away_team, historical_matches))
+        features.update(self._get_h2h_features(home_team, away_team, ref_hist))
 
         # Home/away specific features
         features.update(self._get_home_away_features(home_team, home_history, 'home'))
@@ -110,15 +112,15 @@ class FeatureEngineer:
 
         # Strength of schedule
         features.update(self._get_strength_of_schedule(home_team, home_history,
-                                                       historical_matches, prefix='home'))
+                                                       ref_hist, prefix='home'))
         features.update(self._get_strength_of_schedule(away_team, away_history,
-                                                       historical_matches, prefix='away'))
+                                                       ref_hist, prefix='away'))
 
         # Rest days since last match
-        features.update(self._get_rest_features(home_team, away_team, match, historical_matches))
+        features.update(self._get_rest_features(home_team, away_team, match, ref_hist))
 
         # League position and points
-        features.update(self._get_table_features(home_team, away_team, historical_matches))
+        features.update(self._get_table_features(home_team, away_team, ref_hist))
 
         # Target variables (only if not prediction)
         if not is_prediction:
