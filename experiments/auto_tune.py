@@ -17,6 +17,7 @@ from typing import Dict, List, Tuple
 import time
 from contextlib import redirect_stdout, redirect_stderr
 import io
+import multiprocessing as mp
 
 import numpy as np
 from sklearn.model_selection import TimeSeriesSplit
@@ -294,8 +295,15 @@ def successive_halving(features_df, n_splits: int, max_trials: int, progress_int
         s = sec % 60
         return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"
 
+    # Also constrain threads in parent to avoid eager thread pools during imports
+    if omp_threads is not None:
+        os.environ.setdefault('OMP_NUM_THREADS', str(omp_threads))
+        os.environ.setdefault('OPENBLAS_NUM_THREADS', str(omp_threads))
+        os.environ.setdefault('MKL_NUM_THREADS', str(omp_threads))
+        os.environ.setdefault('NUMEXPR_NUM_THREADS', str(omp_threads))
+
     print(f"[TUNE] workers={n_jobs} x threads={omp_threads or 1} | trials={total_trials} | cv-trainings={total_trainings}")
-    with ProcessPoolExecutor(max_workers=n_jobs) as ex:
+    with ProcessPoolExecutor(max_workers=n_jobs, mp_context=mp.get_context('spawn')) as ex:
         futures = [ex.submit(_evaluate_trial, ta) for ta in task_args]
         for idx, fut in enumerate(as_completed(futures), start=1):
             trial, thr = fut.result()
