@@ -52,7 +52,7 @@ def get_upcoming_predictions():
             })
 
         days = request.args.get('days', 7, type=int)
-        strategy = request.args.get('strategy', 'balanced')
+        strategy = request.args.get('strategy', 'safe')  # Changed to 'safe' for best performance
 
         # Get upcoming matches
         upcoming_matches = data_fetcher.get_upcoming_matches(days=days)

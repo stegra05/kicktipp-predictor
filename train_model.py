@@ -71,6 +71,44 @@ def main():
                                   errors='ignore')
     evaluation = predictor.evaluate(test_df, test_features)
 
+    # Validate goal distributions
+    print("\n" + "="*60)
+    print("GOAL DISTRIBUTION VALIDATION")
+    print("="*60)
+
+    # Get predictions for validation
+    test_predictions = predictor.predict(test_features)
+
+    # Calculate actual vs predicted goal statistics
+    actual_home_goals = test_df['home_score'].mean()
+    actual_away_goals = test_df['away_score'].mean()
+    actual_total_goals = test_df['home_score'].sum() + test_df['away_score'].sum()
+
+    pred_home_goals = sum(p['home_expected_goals'] for p in test_predictions) / len(test_predictions)
+    pred_away_goals = sum(p['away_expected_goals'] for p in test_predictions) / len(test_predictions)
+    pred_total_goals = sum(p['home_expected_goals'] + p['away_expected_goals'] for p in test_predictions)
+
+    print(f"\nActual average goals per match:")
+    print(f"  Home: {actual_home_goals:.3f}")
+    print(f"  Away: {actual_away_goals:.3f}")
+    print(f"  Total: {actual_home_goals + actual_away_goals:.3f}")
+
+    print(f"\nPredicted average expected goals per match:")
+    print(f"  Home: {pred_home_goals:.3f}")
+    print(f"  Away: {pred_away_goals:.3f}")
+    print(f"  Total: {pred_home_goals + pred_away_goals:.3f}")
+
+    home_diff_pct = abs(pred_home_goals - actual_home_goals) / actual_home_goals * 100
+    away_diff_pct = abs(pred_away_goals - actual_away_goals) / actual_away_goals * 100
+
+    print(f"\nDifference:")
+    print(f"  Home: {home_diff_pct:.1f}%")
+    print(f"  Away: {away_diff_pct:.1f}%")
+
+    if home_diff_pct > 15 or away_diff_pct > 15:
+        print("\n⚠️  WARNING: Goal prediction mismatch > 15%!")
+        print("   Consider adjusting goal_temperature parameter")
+
     # Save models
     print("\nSaving trained models...")
     predictor.save_models("hybrid")

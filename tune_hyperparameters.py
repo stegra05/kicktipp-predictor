@@ -41,7 +41,7 @@ def calculate_points(predictions, actuals):
     return total_points
 
 
-def evaluate_weights(ml_weight, prob_blend_alpha, min_lambda,
+def evaluate_weights(ml_weight, prob_blend_alpha, min_lambda, goal_temperature,
                     train_features, train_matches, test_features, test_matches):
     """Evaluate a specific set of hyperparameters."""
 
@@ -50,6 +50,7 @@ def evaluate_weights(ml_weight, prob_blend_alpha, min_lambda,
     predictor.poisson_weight = 1 - ml_weight
     predictor.prob_blend_alpha = prob_blend_alpha
     predictor.min_lambda = min_lambda
+    predictor.goal_temperature = goal_temperature
 
     # Train on training data
     predictor.train(train_matches)
@@ -87,10 +88,11 @@ def grid_search():
     features_df = feature_engineer.create_features_from_matches(all_matches)
     print(f"Created {len(features_df)} feature samples")
 
-    # Define parameter grid
-    ml_weights = [0.5, 0.55, 0.6, 0.65, 0.7]
-    prob_blend_alphas = [0.6, 0.65, 0.7, 0.75]
-    min_lambdas = [0.2, 0.25, 0.3]
+    # Define parameter grid (focused on most impactful params after Phase 1-3 fixes)
+    ml_weights = [0.55, 0.6, 0.65]  # Reduced to speed up search
+    prob_blend_alphas = [0.4, 0.45, 0.5]  # Focused around new optimal
+    min_lambdas = [0.03, 0.05, 0.08]  # Around new lower value
+    goal_temperatures = [1.2, 1.3, 1.4]  # NEW: Temperature scaling
 
     best_score = 0
     best_params = {}
@@ -99,16 +101,18 @@ def grid_search():
     tscv = TimeSeriesSplit(n_splits=3)
 
     print("\nStarting grid search...")
-    print(f"Total combinations: {len(ml_weights) * len(prob_blend_alphas) * len(min_lambdas)}")
+    total_combinations = (len(ml_weights) * len(prob_blend_alphas) *
+                         len(min_lambdas) * len(goal_temperatures))
+    print(f"Total combinations: {total_combinations}")
     print()
 
     iteration = 0
-    total_iterations = len(ml_weights) * len(prob_blend_alphas) * len(min_lambdas)
 
     for ml_weight in ml_weights:
         for prob_blend_alpha in prob_blend_alphas:
             for min_lambda in min_lambdas:
-                iteration += 1
+                for goal_temperature in goal_temperatures:
+                    iteration += 1
 
                 cv_scores = []
 
@@ -123,7 +127,7 @@ def grid_search():
                     )
 
                     score = evaluate_weights(
-                        ml_weight, prob_blend_alpha, min_lambda,
+                        ml_weight, prob_blend_alpha, min_lambda, goal_temperature,
                         train_features, train_features,
                         test_features_only, test_features
                     )
@@ -132,10 +136,11 @@ def grid_search():
 
                 avg_score = np.mean(cv_scores)
 
-                print(f"[{iteration}/{total_iterations}] "
+                print(f"[{iteration}/{total_combinations}] "
                       f"ml_weight={ml_weight:.2f}, "
                       f"prob_blend_alpha={prob_blend_alpha:.2f}, "
-                      f"min_lambda={min_lambda:.2f} "
+                      f"min_lambda={min_lambda:.2f}, "
+                      f"temp={goal_temperature:.2f} "
                       f"-> Avg score: {avg_score:.3f} pts/match")
 
                 if avg_score > best_score:
@@ -143,7 +148,8 @@ def grid_search():
                     best_params = {
                         'ml_weight': ml_weight,
                         'prob_blend_alpha': prob_blend_alpha,
-                        'min_lambda': min_lambda
+                        'min_lambda': min_lambda,
+                        'goal_temperature': goal_temperature
                     }
 
     print("\n" + "="*80)
@@ -152,6 +158,7 @@ def grid_search():
     print(f"ML Weight: {best_params['ml_weight']:.2f}")
     print(f"Probability Blend Alpha: {best_params['prob_blend_alpha']:.2f}")
     print(f"Minimum Lambda: {best_params['min_lambda']:.2f}")
+    print(f"Goal Temperature: {best_params['goal_temperature']:.2f}")
     print(f"Average Score: {best_score:.3f} points per match")
     print(f"Expected Season Total: {best_score * 38:.1f} points")
     print()
@@ -161,6 +168,7 @@ def grid_search():
     print(f"  self.ml_weight = {best_params['ml_weight']}")
     print(f"  self.prob_blend_alpha = {best_params['prob_blend_alpha']}")
     print(f"  self.min_lambda = {best_params['min_lambda']}")
+    print(f"  self.goal_temperature = {best_params['goal_temperature']}")
     print()
 
 

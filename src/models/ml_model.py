@@ -102,15 +102,29 @@ class MLPredictor:
         self.home_goal_calibrator.fit(home_raw_in_sample, y_home)
         self.away_goal_calibrator.fit(away_raw_in_sample, y_away)
 
-        # Train result classifier
+        # Train result classifier with class weights to address outcome bias
         print("Training result classifier...")
+
+        # Calculate class weights to combat draw over-prediction
+        from sklearn.utils.class_weight import compute_class_weight
+        class_weights_array = compute_class_weight(
+            'balanced',
+            classes=np.unique(y_result_encoded),
+            y=y_result_encoded
+        )
+
+        # XGBoost uses sample weights, convert class weights to sample weights
+        sample_weights = np.array([class_weights_array[y] for y in y_result_encoded])
+
         self.result_model = XGBClassifier(
             n_estimators=200,
             max_depth=6,
             learning_rate=0.1,
             random_state=42
         )
-        self.result_model.fit(X, y_result_encoded)
+        self.result_model.fit(X, y_result_encoded, sample_weight=sample_weights)
+
+        print(f"  Class weights applied: {dict(zip(self.label_encoder.classes_, class_weights_array))}")
 
         print("Training completed!")
 

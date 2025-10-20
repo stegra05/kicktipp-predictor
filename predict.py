@@ -34,7 +34,7 @@ def main():
     parser.add_argument('--matchday', type=int, help='Specific matchday to predict')
     parser.add_argument('--days', type=int, default=7, help='Number of days ahead to predict (default: 7)')
     parser.add_argument('--strategy', choices=['balanced', 'conservative', 'aggressive', 'safe'],
-                       default='balanced', help='Prediction strategy (default: balanced)')
+                       default='safe', help='Prediction strategy (default: safe - best performance)')
     parser.add_argument('--record', action='store_true', help='Record predictions for performance tracking')
     parser.add_argument('--update-results', action='store_true',
                        help='Update previous predictions with actual results')

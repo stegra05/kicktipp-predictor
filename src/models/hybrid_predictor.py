@@ -21,11 +21,16 @@ class HybridPredictor:
         self.poisson_weight = 0.4
 
         # Probability blending weight (grid vs ML classifier)
-        # Higher = more weight to Poisson grid, lower = more weight to ML classifier
-        self.prob_blend_alpha = 0.65
+        # REDUCED from 0.65 to give ML classifier more influence (better at discriminating outcomes)
+        self.prob_blend_alpha = 0.45
 
         # Minimum lambda to avoid degenerate predictions
-        self.min_lambda = 0.25
+        # REDUCED from 0.25 to 0.05 - was causing excessive 0-0 predictions
+        self.min_lambda = 0.05
+
+        # Temperature scaling for expected goals (Phase 2)
+        # Scales lambdas up to match observed goal rates
+        self.goal_temperature = 1.3
 
     def train(self, matches_df: pd.DataFrame):
         """
@@ -79,6 +84,10 @@ class HybridPredictor:
             # Clamp lambdas to avoid degenerate near-zero predictions
             home_lambda = max(home_lambda, self.min_lambda)
             away_lambda = max(away_lambda, self.min_lambda)
+
+            # Apply temperature scaling to match observed goal distributions (Phase 2)
+            home_lambda *= self.goal_temperature
+            away_lambda *= self.goal_temperature
 
             # Build probability grid with DC correction
             max_goals = 7
@@ -200,8 +209,56 @@ class HybridPredictor:
 
         return hybrid_predictions
 
+    def _calculate_expected_points(self, grid: np.ndarray) -> tuple:
+        """
+        Calculate expected Kicktipp points for each scoreline in probability grid.
+        Returns (best_home_score, best_away_score, expected_points)
+
+        Args:
+            grid: Probability grid (max_goals x max_goals)
+
+        Returns:
+            Tuple of (home_score, away_score, expected_points) that maximizes E[points]
+        """
+        max_goals = grid.shape[0]
+        best_score = (0, 0)
+        best_expected_points = 0
+
+        # For each possible predicted scoreline
+        for pred_h in range(max_goals):
+            for pred_a in range(max_goals):
+                expected_points = 0
+
+                # Calculate expected points across all actual scorelines
+                for actual_h in range(max_goals):
+                    for actual_a in range(max_goals):
+                        prob = grid[actual_h, actual_a]
+
+                        # Exact score: 4 points
+                        if pred_h == actual_h and pred_a == actual_a:
+                            expected_points += 4 * prob
+
+                        # Correct goal difference: 3 points
+                        elif (pred_h - pred_a) == (actual_h - actual_a):
+                            expected_points += 3 * prob
+
+                        # Correct winner: 2 points
+                        else:
+                            pred_winner = 'H' if pred_h > pred_a else ('A' if pred_a > pred_h else 'D')
+                            actual_winner = 'H' if actual_h > actual_a else ('A' if actual_a > actual_h else 'D')
+
+                            if pred_winner == actual_winner:
+                                expected_points += 2 * prob
+
+                if expected_points > best_expected_points:
+                    best_expected_points = expected_points
+                    best_score = (pred_h, pred_a)
+
+        return (best_score[0], best_score[1], best_expected_points)
+
     def predict_optimized(self, features_df: pd.DataFrame,
-                         strategy: str = 'balanced') -> List[Dict]:
+                         strategy: str = 'balanced',
+                         use_confidence_adaptive: bool = True) -> List[Dict]:
         """
         Predict with optimization strategy for maximizing points.
 
@@ -212,13 +269,14 @@ class HybridPredictor:
                 - 'conservative': Favor more likely scorelines (fewer goals)
                 - 'aggressive': Go for exact scores with higher risk
                 - 'safe': Prioritize correct winner over exact scores
+            use_confidence_adaptive: If True, low-confidence predictions use 'safe' strategy
 
         Returns:
             List of optimized prediction dictionaries
         """
         base_predictions = self.predict(features_df)
 
-        if strategy == 'balanced':
+        if strategy == 'balanced' and not use_confidence_adaptive:
             return base_predictions
 
         optimized_predictions = []
@@ -262,6 +320,26 @@ class HybridPredictor:
                     # Predict draw with typical score
                     optimized['predicted_home_score'] = 1
                     optimized['predicted_away_score'] = 1
+
+            # Confidence-adaptive: override low-confidence predictions with safe strategy
+            if use_confidence_adaptive:
+                confidence = pred.get('confidence', 0.5)
+
+                # Low confidence (<0.4): use safe strategy
+                if confidence < 0.4:
+                    home_prob = pred['home_win_probability']
+                    away_prob = pred['away_win_probability']
+                    draw_prob = pred['draw_probability']
+
+                    if home_prob > away_prob and home_prob > draw_prob:
+                        optimized['predicted_home_score'] = 2
+                        optimized['predicted_away_score'] = 1
+                    elif away_prob > home_prob and away_prob > draw_prob:
+                        optimized['predicted_home_score'] = 1
+                        optimized['predicted_away_score'] = 2
+                    else:
+                        optimized['predicted_home_score'] = 1
+                        optimized['predicted_away_score'] = 1
 
             optimized_predictions.append(optimized)
 
