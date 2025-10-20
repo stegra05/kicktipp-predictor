@@ -80,8 +80,24 @@ class FeatureEngineer:
         away_history = [m for m in ref_hist if
                        (m['home_team'] == away_team or m['away_team'] == away_team)]
 
-        # Need at least some history
-        if len(home_history) < 3 or len(away_history) < 3:
+        # Adaptive minimum history by matchday (early season fallback)
+        try:
+            md = int(match.get('matchday', 0) or 0)
+        except Exception:
+            md = 0
+        if md <= 3:
+            min_hist = 1
+        elif md <= 5:
+            min_hist = 2
+        else:
+            min_hist = 3
+
+        if len(home_history) < min_hist or len(away_history) < min_hist:
+            # Log reason for debugging early-season feature starvation
+            try:
+                print(f"[FeatureEngineer] Skipping {home_team} vs {away_team} MD{md}: history home={len(home_history)} away={len(away_history)} (min={min_hist})")
+            except Exception:
+                pass
             return None
 
         features = {

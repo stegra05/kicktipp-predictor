@@ -40,6 +40,10 @@ class PoissonPredictor:
         home_goals = matches['home_score'].sum()
         away_goals = matches['away_score'].sum()
         self.home_advantage = (home_goals / total_matches) / (away_goals / total_matches)
+        # Smooth home advantage with a prior when data is sparse
+        if total_matches < 150:
+            prior = 1.10
+            self.home_advantage = 0.7 * float(self.home_advantage) + 0.3 * prior
 
         # Calculate attack and defense strengths
         teams = set(matches['home_team'].unique()) | set(matches['away_team'].unique())
@@ -87,11 +91,11 @@ class PoissonPredictor:
             self.team_attack = new_attack
             self.team_defense = new_defense
 
-        # Estimate a simple Dixon–Coles rho by coarse line search on historical data
+        # Estimate a simple Dixon–Coles rho with mild regularization
         self.rho = self._estimate_rho(matches)
 
     def _estimate_rho(self, matches: pd.DataFrame) -> float:
-        """Estimate DC rho with a coarse line search over [-0.2, 0.2]."""
+        """Estimate DC rho with a coarse line search over [-0.1, 0.1] with L2 penalty."""
         if len(matches) == 0:
             return 0.0
 
@@ -126,12 +130,18 @@ class PoissonPredictor:
                 ll += np.log(p)
             return ll
 
+        # If few matches, default to 0 to avoid overfitting
+        if len(matches) < 200:
+            return 0.0
+
         best_rho = 0.0
-        best_ll = -np.inf
-        for rho_val in np.linspace(-0.2, 0.2, 17):
+        best_obj = -np.inf
+        for rho_val in np.linspace(-0.1, 0.1, 11):
             ll = log_likelihood(rho_val)
-            if ll > best_ll:
-                best_ll = ll
+            # L2 penalty to shrink toward 0
+            obj = ll - 10.0 * (rho_val ** 2)
+            if obj > best_obj:
+                best_obj = obj
                 best_rho = rho_val
         return float(best_rho)
 
@@ -172,6 +182,11 @@ class PoissonPredictor:
                 elif home_goals == 1 and away_goals == 1:
                     p *= (1.0 - self.rho)
                 score_probabilities[home_goals, away_goals] = p
+
+        # Add tiny diagonal floor to avoid pathological zeros on common low scores
+        eps = 1e-12
+        score_probabilities[0,0] = max(score_probabilities[0,0], eps)
+        score_probabilities[1,1] = max(score_probabilities[1,1], eps)
 
         # Renormalize after DC correction
         total = np.sum(score_probabilities)

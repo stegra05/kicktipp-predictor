@@ -28,12 +28,11 @@ class HybridPredictor:
         self.poisson_weight = 0.4
 
         # Probability blending weight (grid vs ML classifier)
-        # REDUCED from 0.65 to give ML classifier more influence (better at discriminating outcomes)
-        self.prob_blend_alpha = 0.45
+        # Slightly increase grid influence to recover realism
+        self.prob_blend_alpha = 0.55
 
-        # Minimum lambda to avoid degenerate predictions
-        # REDUCED from 0.25 to 0.05 - was causing excessive 0-0 predictions
-        self.min_lambda = 0.05
+        # Minimum lambda to avoid degenerate predictions (slightly higher for realistic low scores)
+        self.min_lambda = 0.12
 
         # Temperature scaling for expected goals (Phase 2)
         # Scales lambdas up to match observed goal rates
@@ -248,6 +247,48 @@ class HybridPredictor:
             hybrid_predictions.append(hybrid_pred)
 
         return hybrid_predictions
+
+    def fit_goal_temperature(self, recent_matches_df: pd.DataFrame, clamp: tuple = (0.9, 1.4)) -> None:
+        """
+        Fit goal_temperature so predicted total goals from Poisson prior roughly
+        match recent actual totals. Trains a temporary Poisson on recent data
+        (assumes caller already trained poisson_predictor). Adjusts self.goal_temperature
+        multiplicatively and clamps to a reasonable range.
+
+        Args:
+            recent_matches_df: DataFrame of finished matches with columns
+                               ['home_team','away_team','home_score','away_score']
+            clamp: (min, max) bounds for temperature
+        """
+        try:
+            if recent_matches_df is None or len(recent_matches_df) == 0:
+                return
+            # Compute recent actual average total goals
+            actual_total = float((recent_matches_df['home_score'] + recent_matches_df['away_score']).mean())
+            if not np.isfinite(actual_total) or actual_total <= 0:
+                return
+
+            # Estimate predicted totals over a small random sample of recent fixtures
+            sample = recent_matches_df.sample(min(200, len(recent_matches_df)), random_state=42)
+            preds = []
+            for _, m in sample.iterrows():
+                p = self.poisson_predictor.predict_match(m['home_team'], m['away_team'])
+                preds.append(p['home_expected_goals'] + p['away_expected_goals'])
+            if not preds:
+                return
+            pred_total = float(np.mean(preds))
+            if pred_total <= 0:
+                return
+
+            # Scale temperature by ratio of actual to predicted totals
+            new_temp = float(self.goal_temperature) * (actual_total / pred_total)
+            new_temp = max(clamp[0], min(clamp[1], new_temp))
+            if abs(new_temp - self.goal_temperature) > 1e-3:
+                print(f"[HybridPredictor] Adjusting goal_temperature {self.goal_temperature:.3f} -> {new_temp:.3f}")
+                self.goal_temperature = new_temp
+        except Exception:
+            # Robust to any data issues; fallback to existing temperature
+            pass
 
     def _calculate_expected_points(self, grid: np.ndarray) -> tuple:
         """

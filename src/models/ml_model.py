@@ -5,6 +5,7 @@ from xgboost import XGBRegressor, XGBClassifier
 from sklearn.preprocessing import LabelEncoder
 from sklearn.isotonic import IsotonicRegression
 from sklearn.model_selection import train_test_split
+from sklearn.calibration import CalibratedClassifierCV
 from typing import Dict, List, Tuple
 import joblib
 import os
@@ -24,6 +25,7 @@ class MLPredictor:
         self.score_model_home = None  # Predicts home goals
         self.score_model_away = None  # Predicts away goals
         self.result_model = None      # Predicts match result (H/D/A)
+        self.result_calibrator: CalibratedClassifierCV | None = None  # Calibrated wrapper for probabilities
 
         # Feature columns (excluding identifiers and targets)
         self.feature_columns = None
@@ -123,17 +125,20 @@ class MLPredictor:
 
         # Train result classifier with class weights to address outcome bias
         print("Training result classifier...")
-
-        # Calculate class weights to combat draw over-prediction
         from sklearn.utils.class_weight import compute_class_weight
-        class_weights_array = compute_class_weight(
-            'balanced',
-            classes=np.unique(y_result_encoded),
-            y=y_result_encoded
+
+        # Split for calibration to avoid bias
+        X_tr, X_cal, y_tr, y_cal = train_test_split(
+            X, y_result_encoded, test_size=0.2, random_state=42, stratify=y_result_encoded
         )
 
-        # XGBoost uses sample weights, convert class weights to sample weights
-        sample_weights = np.array([class_weights_array[y] for y in y_result_encoded])
+        # Calculate class weights on training split
+        class_weights_array = compute_class_weight(
+            'balanced', classes=np.unique(y_tr), y=y_tr
+        )
+        # Map to training indices
+        cw_map = {c: w for c, w in zip(np.unique(y_tr), class_weights_array)}
+        sample_weights_tr = np.array([cw_map[y] for y in y_tr])
 
         self.result_model = XGBClassifier(
             n_estimators=200,
@@ -143,9 +148,17 @@ class MLPredictor:
             n_jobs=self.num_threads,
             nthread=self.num_threads
         )
-        self.result_model.fit(X, y_result_encoded, sample_weight=sample_weights)
+        self.result_model.fit(X_tr, y_tr, sample_weight=sample_weights_tr)
 
-        print(f"  Class weights applied: {dict(zip(self.label_encoder.classes_, class_weights_array))}")
+        # Probability calibration (isotonic) on held-out split
+        try:
+            self.result_calibrator = CalibratedClassifierCV(self.result_model, method='isotonic', cv='prefit')
+            self.result_calibrator.fit(X_cal, y_cal)
+        except Exception:
+            # Fallback: no calibration if isotonic fails
+            self.result_calibrator = None
+
+        print(f"  Class weights applied: {dict(zip(self.label_encoder.classes_, compute_class_weight('balanced', classes=np.unique(y_result_encoded), y=y_result_encoded)))}")
 
         print("Training completed!")
 
@@ -198,8 +211,11 @@ class MLPredictor:
         home_scores = np.maximum(home_scores, 0)
         away_scores = np.maximum(away_scores, 0)
 
-        # Predict result probabilities
-        result_probs = self.result_model.predict_proba(X)
+        # Predict result probabilities (use calibrated model if available)
+        if self.result_calibrator is not None:
+            result_probs = self.result_calibrator.predict_proba(X)
+        else:
+            result_probs = self.result_model.predict_proba(X)
 
         predictions = []
         for i in range(len(features_df)):
@@ -237,6 +253,8 @@ class MLPredictor:
         joblib.dump(self.score_model_home, os.path.join(self.model_dir, f"{prefix}_home.pkl"))
         joblib.dump(self.score_model_away, os.path.join(self.model_dir, f"{prefix}_away.pkl"))
         joblib.dump(self.result_model, os.path.join(self.model_dir, f"{prefix}_result.pkl"))
+        if self.result_calibrator is not None:
+            joblib.dump(self.result_calibrator, os.path.join(self.model_dir, f"{prefix}_result_calibrator.pkl"))
         joblib.dump(self.label_encoder, os.path.join(self.model_dir, f"{prefix}_encoder.pkl"))
         joblib.dump(self.feature_columns, os.path.join(self.model_dir, f"{prefix}_features.pkl"))
         # Calibrators are optional
@@ -253,6 +271,10 @@ class MLPredictor:
             self.score_model_home = joblib.load(os.path.join(self.model_dir, f"{prefix}_home.pkl"))
             self.score_model_away = joblib.load(os.path.join(self.model_dir, f"{prefix}_away.pkl"))
             self.result_model = joblib.load(os.path.join(self.model_dir, f"{prefix}_result.pkl"))
+            # Load optional probability calibrator
+            calib_path = os.path.join(self.model_dir, f"{prefix}_result_calibrator.pkl")
+            if os.path.exists(calib_path):
+                self.result_calibrator = joblib.load(calib_path)
             self.label_encoder = joblib.load(os.path.join(self.model_dir, f"{prefix}_encoder.pkl"))
             self.feature_columns = joblib.load(os.path.join(self.model_dir, f"{prefix}_features.pkl"))
 

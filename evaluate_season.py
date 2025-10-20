@@ -4,6 +4,7 @@ Script to evaluate predictor performance for the entire current season.
 """
 
 import sys
+import argparse
 from collections import defaultdict, Counter
 from src.scraper.data_fetcher import DataFetcher
 from src.features.feature_engineering import FeatureEngineer
@@ -25,6 +26,12 @@ def main():
     predictor = HybridPredictor()
     # Using a temporary tracker to not interfere with recorded predictions
     tracker = PerformanceTracker(storage_dir="data/predictions_season_eval")
+
+    # CLI args
+    parser = argparse.ArgumentParser(description="Evaluate current season performance")
+    parser.add_argument("--strategy", choices=["base", "optimized", "both"], default="both",
+                        help="Prediction strategy: base = direct hybrid, optimized = grid argmax of expected points, both = compare")
+    args, _ = parser.parse_known_args()
 
     # Load trained models
     print("Loading models...")
@@ -52,13 +59,25 @@ def main():
 
     all_predictions = []
 
-    # Get historical data for feature context
+    # Get historical data for feature context (finished-only; augment with previous season if sparse)
     print("Fetching historical data for context...")
-    historical_matches = data_fetcher.fetch_season_matches(current_season)
+    historical_matches_all = data_fetcher.fetch_season_matches(current_season)
+    historical_matches = [m for m in historical_matches_all if m.get('is_finished')]
     if len(historical_matches) < 50:
-        print("Fetching additional historical data from previous season...")
+        print("Fetching additional finished matches from previous season...")
         prev_season_matches = data_fetcher.fetch_season_matches(current_season - 1)
-        historical_matches.extend(prev_season_matches)
+        historical_matches.extend([m for m in prev_season_matches if m.get('is_finished')])
+
+    # Fit goal temperature once on prior finished matches (train Poisson first)
+    try:
+        import pandas as pd
+        hist_df_for_temp = pd.DataFrame([m for m in historical_matches if m.get('date') is not None])
+        if not hist_df_for_temp.empty:
+            predictor.poisson_predictor.train(hist_df_for_temp)
+            if hasattr(predictor, 'fit_goal_temperature'):
+                predictor.fit_goal_temperature(hist_df_for_temp)
+    except Exception:
+        pass
 
     for matchday in range(first_matchday, last_matchday + 1):
         print(f"--- Processing Matchday {matchday} ---")
@@ -85,8 +104,16 @@ def main():
         hist_df = pd.DataFrame(hist_prior)
         predictor.poisson_predictor.train(hist_df)
 
-        # Generate base predictions for diagnostic comparison (avoid optimizer bias)
-        predictions = predictor.predict(features_df)
+        # Generate predictions according to strategy
+        if args.strategy == "base":
+            predictions = predictor.predict(features_df)
+            predictions_alt = []
+        elif args.strategy == "optimized":
+            predictions = predictor.predict_optimized(features_df)
+            predictions_alt = []
+        else:
+            predictions = predictor.predict(features_df)
+            predictions_alt = predictor.predict_optimized(features_df)
 
         # Record predictions and update results immediately
         for pred, actual in zip(predictions, matchday_matches):
@@ -100,6 +127,21 @@ def main():
             pred['is_evaluated'] = True
             pred['matchday'] = matchday
             all_predictions.append(pred)
+
+        # If comparing, also accumulate optimized predictions with a separate tag
+        if predictions_alt:
+            for pred, actual in zip(predictions_alt, matchday_matches):
+                points = tracker._calculate_points(
+                    pred['predicted_home_score'], pred['predicted_away_score'],
+                    actual['home_score'], actual['away_score']
+                )
+                pred['actual_home_score'] = actual['home_score']
+                pred['actual_away_score'] = actual['away_score']
+                pred['points_earned'] = points
+                pred['is_evaluated'] = True
+                pred['matchday'] = matchday
+                pred['strategy'] = 'optimized'
+                all_predictions.append(pred)
 
         print(f"Generated and evaluated {len(predictions)} predictions for matchday {matchday}")
 
