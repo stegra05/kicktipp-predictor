@@ -42,36 +42,6 @@ class HybridPredictor:
         # Confidence threshold for adaptive safe strategy
         self.confidence_threshold: float = 0.4
 
-        # Attempt to load best params from config if available
-        self._load_best_params_from_config()
-
-    def _load_best_params_from_config(self) -> None:
-        """Load best hyperparameters from config/best_params.yaml or .json if present."""
-        try:
-            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-            cfg_dir = os.path.join(project_root, "config")
-            yaml_path = os.path.join(cfg_dir, "best_params.yaml")
-            json_path = os.path.join(cfg_dir, "best_params.json")
-
-            params = None
-            if os.path.exists(yaml_path) and yaml is not None:
-                with open(yaml_path, "r", encoding="utf-8") as f:
-                    params = yaml.safe_load(f)
-            elif os.path.exists(json_path):
-                with open(json_path, "r", encoding="utf-8") as f:
-                    params = json.load(f)
-
-            if isinstance(params, dict):
-                # Apply known parameters if present
-                self.ml_weight = float(params.get("ml_weight", self.ml_weight))
-                self.poisson_weight = 1.0 - self.ml_weight
-                self.prob_blend_alpha = float(params.get("prob_blend_alpha", self.prob_blend_alpha))
-                self.min_lambda = float(params.get("min_lambda", self.min_lambda))
-                self.goal_temperature = float(params.get("goal_temperature", self.goal_temperature))
-                self.confidence_threshold = float(params.get("confidence_threshold", self.confidence_threshold))
-        except Exception:
-            # Fail quietly; defaults remain
-            pass
 
     def train(self, matches_df: pd.DataFrame):
         """
@@ -297,136 +267,61 @@ class HybridPredictor:
 
         return (best_score[0], best_score[1], best_expected_points)
 
-    def predict_optimized(self, features_df: pd.DataFrame,
-                         strategy: str = 'balanced',
-                         use_confidence_adaptive: bool = True,
-                         confidence_threshold: float | None = None,
-                         optimize_for_points: bool = False) -> List[Dict]:
+    def predict_optimized(self, features_df: pd.DataFrame) -> List[Dict]:
         """
         Predict with optimization strategy for maximizing points.
-
-        Args:
-            features_df: DataFrame with match features
-            strategy: Prediction strategy
-                - 'balanced': Default hybrid predictions
-                - 'conservative': Favor more likely scorelines (fewer goals)
-                - 'aggressive': Go for exact scores with higher risk
-                - 'safe': Prioritize correct winner over exact scores
-            use_confidence_adaptive: If True, low-confidence predictions use 'safe' strategy
-
-        Returns:
-            List of optimized prediction dictionaries
+        This version is simplified and always uses the best strategy.
         """
         base_predictions = self.predict(features_df)
-
-        if strategy == 'balanced' and not use_confidence_adaptive:
-            return base_predictions
-
         optimized_predictions = []
-
-        # Determine threshold to use
-        threshold = self.confidence_threshold if confidence_threshold is None else confidence_threshold
 
         for pred in base_predictions:
             optimized = pred.copy()
 
-            # Optionally pick scoreline that maximizes expected points based on the Poisson grid
-            if optimize_for_points:
-                max_goals = 7
-                hg = float(pred['home_expected_goals'])
-                ag = float(pred['away_expected_goals'])
-                # Build grid with Dixon-Coles adjustment using current rho
-                grid = np.zeros((max_goals, max_goals))
-                rho = getattr(self.poisson_predictor, 'rho', 0.0)
-                for h in range(max_goals):
-                    for a in range(max_goals):
-                        p = poisson.pmf(h, max(hg, 1e-9)) * poisson.pmf(a, max(ag, 1e-9))
-                        if h == 0 and a == 0:
-                            p *= (1.0 + rho)
-                        elif (h == 0 and a == 1) or (h == 1 and a == 0):
-                            p *= (1.0 - rho)
-                        elif h == 1 and a == 1:
-                            p *= (1.0 - rho)
-                        grid[h, a] = p
-                total = np.sum(grid)
-                if total > 0:
-                    grid /= total
-                best_h, best_a, _ = self._calculate_expected_points(grid)
-                optimized['predicted_home_score'] = int(best_h)
-                optimized['predicted_away_score'] = int(best_a)
+            # Always optimize for points
+            max_goals = 7
+            hg = float(pred['home_expected_goals'])
+            ag = float(pred['away_expected_goals'])
+            grid = np.zeros((max_goals, max_goals))
+            rho = getattr(self.poisson_predictor, 'rho', 0.0)
+            for h in range(max_goals):
+                for a in range(max_goals):
+                    p = poisson.pmf(h, max(hg, 1e-9)) * poisson.pmf(a, max(ag, 1e-9))
+                    if h == 0 and a == 0:
+                        p *= (1.0 + rho)
+                    elif (h == 0 and a == 1) or (h == 1 and a == 0):
+                        p *= (1.0 - rho)
+                    elif h == 1 and a == 1:
+                        p *= (1.0 - rho)
+                    grid[h, a] = p
+            total = np.sum(grid)
+            if total > 0:
+                grid /= total
+            best_h, best_a, _ = self._calculate_expected_points(grid)
+            optimized['predicted_home_score'] = int(best_h)
+            optimized['predicted_away_score'] = int(best_a)
 
-            if strategy == 'conservative':
-                # Reduce predicted goals slightly (conservative)
-                home_expected = pred['home_expected_goals']
-                away_expected = pred['away_expected_goals']
-
-                # Floor instead of round for lower scores
-                optimized['predicted_home_score'] = max(0, int(home_expected * 0.9))
-                optimized['predicted_away_score'] = max(0, int(away_expected * 0.9))
-
-            elif strategy == 'aggressive':
-                # Try to predict exact common scorelines
-                home_exp = pred['home_expected_goals']
-                away_exp = pred['away_expected_goals']
-
-                # Round to nearest common scoreline
-                optimized['predicted_home_score'] = self._round_to_common(home_exp)
-                optimized['predicted_away_score'] = self._round_to_common(away_exp)
-
-            elif strategy == 'safe':
-                # Prioritize getting the winner right
+            # Confidence-adaptive safe strategy for low-confidence predictions
+            confidence = pred.get('confidence', 0.5)
+            if confidence < self.confidence_threshold:
                 home_prob = pred['home_win_probability']
                 away_prob = pred['away_win_probability']
                 draw_prob = pred['draw_probability']
 
                 if home_prob > away_prob and home_prob > draw_prob:
-                    # Predict home win with typical score
                     optimized['predicted_home_score'] = 2
                     optimized['predicted_away_score'] = 1
                 elif away_prob > home_prob and away_prob > draw_prob:
-                    # Predict away win with typical score
                     optimized['predicted_home_score'] = 1
                     optimized['predicted_away_score'] = 2
                 else:
-                    # Predict draw with typical score
                     optimized['predicted_home_score'] = 1
                     optimized['predicted_away_score'] = 1
-
-            # Confidence-adaptive: override low-confidence predictions with safe strategy
-            if use_confidence_adaptive:
-                confidence = pred.get('confidence', 0.5)
-
-                # Low confidence: use safe strategy
-                if confidence < threshold:
-                    home_prob = pred['home_win_probability']
-                    away_prob = pred['away_win_probability']
-                    draw_prob = pred['draw_probability']
-
-                    if home_prob > away_prob and home_prob > draw_prob:
-                        optimized['predicted_home_score'] = 2
-                        optimized['predicted_away_score'] = 1
-                    elif away_prob > home_prob and away_prob > draw_prob:
-                        optimized['predicted_home_score'] = 1
-                        optimized['predicted_away_score'] = 2
-                    else:
-                        optimized['predicted_home_score'] = 1
-                        optimized['predicted_away_score'] = 1
 
             optimized_predictions.append(optimized)
 
         return optimized_predictions
 
-    def _round_to_common(self, expected_goals: float) -> int:
-        """Round expected goals to common scoreline values."""
-        # Common scores in football: 0, 1, 2, (3)
-        if expected_goals < 0.5:
-            return 0
-        elif expected_goals < 1.5:
-            return 1
-        elif expected_goals < 2.5:
-            return 2
-        else:
-            return 3
 
     def save_models(self, prefix: str = "hybrid"):
         """Save all models."""
