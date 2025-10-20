@@ -231,14 +231,14 @@ def main():
         errors='ignore'
     )
 
-    # Train Poisson only on matches strictly before the test set's max date
+    # Train Poisson only on matches strictly before the test set's first date
     id_to_date = {m['match_id']: m['date'] for m in all_matches if m.get('match_id') is not None and m.get('date') is not None}
     test_ids = list(test_df['match_id']) if 'match_id' in test_df.columns else []
     test_dates = [id_to_date.get(mid) for mid in test_ids]
     test_dates = [d for d in test_dates if d is not None]
     if test_dates:
-        max_test_date = max(test_dates)
-        hist_prior = [m for m in finished if m.get('date') is not None and m['date'] < max_test_date]
+        first_test_date = min(test_dates)
+        hist_prior = [m for m in finished if m.get('date') is not None and m['date'] < first_test_date]
     else:
         hist_prior = finished
     hist_df = pd.DataFrame(hist_prior)
@@ -326,7 +326,7 @@ def main():
     print("\n--- CALIBRATION ---")
     print(f"Brier score: {brier:.3f}")
     print("H reliability:", ", ".join([f"{c:.2f}~{a:.2f}(n={n})" for c,a,n in H_rel]))
-    print("D reliability:", ", ".join([f"{c:.2f}~{a:.2f}(n={n})" for c,a,n in D_rel])))
+    print("D reliability:", ", ".join([f"{c:.2f}~{a:.2f}(n={n})" for c,a,n in D_rel]))
     print("A reliability:", ", ".join([f"{c:.2f}~{a:.2f}(n={n})" for c,a,n in A_rel]))
     print("Confusion (rows=actual H/D/A, cols=pred):")
     print(conf)

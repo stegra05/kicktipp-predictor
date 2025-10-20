@@ -1,0 +1,246 @@
+match_id,home,away,pred_h,pred_a,act_h,act_a,lambda_h,lambda_a,pH,pD,pA,confidence,points
+72977,Borussia Dortmund II,SV Sandhausen,1,1,1,0,2.080,1.839,0.672,0.111,0.217,0.586,0
+72979,SpVgg Unterhaching,1. FC Saarbrücken,2,0,2,0,2.572,0.868,0.780,0.076,0.144,0.722,4
+72975,Energie Cottbus,SC Verl,1,0,1,0,2.335,0.653,0.889,0.067,0.044,0.862,4
+72976,Dynamo Dresden,TSV 1860 München,3,1,5,2,3.933,1.943,0.810,0.095,0.094,0.772,2
+72988,TSV 1860 München,Arminia Bielefeld,0,3,0,3,0.629,3.554,0.033,0.072,0.895,0.867,4
+72981,Hansa Rostock,Dynamo Dresden,1,0,1,0,1.597,0.790,0.716,0.116,0.168,0.649,4
+72984,Erzgebirge Aue,SpVgg Unterhaching,1,0,1,0,1.960,0.661,0.849,0.089,0.062,0.813,4
+72986,Alemannia Aachen,Borussia Dortmund II,2,2,2,2,2.606,2.389,0.214,0.627,0.159,0.541,4
+72987,Rot-Weiss Essen,FC Ingolstadt 04,2,1,2,0,2.942,1.026,0.829,0.090,0.081,0.793,2
+72989,SC Verl,Viktoria Köln,1,1,1,1,2.100,1.824,0.332,0.419,0.249,0.287,4
+72982,1. FC Saarbrücken,Hannover II,4,0,4,1,4.160,0.465,0.963,0.024,0.013,0.953,2
+72983,VfB Stuttgart II,Energie Cottbus,1,1,2,0,1.645,1.303,0.709,0.111,0.180,0.637,0
+72985,VfL Osnabrück,SV Waldhof Mannheim,1,1,1,1,1.884,1.479,0.451,0.318,0.231,0.324,4
+72990,SV Sandhausen,SV Wehen Wiesbaden,1,1,0,1,1.128,1.889,0.103,0.105,0.792,0.750,0
+72999,Viktoria Köln,1. FC Saarbrücken,1,2,1,2,1.775,2.837,0.125,0.101,0.774,0.724,4
+72991,Energie Cottbus,VfL Osnabrück,1,1,1,2,1.615,1.567,0.178,0.109,0.712,0.641,0
+72992,FC Ingolstadt 04,SV Sandhausen,3,1,2,1,3.897,1.797,0.883,0.055,0.063,0.858,2
+72993,Hannover II,TSV 1860 München,1,2,1,3,1.690,2.729,0.170,0.120,0.711,0.643,2
+72994,SV Wehen Wiesbaden,Erzgebirge Aue,1,1,0,2,2.018,2.065,0.181,0.119,0.699,0.627,0
+73000,Borussia Dortmund II,Rot-Weiss Essen,1,1,0,1,1.080,1.815,0.122,0.148,0.730,0.671,0
+72995,Dynamo Dresden,SC Verl,3,0,3,0,3.998,0.626,0.884,0.088,0.028,0.849,4
+72998,SV Waldhof Mannheim,Alemannia Aachen,2,1,2,1,2.569,1.472,0.799,0.087,0.114,0.754,4
+72997,Arminia Bielefeld,VfB Stuttgart II,5,0,4,1,5.047,0.545,0.970,0.020,0.011,0.962,2
+73005,VfL Osnabrück,SV Wehen Wiesbaden,1,1,0,1,1.017,1.972,0.138,0.109,0.753,0.698,0
+73002,1. FC Saarbrücken,Energie Cottbus,2,1,2,1,2.744,1.806,0.742,0.081,0.177,0.671,4
+73003,VfB Stuttgart II,Hannover II,3,1,2,1,3.235,1.704,0.842,0.070,0.088,0.806,2
+73007,SV Sandhausen,SpVgg Unterhaching,3,2,2,2,3.056,2.324,0.229,0.646,0.125,0.554,0
+73008,Hansa Rostock,FC Ingolstadt 04,2,0,2,0,2.807,0.880,0.862,0.084,0.054,0.828,4
+73009,Alemannia Aachen,Dynamo Dresden,0,1,0,1,0.478,1.888,0.042,0.081,0.877,0.845,4
+73006,SC Verl,Arminia Bielefeld,2,1,2,1,2.770,1.644,0.764,0.103,0.133,0.711,4
+73010,TSV 1860 München,Borussia Dortmund II,1,1,1,0,1.793,1.743,0.505,0.136,0.359,0.361,0
+73004,Erzgebirge Aue,Viktoria Köln,2,1,2,1,2.957,1.825,0.763,0.102,0.136,0.708,4
+73001,Rot-Weiss Essen,SV Waldhof Mannheim,2,0,1,0,2.931,0.712,0.914,0.055,0.032,0.892,2
+73013,VfB Stuttgart II,VfL Osnabrück,1,2,1,2,1.966,2.828,0.145,0.092,0.763,0.705,4
+73014,SpVgg Unterhaching,SC Verl,1,2,1,2,1.795,2.836,0.142,0.088,0.770,0.713,4
+73015,Arminia Bielefeld,1. FC Saarbrücken,3,1,3,1,3.556,1.622,0.830,0.080,0.090,0.795,4
+73016,FC Ingolstadt 04,Alemannia Aachen,0,1,0,3,0.892,2.123,0.101,0.093,0.806,0.765,2
+73017,Energie Cottbus,Hannover II,3,2,2,2,3.647,2.442,0.254,0.639,0.107,0.538,0
+73011,SV Waldhof Mannheim,SV Sandhausen,3,2,3,2,3.829,2.763,0.791,0.086,0.123,0.741,4
+73012,Viktoria Köln,Rot-Weiss Essen,3,0,1,0,3.073,0.886,0.896,0.065,0.039,0.870,2
+73018,Hansa Rostock,Erzgebirge Aue,3,1,4,1,3.779,1.641,0.822,0.103,0.075,0.780,2
+73019,SV Wehen Wiesbaden,TSV 1860 München,1,0,0,0,1.955,0.692,0.311,0.629,0.060,0.505,0
+73020,Dynamo Dresden,Borussia Dortmund II,1,0,0,0,1.132,0.629,0.212,0.693,0.095,0.608,0
+73028,1. FC Saarbrücken,VfB Stuttgart II,1,0,0,2,1.177,0.510,0.283,0.115,0.602,0.489,0
+73021,VfL Osnabrück,Arminia Bielefeld,0,1,0,1,0.744,1.496,0.082,0.122,0.796,0.747,4
+73022,Hannover II,SV Wehen Wiesbaden,3,2,3,2,3.038,2.998,0.700,0.118,0.182,0.627,4
+73023,Borussia Dortmund II,Viktoria Köln,1,0,1,1,2.104,0.896,0.286,0.636,0.078,0.522,0
+73026,SC Verl,FC Ingolstadt 04,1,4,1,4,1.989,4.562,0.095,0.049,0.856,0.818,4
+73030,Rot-Weiss Essen,Dynamo Dresden,1,1,1,1,1.735,1.895,0.161,0.661,0.177,0.590,4
+73025,TSV 1860 München,SpVgg Unterhaching,2,1,2,1,2.793,1.595,0.808,0.091,0.101,0.767,4
+73027,SV Sandhausen,Energie Cottbus,0,1,0,1,0.816,2.167,0.059,0.083,0.858,0.824,4
+73029,Erzgebirge Aue,SV Waldhof Mannheim,0,1,0,1,0.898,1.160,0.269,0.165,0.566,0.458,4
+73024,Alemannia Aachen,Hansa Rostock,2,1,2,1,2.518,1.488,0.815,0.091,0.094,0.778,4
+73037,SC Verl,Rot-Weiss Essen,4,0,3,0,4.001,0.796,0.931,0.039,0.030,0.915,2
+73031,VfL Osnabrück,TSV 1860 München,1,0,1,0,1.836,0.741,0.768,0.155,0.077,0.706,4
+73032,SV Waldhof Mannheim,Borussia Dortmund II,1,0,0,0,0.877,0.812,0.210,0.625,0.165,0.541,0
+73033,Hansa Rostock,1. FC Saarbrücken,2,1,0,0,2.598,1.703,0.684,0.079,0.237,0.589,0
+73035,SpVgg Unterhaching,Alemannia Aachen,2,0,0,2,2.561,0.873,0.697,0.092,0.211,0.613,0
+73040,Energie Cottbus,Erzgebirge Aue,1,0,1,0,2.336,0.585,0.677,0.228,0.095,0.586,4
+73036,Arminia Bielefeld,Hannover II,1,0,2,2,2.012,0.497,0.455,0.480,0.065,0.298,0
+73038,FC Ingolstadt 04,Viktoria Köln,1,1,3,1,2.306,1.034,0.496,0.196,0.308,0.373,0
+73034,Dynamo Dresden,SV Wehen Wiesbaden,3,0,2,0,3.140,0.646,0.762,0.200,0.038,0.683,2
+73039,VfB Stuttgart II,SV Sandhausen,2,1,2,1,2.858,1.949,0.690,0.074,0.236,0.595,4
+73049,Hannover II,Dynamo Dresden,0,1,2,3,0.585,2.053,0.224,0.093,0.683,0.593,3
+73042,Viktoria Köln,SpVgg Unterhaching,1,1,3,1,2.123,1.710,0.667,0.180,0.152,0.595,0
+73043,Erzgebirge Aue,VfB Stuttgart II,1,1,2,1,2.052,1.647,0.353,0.351,0.297,0.213,0
+73044,SV Wehen Wiesbaden,SV Waldhof Mannheim,1,1,2,2,2.010,1.718,0.584,0.210,0.206,0.501,3
+73046,TSV 1860 München,Energie Cottbus,1,1,5,1,1.597,2.004,0.232,0.443,0.325,0.314,0
+73048,1. FC Saarbrücken,VfL Osnabrück,1,0,1,1,2.150,0.560,0.775,0.074,0.151,0.715,0
+73045,Alemannia Aachen,Arminia Bielefeld,1,0,0,1,1.479,0.499,0.581,0.180,0.240,0.485,0
+73050,Borussia Dortmund II,FC Ingolstadt 04,1,1,3,3,1.994,1.992,0.344,0.327,0.330,0.212,3
+73047,SV Sandhausen,SC Verl,1,1,1,3,1.992,1.861,0.260,0.099,0.641,0.537,0
+73041,Rot-Weiss Essen,Hansa Rostock,2,1,2,1,2.853,1.707,0.606,0.128,0.265,0.500,4
+73051,SV Waldhof Mannheim,SpVgg Unterhaching,1,1,0,2,1.879,1.630,0.727,0.123,0.151,0.667,0
+73052,VfB Stuttgart II,Viktoria Köln,1,1,1,2,1.903,1.565,0.443,0.100,0.458,0.281,0
+73055,Arminia Bielefeld,SV Wehen Wiesbaden,1,2,4,2,1.897,2.632,0.343,0.199,0.458,0.320,0
+73056,1. FC Saarbrücken,Erzgebirge Aue,1,0,2,0,1.965,0.765,0.608,0.149,0.243,0.511,2
+73057,Hannover II,Alemannia Aachen,2,2,1,1,2.517,2.141,0.302,0.222,0.476,0.355,3
+73053,Energie Cottbus,Rot-Weiss Essen,3,0,0,1,3.398,0.639,0.761,0.216,0.023,0.675,0
+73054,TSV 1860 München,SV Sandhausen,1,1,2,0,1.818,1.744,0.635,0.108,0.257,0.532,0
+73058,VfL Osnabrück,Hansa Rostock,2,0,0,1,2.787,0.816,0.756,0.191,0.053,0.680,0
+73059,Dynamo Dresden,FC Ingolstadt 04,1,0,2,2,2.052,0.741,0.638,0.101,0.260,0.534,0
+73060,SC Verl,Borussia Dortmund II,1,0,0,1,1.067,0.818,0.438,0.159,0.402,0.277,0
+73064,SV Wehen Wiesbaden,1. FC Saarbrücken,0,1,1,1,0.791,1.859,0.118,0.105,0.778,0.731,0
+73062,FC Ingolstadt 04,Hannover II,2,0,3,3,2.467,0.615,0.645,0.293,0.062,0.528,0
+73066,SpVgg Unterhaching,VfB Stuttgart II,2,1,2,2,2.925,1.706,0.580,0.153,0.267,0.473,0
+73067,Rot-Weiss Essen,Erzgebirge Aue,1,1,4,2,1.964,1.751,0.303,0.391,0.306,0.269,0
+73068,Hansa Rostock,SC Verl,2,0,4,0,2.803,0.744,0.904,0.060,0.036,0.881,2
+73069,Dynamo Dresden,VfL Osnabrück,3,0,0,1,3.224,0.568,0.714,0.255,0.031,0.612,0
+73070,Alemannia Aachen,SV Sandhausen,1,0,2,1,0.676,0.611,0.489,0.366,0.145,0.343,3
+73061,SV Waldhof Mannheim,TSV 1860 München,2,0,0,3,2.730,0.619,0.602,0.348,0.050,0.462,0
+73065,Borussia Dortmund II,Energie Cottbus,1,1,4,1,1.790,1.156,0.625,0.174,0.201,0.544,0
+73063,Viktoria Köln,Arminia Bielefeld,0,1,0,2,0.959,1.392,0.596,0.125,0.279,0.484,2
+73076,TSV 1860 München,Alemannia Aachen,1,0,2,1,1.553,0.470,0.453,0.377,0.170,0.303,3
+73077,SV Sandhausen,Rot-Weiss Essen,1,0,0,2,1.082,0.867,0.360,0.402,0.239,0.258,0
+73078,Energie Cottbus,Viktoria Köln,2,1,1,0,2.488,1.657,0.435,0.133,0.433,0.262,3
+73079,SV Wehen Wiesbaden,SpVgg Unterhaching,1,0,3,0,2.110,0.883,0.491,0.177,0.332,0.358,2
+73080,Arminia Bielefeld,Hansa Rostock,1,0,4,0,1.734,0.558,0.477,0.360,0.164,0.333,2
+73072,VfB Stuttgart II,SC Verl,2,0,1,1,2.784,0.969,0.802,0.069,0.130,0.750,0
+73075,VfL Osnabrück,FC Ingolstadt 04,0,1,1,0,0.920,1.144,0.504,0.315,0.181,0.378,0
+73071,1. FC Saarbrücken,Dynamo Dresden,1,1,1,4,1.736,1.631,0.656,0.114,0.230,0.563,0
+73073,Hannover II,SV Waldhof Mannheim,2,0,1,1,2.705,0.835,0.883,0.062,0.055,0.859,0
+73074,Erzgebirge Aue,Borussia Dortmund II,1,1,2,1,1.930,1.793,0.511,0.290,0.199,0.396,0
+73081,Hansa Rostock,TSV 1860 München,2,0,1,0,2.752,0.959,0.774,0.075,0.152,0.713,2
+73082,Viktoria Köln,SV Wehen Wiesbaden,2,2,2,0,2.145,2.884,0.307,0.393,0.300,0.270,0
+73083,Dynamo Dresden,SV Sandhausen,1,1,2,1,1.168,1.605,0.432,0.316,0.252,0.306,0
+73084,Borussia Dortmund II,Hannover II,1,0,0,4,2.242,0.647,0.625,0.334,0.041,0.491,0
+73085,SpVgg Unterhaching,Energie Cottbus,1,1,1,1,1.633,2.167,0.370,0.127,0.503,0.355,4
+73086,Rot-Weiss Essen,1. FC Saarbrücken,1,1,0,3,1.725,1.823,0.405,0.282,0.313,0.280,0
+73087,SC Verl,Erzgebirge Aue,1,1,5,1,1.986,1.704,0.604,0.119,0.277,0.493,0
+73089,FC Ingolstadt 04,Arminia Bielefeld,1,0,0,3,0.971,0.672,0.632,0.167,0.201,0.552,0
+73090,Alemannia Aachen,VfL Osnabrück,1,0,1,0,1.713,0.550,0.785,0.153,0.062,0.724,4
+73088,SV Waldhof Mannheim,VfB Stuttgart II,1,1,0,0,1.963,1.642,0.553,0.196,0.251,0.453,3
+73099,VfL Osnabrück,Viktoria Köln,1,1,2,0,1.994,1.009,0.468,0.340,0.193,0.332,0
+73091,TSV 1860 München,Rot-Weiss Essen,1,0,1,3,1.765,0.748,0.462,0.245,0.293,0.345,0
+73092,1. FC Saarbrücken,SC Verl,2,1,4,3,2.939,1.593,0.838,0.072,0.090,0.802,3
+73093,VfB Stuttgart II,Alemannia Aachen,4,1,2,1,4.522,1.570,0.846,0.068,0.086,0.812,2
+73095,SV Wehen Wiesbaden,Borussia Dortmund II,1,1,4,2,2.075,1.882,0.426,0.100,0.475,0.305,0
+73097,SV Sandhausen,Hansa Rostock,0,1,0,3,0.929,1.122,0.291,0.346,0.363,0.225,2
+73096,Arminia Bielefeld,Dynamo Dresden,0,1,1,1,0.639,0.701,0.353,0.480,0.167,0.339,0
+73100,Energie Cottbus,SV Waldhof Mannheim,1,0,2,4,2.325,0.537,0.732,0.207,0.060,0.649,0
+73094,Erzgebirge Aue,FC Ingolstadt 04,0,1,1,0,0.909,1.823,0.609,0.113,0.278,0.498,0
+73098,Hannover II,SpVgg Unterhaching,1,0,0,0,1.803,0.824,0.822,0.097,0.081,0.783,0
+73110,Borussia Dortmund II,VfB Stuttgart II,1,0,0,1,2.183,0.731,0.333,0.597,0.070,0.464,0
+73101,Alemannia Aachen,1. FC Saarbrücken,1,0,4,2,1.447,0.659,0.532,0.159,0.308,0.409,2
+73104,Hansa Rostock,Energie Cottbus,1,1,1,3,1.660,1.976,0.393,0.092,0.515,0.358,0
+73107,SC Verl,TSV 1860 München,1,1,2,2,1.925,1.599,0.734,0.126,0.140,0.678,3
+73108,SV Waldhof Mannheim,Dynamo Dresden,0,1,1,0,0.639,1.833,0.142,0.179,0.679,0.608,0
+73109,Erzgebirge Aue,SV Sandhausen,0,1,2,3,0.985,1.794,0.569,0.101,0.329,0.438,3
+73102,FC Ingolstadt 04,SV Wehen Wiesbaden,1,1,2,3,2.302,1.818,0.580,0.141,0.279,0.468,0
+73105,SpVgg Unterhaching,Arminia Bielefeld,0,1,1,2,0.665,0.729,0.190,0.164,0.646,0.569,3
+73106,Rot-Weiss Essen,VfL Osnabrück,1,0,3,1,1.174,0.786,0.426,0.184,0.390,0.270,2
+73103,Viktoria Köln,Hannover II,1,1,2,0,1.316,1.657,0.434,0.356,0.210,0.291,0
+73111,1. FC Saarbrücken,Borussia Dortmund II,1,0,2,1,2.019,0.621,0.751,0.126,0.123,0.701,3
+73112,VfB Stuttgart II,Rot-Weiss Essen,1,0,1,1,1.863,0.947,0.550,0.179,0.270,0.442,0
+73113,Hannover II,Hansa Rostock,3,1,2,1,3.181,1.833,0.729,0.129,0.142,0.672,2
+73114,VfL Osnabrück,SC Verl,1,0,0,3,1.891,0.967,0.802,0.109,0.089,0.758,0
+73115,SV Wehen Wiesbaden,Alemannia Aachen,1,1,2,1,1.752,1.530,0.557,0.109,0.334,0.423,0
+73116,Dynamo Dresden,SpVgg Unterhaching,1,1,3,0,2.143,1.449,0.723,0.118,0.159,0.659,0
+73117,TSV 1860 München,Erzgebirge Aue,1,1,1,1,1.750,1.660,0.617,0.193,0.190,0.540,4
+73118,Arminia Bielefeld,SV Waldhof Mannheim,1,0,1,0,1.800,0.543,0.826,0.112,0.062,0.781,4
+73119,SV Sandhausen,Viktoria Köln,1,0,0,4,2.106,0.925,0.420,0.236,0.345,0.282,0
+73120,Energie Cottbus,FC Ingolstadt 04,1,1,1,4,1.365,1.748,0.283,0.122,0.594,0.481,0
+78253,Rot-Weiss Essen,TSV 1860 München,1,0,1,1,1.904,0.664,0.652,0.120,0.228,0.561,0
+78254,FC Ingolstadt 04,Jahn Regensburg,1,0,1,1,0.930,0.694,0.283,0.347,0.370,0.231,0
+78257,VfL Osnabrück,Alemannia Aachen,1,1,0,0,1.658,1.569,0.566,0.278,0.157,0.455,3
+78260,Energie Cottbus,1. FC Saarbrücken,1,1,3,3,2.007,1.615,0.574,0.263,0.163,0.469,3
+78262,SV Waldhof Mannheim,SC Verl,0,2,2,2,0.831,2.758,0.486,0.169,0.345,0.348,0
+78259,MSV Duisburg,VfB Stuttgart II,1,0,2,1,1.779,0.802,0.696,0.181,0.123,0.624,3
+78256,Erzgebirge Aue,Hansa Rostock,1,1,0,0,1.802,1.044,0.445,0.201,0.354,0.304,3
+78258,SV Wehen Wiesbaden,SSV Ulm 1846,1,0,3,1,1.683,0.975,0.306,0.143,0.551,0.429,2
+78263,1. FC Saarbrücken,Viktoria Köln,1,0,2,1,2.041,0.645,0.738,0.137,0.126,0.683,3
+78265,SSV Ulm 1846,Erzgebirge Aue,1,1,1,0,1.091,1.495,0.470,0.159,0.371,0.322,0
+78270,TSV 1860 München,VfL Osnabrück,1,0,3,1,1.895,0.693,0.621,0.221,0.158,0.533,2
+78271,SC Verl,SV Wehen Wiesbaden,2,3,2,2,2.096,3.115,0.412,0.208,0.380,0.260,0
+78267,Jahn Regensburg,MSV Duisburg,1,0,0,4,1.999,0.450,0.643,0.227,0.130,0.552,0
+78266,Hansa Rostock,SV Waldhof Mannheim,1,1,1,0,1.822,1.586,0.383,0.392,0.225,0.239,0
+78264,VfB Stuttgart II,FC Ingolstadt 04,1,1,2,1,1.812,1.476,0.599,0.211,0.190,0.514,0
+78278,SV Wehen Wiesbaden,Rot-Weiss Essen,1,0,3,4,1.327,0.884,0.567,0.221,0.212,0.479,0
+78275,VfB Stuttgart II,SC Verl,1,1,1,1,1.809,1.944,0.554,0.231,0.215,0.461,4
+78277,VfL Osnabrück,1. FC Saarbrücken,0,1,2,0,0.695,1.921,0.271,0.287,0.442,0.327,0
+78281,Alemannia Aachen,TSV 1860 München,1,1,0,2,1.524,1.440,0.533,0.234,0.232,0.440,0
+78280,MSV Duisburg,SSV Ulm 1846,0,1,2,1,0.503,1.048,0.245,0.196,0.558,0.460,0
+78274,FC Ingolstadt 04,Hansa Rostock,1,0,1,1,1.093,0.690,0.476,0.363,0.161,0.331,0
+78273,SV Waldhof Mannheim,Viktoria Köln,2,2,2,0,2.874,2.574,0.456,0.330,0.214,0.323,0
+78284,Viktoria Köln,Jahn Regensburg,1,1,1,0,1.795,1.744,0.368,0.212,0.420,0.272,0
+78283,1. FC Saarbrücken,Erzgebirge Aue,1,0,4,1,1.965,0.553,0.720,0.126,0.153,0.659,2
+78286,Energie Cottbus,FC Ingolstadt 04,1,1,1,1,2.305,1.748,0.464,0.099,0.437,0.290,4
+78288,TSV Havelse,VfL Osnabrück,1,1,0,2,2.081,1.715,0.453,0.302,0.245,0.332,0
+78290,TSV 1860 München,VfB Stuttgart II,2,0,1,1,2.872,0.631,0.852,0.117,0.031,0.805,0
+78291,SC Verl,MSV Duisburg,1,0,2,3,2.181,0.568,0.885,0.076,0.039,0.855,0
+78287,Hansa Rostock,TSG 1899 Hoffenheim II,0,1,0,1,0.855,2.148,0.112,0.274,0.614,0.505,4
+78285,SSV Ulm 1846,SV Waldhof Mannheim,1,1,1,2,2.057,1.663,0.458,0.127,0.415,0.292,0
+78292,1. FC Schweinfurt 05,SV Wehen Wiesbaden,1,0,0,1,1.033,0.842,0.269,0.409,0.321,0.281,0
+78289,Rot-Weiss Essen,Alemannia Aachen,1,0,2,3,1.677,0.533,0.669,0.171,0.160,0.600,0
+78298,Jahn Regensburg,Rot-Weiss Essen,0,1,1,3,0.914,1.210,0.590,0.167,0.243,0.493,2
+78294,FC Ingolstadt 04,1. FC Schweinfurt 05,1,0,2,3,1.199,0.753,0.514,0.251,0.235,0.413,0
+78295,VfB Stuttgart II,1. FC Saarbrücken,1,1,1,3,1.608,1.923,0.664,0.137,0.200,0.584,0
+78296,Erzgebirge Aue,Viktoria Köln,1,1,0,3,1.982,1.825,0.470,0.155,0.375,0.320,0
+78299,MSV Duisburg,SV Wehen Wiesbaden,1,1,3,1,1.758,1.977,0.384,0.195,0.421,0.268,0
+78302,TSG 1899 Hoffenheim II,SC Verl,1,0,2,4,0.931,0.816,0.564,0.209,0.227,0.473,0
+78300,Alemannia Aachen,SSV Ulm 1846,0,1,1,3,0.450,1.630,0.162,0.359,0.479,0.336,2
+78297,VfL Osnabrück,Hansa Rostock,1,0,0,0,1.812,0.816,0.456,0.387,0.156,0.302,0
+78293,SV Waldhof Mannheim,Energie Cottbus,1,3,0,3,1.642,3.037,0.471,0.258,0.271,0.362,2
+78301,TSV 1860 München,TSV Havelse,1,0,3,2,0.776,0.705,0.440,0.199,0.360,0.296,3
+78303,1. FC Saarbrücken,SSV Ulm 1846,1,0,3,1,0.705,0.667,0.401,0.201,0.399,0.241,2
+78305,Viktoria Köln,TSG 1899 Hoffenheim II,1,1,2,1,1.057,1.636,0.445,0.171,0.384,0.291,0
+78308,SV Wehen Wiesbaden,Jahn Regensburg,2,1,2,0,2.761,1.742,0.354,0.172,0.474,0.333,2
+78311,SC Verl,Alemannia Aachen,1,0,2,1,1.729,0.500,0.699,0.245,0.056,0.601,3
+78312,1. FC Schweinfurt 05,MSV Duisburg,1,0,0,3,1.111,0.569,0.349,0.434,0.217,0.295,0
+78304,SV Waldhof Mannheim,VfB Stuttgart II,2,1,0,1,2.938,1.642,0.719,0.169,0.113,0.651,0
+78306,Energie Cottbus,Erzgebirge Aue,1,1,2,1,2.336,1.560,0.478,0.185,0.337,0.343,0
+78307,Hansa Rostock,TSV 1860 München,1,0,2,1,1.777,0.570,0.434,0.448,0.119,0.274,3
+78309,TSV Havelse,FC Ingolstadt 04,0,1,2,6,0.935,1.941,0.189,0.138,0.673,0.598,2
+78310,Rot-Weiss Essen,VfL Osnabrück,1,0,1,1,2.149,0.786,0.512,0.420,0.069,0.344,0
+78313,1. FC Saarbrücken,1. FC Schweinfurt 05,1,0,2,1,0.992,0.569,0.447,0.427,0.126,0.277,3
+78314,FC Ingolstadt 04,SV Wehen Wiesbaden,1,0,0,0,1.327,0.843,0.540,0.264,0.195,0.435,0
+78315,VfB Stuttgart II,Viktoria Köln,2,1,2,1,2.878,1.986,0.755,0.106,0.139,0.700,4
+78317,VfL Osnabrück,Erzgebirge Aue,1,0,3,1,1.857,0.866,0.719,0.203,0.078,0.637,2
+78319,Alemannia Aachen,SV Waldhof Mannheim,0,1,3,2,0.617,0.957,0.556,0.221,0.222,0.467,0
+78320,Rot-Weiss Essen,Hansa Rostock,1,0,3,0,1.878,0.732,0.624,0.254,0.122,0.523,2
+78321,TSV 1860 München,TSG 1899 Hoffenheim II,1,0,1,5,1.717,0.705,0.729,0.100,0.171,0.661,0
+78318,TSV Havelse,MSV Duisburg,1,0,1,1,1.111,0.569,0.304,0.283,0.414,0.292,0
+78322,SC Verl,Energie Cottbus,0,1,2,1,0.811,1.095,0.562,0.244,0.194,0.464,0
+78316,SSV Ulm 1846,Jahn Regensburg,1,1,2,1,1.823,1.468,0.508,0.148,0.344,0.370,0
+78326,Energie Cottbus,VfB Stuttgart II,2,2,5,0,2.593,2.318,0.556,0.186,0.258,0.453,0
+78325,Erzgebirge Aue,TSV 1860 München,1,0,2,0,1.825,0.624,0.753,0.174,0.073,0.684,2
+78327,Hansa Rostock,TSV Havelse,0,1,1,1,0.855,1.660,0.545,0.152,0.302,0.425,0
+78328,SV Wehen Wiesbaden,1. FC Saarbrücken,1,1,1,1,1.766,1.859,0.350,0.122,0.528,0.388,4
+78330,MSV Duisburg,FC Ingolstadt 04,0,1,2,1,0.708,1.149,0.251,0.120,0.629,0.528,0
+78332,1. FC Schweinfurt 05,Alemannia Aachen,1,2,1,5,1.669,2.452,0.194,0.214,0.592,0.506,2
+78323,SV Waldhof Mannheim,Rot-Weiss Essen,0,1,6,1,0.884,1.765,0.144,0.322,0.534,0.405,0
+78329,Jahn Regensburg,SC Verl,0,2,2,0,0.858,2.583,0.066,0.101,0.833,0.792,0
+78331,TSG 1899 Hoffenheim II,SSV Ulm 1846,1,1,1,1,1.639,1.855,0.659,0.146,0.194,0.582,4
+78324,Viktoria Köln,VfL Osnabrück,1,1,0,0,1.252,1.796,0.271,0.109,0.619,0.511,3
+78333,1. FC Saarbrücken,MSV Duisburg,1,0,0,0,1.180,0.450,0.298,0.455,0.247,0.336,0
+78334,VfB Stuttgart II,SV Wehen Wiesbaden,1,1,0,0,1.901,1.974,0.480,0.198,0.322,0.351,3
+78337,Hansa Rostock,Energie Cottbus,1,1,1,3,1.582,1.976,0.209,0.492,0.299,0.372,0
+78338,TSV Havelse,SV Waldhof Mannheim,1,0,2,3,0.924,0.671,0.262,0.404,0.334,0.271,0
+78339,Alemannia Aachen,Erzgebirge Aue,0,1,0,1,0.674,1.519,0.320,0.305,0.375,0.248,4
+78335,SSV Ulm 1846,1. FC Schweinfurt 05,1,0,5,1,1.534,0.535,0.679,0.159,0.161,0.615,2
+78336,VfL Osnabrück,Jahn Regensburg,1,0,2,0,1.687,0.821,0.586,0.250,0.164,0.486,2
+78340,Rot-Weiss Essen,TSG 1899 Hoffenheim II,1,0,3,1,0.991,0.798,0.305,0.171,0.525,0.403,2
+78341,TSV 1860 München,Viktoria Köln,1,0,2,2,1.837,0.798,0.789,0.129,0.082,0.737,0
+78342,SC Verl,FC Ingolstadt 04,1,0,2,2,1.014,0.963,0.383,0.156,0.461,0.307,0
+78350,MSV Duisburg,Hansa Rostock,0,1,2,2,0.644,1.795,0.144,0.093,0.763,0.705,0
+78343,SV Waldhof Mannheim,VfL Osnabrück,1,0,1,4,1.927,0.733,0.588,0.254,0.159,0.486,0
+78344,FC Ingolstadt 04,SSV Ulm 1846,0,1,4,1,0.853,0.882,0.314,0.406,0.280,0.281,0
+78345,Viktoria Köln,TSV Havelse,1,0,4,1,1.981,0.834,0.784,0.118,0.098,0.737,2
+78349,Jahn Regensburg,1. FC Saarbrücken,1,1,1,1,1.627,1.371,0.235,0.286,0.478,0.364,4
+78352,1. FC Schweinfurt 05,SC Verl,1,0,1,2,1.871,0.816,0.369,0.291,0.340,0.233,0
+78347,Energie Cottbus,Alemannia Aachen,2,2,3,2,2.964,2.352,0.740,0.102,0.158,0.676,0
+78346,Erzgebirge Aue,Rot-Weiss Essen,1,0,2,2,1.939,0.797,0.724,0.121,0.155,0.662,0
+78348,SV Wehen Wiesbaden,TSV 1860 München,1,0,1,0,1.955,0.692,0.720,0.171,0.109,0.652,4
+78351,TSG 1899 Hoffenheim II,VfB Stuttgart II,3,1,1,3,3.058,1.648,0.777,0.093,0.130,0.725,0
+78356,Erzgebirge Aue,SV Waldhof Mannheim,1,0,0,2,1.873,0.670,0.615,0.126,0.258,0.512,0
+78353,1. FC Saarbrücken,SC Verl,1,0,2,4,0.989,0.618,0.649,0.134,0.217,0.562,0
+78354,VfB Stuttgart II,1. FC Schweinfurt 05,1,0,3,0,1.811,0.892,0.661,0.224,0.115,0.571,2
+78357,VfL Osnabrück,TSG 1899 Hoffenheim II,1,0,0,4,0.918,0.891,0.696,0.152,0.152,0.635,0
+78358,Hansa Rostock,SV Wehen Wiesbaden,0,1,3,0,0.947,1.742,0.436,0.273,0.291,0.319,0
+78360,Alemannia Aachen,FC Ingolstadt 04,0,1,0,1,0.624,1.693,0.356,0.144,0.500,0.358,4
+78361,Rot-Weiss Essen,Viktoria Köln,1,0,1,0,1.100,0.904,0.480,0.193,0.327,0.349,4
+78355,SSV Ulm 1846,Energie Cottbus,1,1,1,2,1.850,1.756,0.314,0.141,0.545,0.420,0
+78362,TSV 1860 München,MSV Duisburg,1,0,3,1,0.924,0.534,0.509,0.370,0.121,0.361,2
+78359,TSV Havelse,Jahn Regensburg,2,2,1,2,2.674,2.643,0.658,0.104,0.238,0.562,0

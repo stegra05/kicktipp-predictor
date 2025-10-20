@@ -78,15 +78,15 @@ def main():
             print(f"Could not generate features for matchday {matchday}.")
             continue
 
-        # Train Poisson on finished historical matches strictly before this matchday's latest match
+        # Train Poisson on finished historical matches strictly before this matchday's earliest match
         import pandas as pd
-        md_max_date = max(m['date'] for m in matchday_matches)
-        hist_prior = [m for m in historical_matches if m['is_finished'] and m.get('date') is not None and m['date'] < md_max_date]
+        md_min_date = min(m['date'] for m in matchday_matches)
+        hist_prior = [m for m in historical_matches if m['is_finished'] and m.get('date') is not None and m['date'] < md_min_date]
         hist_df = pd.DataFrame(hist_prior)
         predictor.poisson_predictor.train(hist_df)
 
-        # Generate predictions (maximize points by default)
-        predictions = predictor.predict_optimized(features_df)
+        # Generate base predictions for diagnostic comparison (avoid optimizer bias)
+        predictions = predictor.predict(features_df)
 
         # Record predictions and update results immediately
         for pred, actual in zip(predictions, matchday_matches):
