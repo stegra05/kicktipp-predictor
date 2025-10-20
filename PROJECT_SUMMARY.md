@@ -183,7 +183,6 @@ kicktipp-predictor/
 ├── demo.py                # Demo/test script
 ├── requirements.txt       # Dependencies
 ├── README.md              # Full documentation
-├── QUICKSTART.md          # Quick start guide
 └── PROJECT_SUMMARY.md     # This file
 ```
 
