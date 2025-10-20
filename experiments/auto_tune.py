@@ -11,8 +11,12 @@ import math
 import argparse
 import random
 from itertools import product
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
+import time
+from contextlib import redirect_stdout, redirect_stderr
+import io
 
 import numpy as np
 from sklearn.model_selection import TimeSeriesSplit
@@ -192,7 +196,31 @@ def evaluate_params(params: Dict[str, float],
     )
 
 
-def successive_halving(features_df, n_splits: int, max_trials: int, progress_interval: int = 10, objective: str = 'points') -> Dict[str, float]:
+def _evaluate_trial(args) -> Tuple[TrialResult, float]:
+    """Process-pool friendly wrapper to evaluate a single trial.
+
+    Args tuple: (params, features_df, n_splits, objective, threshold, weights, omp_threads, quiet_workers)
+    """
+    import os
+    params, features_df, n_splits, objective, threshold, weights, omp_threads, quiet_workers = args
+    # Limit per-process parallelism to avoid oversubscription
+    if omp_threads is not None:
+        os.environ.setdefault('OMP_NUM_THREADS', str(omp_threads))
+        os.environ.setdefault('OPENBLAS_NUM_THREADS', str(omp_threads))
+        os.environ.setdefault('MKL_NUM_THREADS', str(omp_threads))
+        os.environ.setdefault('NUMEXPR_NUM_THREADS', str(omp_threads))
+
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    if quiet_workers:
+        # Suppress noisy training prints inside worker
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            trial = evaluate_params(params, features_df, tscv, objective, threshold, weights)
+    else:
+        trial = evaluate_params(params, features_df, tscv, objective, threshold, weights)
+    return trial, threshold
+
+
+def successive_halving(features_df, n_splits: int, max_trials: int, progress_interval: int = 10, objective: str = 'points', n_jobs: int = 0, omp_threads: int | None = None, quiet_workers: bool = True) -> Dict[str, float]:
     data_fetcher = DataFetcher()
     feature_engineer = FeatureEngineer()
 
@@ -238,30 +266,61 @@ def successive_halving(features_df, n_splits: int, max_trials: int, progress_int
         grid = full_grid
 
     # Coarse pass over the (possibly sampled) grid
-    candidates: List[Tuple[TrialResult, str, float]] = []
+    candidates: List[Tuple[TrialResult, float]] = []
     total_trials = len(grid)
+    total_trainings = total_trials * n_splits
     try:
         n_splits = tscv.get_n_splits(features_df)
     except Exception:
         n_splits = 3
     trainings_done = 0
     best_so_far: TrialResult | None = None
-    for idx, (w, a, m, t, thr) in enumerate(grid, start=1):
-        params = {
-            'ml_weight': w,
-            'prob_blend_alpha': a,
-            'min_lambda': m,
-            'goal_temperature': t,
-        }
-        trial = evaluate_params(params, features_df, tscv, objective, thr, weights)
-        log_trial(trial, objective, thr)
-        candidates.append((trial, strategy, thr))
-        # Condensed progress
-        trainings_done += n_splits
-        if best_so_far is None or trial.obj_score > best_so_far.obj_score:
-            best_so_far = trial
-        if (idx % max(1, progress_interval) == 0) or idx == total_trials:
-            print(f"[TUNE] {idx}/{total_trials} trials | best obj={best_so_far.obj_score:.3f} pts={best_so_far.avg_points:.3f}")
+    # Determine workers
+    if n_jobs is None or n_jobs <= 0:
+        n_jobs = max(1, (os.cpu_count() or 2) // 2)
+
+    # Build arg tuples
+    task_args = []
+    for (w, a, m, t, thr) in grid:
+        params = {'ml_weight': w, 'prob_blend_alpha': a, 'min_lambda': m, 'goal_temperature': t}
+        task_args.append((params, features_df, n_splits, objective, thr, weights, omp_threads, quiet_workers))
+
+    # Execute in parallel
+    start_time = time.time()
+    def fmt_dur(sec: float) -> str:
+        sec = int(max(0, sec))
+        h = sec // 3600
+        m = (sec % 3600) // 60
+        s = sec % 60
+        return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"
+
+    print(f"[TUNE] workers={n_jobs} x threads={omp_threads or 1} | trials={total_trials} | cv-trainings={total_trainings}")
+    with ProcessPoolExecutor(max_workers=n_jobs) as ex:
+        futures = [ex.submit(_evaluate_trial, ta) for ta in task_args]
+        for idx, fut in enumerate(as_completed(futures), start=1):
+            trial, thr = fut.result()
+            log_trial(trial, objective, thr)
+            candidates.append((trial, thr))
+            trainings_done += n_splits
+            if best_so_far is None or trial.obj_score > best_so_far.obj_score:
+                best_so_far = trial
+            if (idx % max(1, progress_interval) == 0) or idx == total_trials:
+                elapsed = time.time() - start_time
+                # Simple ETA based on completed trials
+                rate = elapsed / max(1, idx)
+                remaining = rate * (total_trials - idx)
+                pct = idx / total_trials
+                bar_w = 28
+                filled = int(pct * bar_w)
+                bar = "#" * filled + "." * (bar_w - filled)
+                line = (
+                    f"\r[TUNE] [{bar}] {idx}/{total_trials} ({pct*100:5.1f}%) "
+                    f"trainings {trainings_done}/{total_trainings} | elapsed {fmt_dur(elapsed)} | eta {fmt_dur(remaining)} | "
+                    f"best obj={best_so_far.obj_score:.3f} pts={best_so_far.avg_points:.3f}"
+                )
+                print(line, end="", flush=True)
+        # ensure newline after progress line
+        print()
 
     # Keep top 50% by objective
     candidates.sort(key=lambda x: x[0].obj_score, reverse=True)
@@ -299,7 +358,7 @@ def successive_halving(features_df, n_splits: int, max_trials: int, progress_int
 
     all_candidates = top + refined_candidates
     all_candidates.sort(key=lambda x: x[0].obj_score, reverse=True)
-    best_trial, _unused_strategy, best_thr = all_candidates[0]
+    best_trial, best_thr = all_candidates[0]
 
     # Save to config
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -318,7 +377,7 @@ def successive_halving(features_df, n_splits: int, max_trials: int, progress_int
 
     # Print leaderboard
     print("\nTOP 10 CONFIGS BY OBJECTIVE:")
-    for i, (tr, _st, thr) in enumerate(all_candidates[:10], start=1):
+    for i, (tr, thr) in enumerate(all_candidates[:10], start=1):
         print(f"{i:2d}. obj={tr.obj_score:.3f} pts={tr.avg_points:.3f} ml={tr.params['ml_weight']:.2f} a={tr.params['prob_blend_alpha']:.2f} minL={tr.params['min_lambda']:.2f} temp={tr.params['goal_temperature']:.2f} thr={thr:.2f} 0-0={tr.zero_zero_rate*100:.1f}% D={tr.pred_D*100:.1f}% A={tr.pred_A*100:.1f}%")
 
     print("\nBest params saved to config/best_params.yaml (or .json)")
@@ -336,6 +395,8 @@ def main():
     parser.add_argument('--n-splits', type=int, default=3, help='TimeSeriesSplit folds')
     parser.add_argument('--progress-interval', type=int, default=10, help='Trials per progress print')
     parser.add_argument('--objective', type=str, default='points', choices=['points','composite'], help='Optimization objective')
+    parser.add_argument('--n-jobs', type=int, default=0, help='Parallel processes (0 = half CPUs)')
+    parser.add_argument('--omp-threads', type=int, default=1, help='Threads per process for BLAS/OMP')
     args = parser.parse_args()
 
     # Load data
@@ -351,7 +412,7 @@ def main():
     features_df = feature_engineer.create_features_from_matches(all_matches)
     print(f"Created {len(features_df)} samples")
 
-    best = successive_halving(features_df, n_splits=args.n_splits, max_trials=args.max_trials, progress_interval=args.progress_interval, objective=args.objective)
+    best = successive_halving(features_df, n_splits=args.n_splits, max_trials=args.max_trials, progress_interval=args.progress_interval, objective=args.objective, n_jobs=args.n_jobs, omp_threads=args.omp_threads)
     print("\nBest configuration:")
     for k, v in best.items():
         print(f"  {k}: {v}")
