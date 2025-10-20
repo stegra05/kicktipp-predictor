@@ -9,6 +9,7 @@ from src.scraper.data_fetcher import DataFetcher
 from src.features.feature_engineering import FeatureEngineer
 from src.models.hybrid_predictor import HybridPredictor
 from src.models.performance_tracker import PerformanceTracker
+from src.models.confidence_selector import extract_display_confidence
 
 app = Flask(__name__)
 
@@ -88,6 +89,7 @@ def get_upcoming_predictions():
         formatted_predictions = []
         for i, pred in enumerate(predictions):
             match = upcoming_matches[i]
+            conf_val = float(round(float(extract_display_confidence(pred)), 4))
             formatted_predictions.append({
                 'match_id': int(pred['match_id']) if pred.get('match_id') is not None else None,
                 'date': match['date'].strftime('%Y-%m-%d %H:%M'),
@@ -100,7 +102,7 @@ def get_upcoming_predictions():
                 'home_win_probability': float(round(float(pred['home_win_probability']) * 100, 1)),
                 'draw_probability': float(round(float(pred['draw_probability']) * 100, 1)),
                 'away_win_probability': float(round(float(pred['away_win_probability']) * 100, 1)),
-                'confidence': float(round(float(pred.get('confidence', 0)) * 100, 1)),
+                'confidence': float(round(conf_val * 100, 1)),
             })
 
         return jsonify({
@@ -167,6 +169,7 @@ def get_current_matchday():
         formatted_predictions = []
         for i, pred in enumerate(predictions):
             match = upcoming[i]
+            conf_val = float(round(float(extract_display_confidence(pred)), 4))
             formatted_predictions.append({
                 'match_id': int(pred['match_id']) if pred.get('match_id') is not None else None,
                 'date': match['date'].strftime('%Y-%m-%d %H:%M'),
@@ -179,7 +182,7 @@ def get_current_matchday():
                 'home_win_probability': float(round(float(pred['home_win_probability']) * 100, 1)),
                 'draw_probability': float(round(float(pred['draw_probability']) * 100, 1)),
                 'away_win_probability': float(round(float(pred['away_win_probability']) * 100, 1)),
-                'confidence': float(round(float(pred.get('confidence', 0)) * 100, 1)),
+                'confidence': float(round(conf_val * 100, 1)),
             })
 
         return jsonify({

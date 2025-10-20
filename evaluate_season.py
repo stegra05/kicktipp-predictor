@@ -228,14 +228,27 @@ def main():
     os.makedirs(os.path.dirname(dbg_path), exist_ok=True)
     with open(dbg_path, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
-        w.writerow(['matchday','home','away','pred_h','pred_a','act_h','act_a','lambda_h','lambda_a','pH','pD','pA','confidence','points'])
+        w.writerow(['matchday','home','away','pred_h','pred_a','act_h','act_a','lambda_h','lambda_a','pH','pD','pA','confidence','margin','entropy_confidence','points'])
         for p in all_predictions:
+            # derive margin/entropy if not present
+            pH = float(p['home_win_probability'])
+            pD = float(p['draw_probability'])
+            pA = float(p['away_win_probability'])
+            probs_sorted = sorted([pH, pD, pA], reverse=True)
+            margin = float(p.get('margin', probs_sorted[0] - probs_sorted[1]))
+            import math
+            import numpy as _np
+            probs = _np.array([pH, pD, pA], dtype=float)
+            probs = _np.clip(probs, 1e-12, 1.0)
+            probs = probs / probs.sum() if probs.sum() > 0 else probs
+            entropy = float(-_np.sum(probs * _np.log(probs)))
+            ent_conf = float(p.get('entropy_confidence', 1.0 - (entropy / math.log(3))))
             w.writerow([p['matchday'], p['home_team'], p['away_team'],
                         p['predicted_home_score'], p['predicted_away_score'],
                         p['actual_home_score'], p['actual_away_score'],
                         f"{p['home_expected_goals']:.3f}", f"{p['away_expected_goals']:.3f}",
-                        f"{p['home_win_probability']:.3f}", f"{p['draw_probability']:.3f}", f"{p['away_win_probability']:.3f}",
-                        f"{p.get('confidence',0):.3f}", p['points_earned']])
+                        f"{pH:.3f}", f"{pD:.3f}", f"{pA:.3f}",
+                        f"{p.get('confidence',0):.3f}", f"{margin:.3f}", f"{ent_conf:.3f}", p['points_earned']])
     print(f"Wrote per-match debug: {dbg_path}")
 
     # Persist run meta

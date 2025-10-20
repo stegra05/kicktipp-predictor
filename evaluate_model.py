@@ -347,18 +347,31 @@ def main():
     os.makedirs(os.path.dirname(dbg_path), exist_ok=True)
     with open(dbg_path, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
-        w.writerow(['match_id','home','away','pred_h','pred_a','act_h','act_a','lambda_h','lambda_a','pH','pD','pA','confidence','points'])
+        w.writerow(['match_id','home','away','pred_h','pred_a','act_h','act_a','lambda_h','lambda_a','pH','pD','pA','confidence','margin','entropy_confidence','points'])
         for p, a in zip(predictions, actuals):
             ah, aa = int(a['home_score']), int(a['away_score'])
             points = 4 if (p['predicted_home_score']==ah and p['predicted_away_score']==aa) else \
                      3 if ((p['predicted_home_score']-p['predicted_away_score'])==(ah-aa)) else \
                      2 if ( (p['predicted_home_score']>p['predicted_away_score'])==(ah>aa) and (p['predicted_home_score']==p['predicted_away_score'])==(ah==aa) ) else 0
+            # derive margin/entropy if not present
+            pH = float(p['home_win_probability'])
+            pD = float(p['draw_probability'])
+            pA = float(p['away_win_probability'])
+            probs_sorted = sorted([pH, pD, pA], reverse=True)
+            margin = float(p.get('margin', probs_sorted[0] - probs_sorted[1]))
+            import math
+            import numpy as _np
+            probs = _np.array([pH, pD, pA], dtype=float)
+            probs = _np.clip(probs, 1e-12, 1.0)
+            probs = probs / probs.sum() if probs.sum() > 0 else probs
+            entropy = float(-_np.sum(probs * _np.log(probs)))
+            ent_conf = float(p.get('entropy_confidence', 1.0 - (entropy / math.log(3))))
             w.writerow([p['match_id'], p['home_team'], p['away_team'],
                         p['predicted_home_score'], p['predicted_away_score'],
                         ah, aa,
                         f"{p['home_expected_goals']:.3f}", f"{p['away_expected_goals']:.3f}",
-                        f"{p['home_win_probability']:.3f}", f"{p['draw_probability']:.3f}", f"{p['away_win_probability']:.3f}",
-                        f"{p.get('confidence',0):.3f}", points])
+                        f"{pH:.3f}", f"{pD:.3f}", f"{pA:.3f}",
+                        f"{p.get('confidence',0):.3f}", f"{margin:.3f}", f"{ent_conf:.3f}", points])
     print(f"Wrote per-match debug: {dbg_path}")
 
     # Persist run meta

@@ -11,6 +11,7 @@ from src.scraper.data_fetcher import DataFetcher
 from src.features.feature_engineering import FeatureEngineer
 from src.models.hybrid_predictor import HybridPredictor
 from src.models.performance_tracker import PerformanceTracker
+from src.models.confidence_selector import extract_display_confidence
 
 
 def print_predictions(predictions):
@@ -25,7 +26,8 @@ def print_predictions(predictions):
         print(f"Probabilities: Home {pred['home_win_probability']*100:.1f}% | "
               f"Draw {pred['draw_probability']*100:.1f}% | "
               f"Away {pred['away_win_probability']*100:.1f}%")
-        print(f"Confidence: {pred.get('confidence', 0)*100:.1f}%")
+        conf = extract_display_confidence(pred) * 100
+        print(f"Confidence: {conf:.1f}%")
         print("-"*80)
 
 
