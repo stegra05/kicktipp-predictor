@@ -13,7 +13,7 @@ import random
 from itertools import product
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 import time
 from contextlib import redirect_stdout, redirect_stderr
 import io
@@ -221,7 +221,28 @@ def _evaluate_trial(args) -> Tuple[TrialResult, float]:
     return trial, threshold
 
 
-def successive_halving(features_df, n_splits: int, max_trials: int, progress_interval: int = 10, objective: str = 'points', n_jobs: int = 0, omp_threads: int | None = None, quiet_workers: bool = True) -> Dict[str, float]:
+def successive_halving(
+        features_df,
+        n_splits: int,
+        max_trials: int,
+        progress_interval: int = 10,
+        objective: str = 'points',
+        n_jobs: int = 0,
+        omp_threads: int | None = None,
+        quiet_workers: bool = True,
+        # refinement controls
+        enable_refine: bool = False,
+        refine_top_k: int = 8,
+        refine_steps: int = 5,
+        span_ml_weight: float = 0.03,
+        span_prob_alpha: float = 0.05,
+        span_min_lambda: float = 0.05,
+        span_goal_temp: float = 0.10,
+        span_conf_thr: float = 0.05,
+        # final model save controls
+        save_final_model: bool = False,
+        seasons_back: int = 3,
+    ) -> Dict[str, float]:
     data_fetcher = DataFetcher()
     feature_engineer = FeatureEngineer()
 
@@ -334,35 +355,68 @@ def successive_halving(features_df, n_splits: int, max_trials: int, progress_int
     candidates.sort(key=lambda x: x[0].obj_score, reverse=True)
     top = candidates[: max(1, len(candidates)//2)]
 
-    # Zoom-in ranges around top configs
-    def expand_range(values: List[float], center: float) -> List[float]:
-        # Quick mode: no expansion
-        return [center]
+    # Zoom-in refinement around top configs (optional)
+    refined_candidates: List[Tuple[TrialResult, float]] = []
+    if enable_refine and len(top) > 0 and refine_steps >= 1 and refine_top_k > 0:
+        def expand_lin(center: float, span: float, steps: int, lo: float, hi: float) -> List[float]:
+            if steps <= 1 or span <= 0:
+                return [float(np.clip(center, lo, hi))]
+            lo_b = max(lo, center - span)
+            hi_b = min(hi, center + span)
+            if hi_b < lo_b:
+                lo_b, hi_b = hi_b, lo_b
+            arr = np.linspace(lo_b, hi_b, num=steps)
+            return [float(np.clip(x, lo, hi)) for x in arr]
 
-    refined_candidates: List[Tuple[TrialResult, str, float]] = []
-    best_obj = -1e9
-    for trial, strategy, thr in top[:0]:  # skip refinement entirely in quick mode
-        w_vals = expand_range(ml_weights, float(trial.params['ml_weight']))
-        a_vals = expand_range(prob_alphas, float(trial.params['prob_blend_alpha']))
-        m_vals = expand_range(min_lambdas, float(trial.params['min_lambda']))
-        t_vals = expand_range(goal_temps, float(trial.params['goal_temperature']))
-        th_vals = expand_range(thresholds, float(thr))
+        top_k = top[:min(refine_top_k, len(top))]
 
-        for w in w_vals:
-            for a in a_vals:
-                for m in m_vals:
-                    for t in t_vals:
-                        for th in th_vals:
-                            params = {
-                                'ml_weight': float(np.clip(w, 0.0, 1.0)),
-                                'prob_blend_alpha': float(np.clip(a, 0.0, 1.0)),
-                                'min_lambda': float(max(0.0, m)),
-                                'goal_temperature': float(max(0.5, t)),
-                            }
-                            tr = evaluate_params(params, features_df, tscv, strategy, th, weights)
-                            log_trial(tr, strategy, th)
-                            refined_candidates.append((tr, strategy, th))
-                            best_obj = max(best_obj, tr.obj_score)
+        # Build all refinement tasks
+        ref_task_args: List[Tuple[Dict[str, float], Any, int, str, float, Dict[str, float], int | None, bool]] = []
+        # Estimate total number of refined trials for progress reporting
+        total_ref_trials = 0
+        for tr, thr in top_k:
+            w_vals = expand_lin(float(tr.params['ml_weight']), span_ml_weight, refine_steps, 0.0, 1.0)
+            a_vals = expand_lin(float(tr.params['prob_blend_alpha']), span_prob_alpha, refine_steps, 0.0, 1.0)
+            m_vals = expand_lin(float(tr.params['min_lambda']), span_min_lambda, refine_steps, 0.0, 1.0)
+            t_vals = expand_lin(float(tr.params['goal_temperature']), span_goal_temp, refine_steps, 0.5, 2.0)
+            th_vals = expand_lin(float(thr), span_conf_thr, refine_steps, 0.0, 1.0)
+            total_ref_trials += max(1, len(w_vals)) * max(1, len(a_vals)) * max(1, len(m_vals)) * max(1, len(t_vals)) * max(1, len(th_vals))
+            for w in w_vals:
+                for a in a_vals:
+                    for m in m_vals:
+                        for t in t_vals:
+                            for th in th_vals:
+                                params = {
+                                    'ml_weight': float(np.clip(w, 0.0, 1.0)),
+                                    'prob_blend_alpha': float(np.clip(a, 0.0, 1.0)),
+                                    'min_lambda': float(max(0.0, m)),
+                                    'goal_temperature': float(max(0.5, t)),
+                                }
+                                ref_task_args.append((params, features_df, n_splits, objective, float(th), weights, omp_threads, quiet_workers))
+
+        # Execute refinement in parallel with progress bar
+        print(f"[REFN] workers={n_jobs} x threads={omp_threads or 1} | trials={total_ref_trials} | cv-trainings={total_ref_trials * n_splits}")
+        ref_start = time.time()
+        with ProcessPoolExecutor(max_workers=n_jobs, mp_context=mp.get_context('spawn')) as ex:
+            futures = [ex.submit(_evaluate_trial, ta) for ta in ref_task_args]
+            for ridx, fut in enumerate(as_completed(futures), start=1):
+                rtrial, rthr = fut.result()
+                log_trial(rtrial, objective, rthr)
+                refined_candidates.append((rtrial, rthr))
+                if (ridx % max(1, progress_interval) == 0) or ridx == total_ref_trials:
+                    elapsed = time.time() - ref_start
+                    rate = elapsed / max(1, ridx)
+                    remaining = rate * (total_ref_trials - ridx)
+                    pct = ridx / total_ref_trials
+                    bar_w = 28
+                    filled = int(pct * bar_w)
+                    bar = "#" * filled + "." * (bar_w - filled)
+                    line = (
+                        f"\r[REFN] [{bar}] {ridx}/{total_ref_trials} ({pct*100:5.1f}%) "
+                        f"elapsed {fmt_dur(elapsed)} | eta {fmt_dur(remaining)}"
+                    )
+                    print(line, end="", flush=True)
+            print()
 
     all_candidates = top + refined_candidates
     all_candidates.sort(key=lambda x: x[0].obj_score, reverse=True)
@@ -389,6 +443,55 @@ def successive_halving(features_df, n_splits: int, max_trials: int, progress_int
         print(f"{i:2d}. obj={tr.obj_score:.3f} pts={tr.avg_points:.3f} ml={tr.params['ml_weight']:.2f} a={tr.params['prob_blend_alpha']:.2f} minL={tr.params['min_lambda']:.2f} temp={tr.params['goal_temperature']:.2f} thr={thr:.2f} 0-0={tr.zero_zero_rate*100:.1f}% D={tr.pred_D*100:.1f}% A={tr.pred_A*100:.1f}%")
 
     print("\nBest params saved to config/best_params.yaml (or .json)")
+
+    # Optional: Train final model on full dataset and save
+    if save_final_model:
+        try:
+            print("\n[FINAL] Training final HybridPredictor on full dataset...")
+            predictor = HybridPredictor()
+            predictor.ml_weight = float(best_trial.params['ml_weight'])
+            predictor.poisson_weight = 1.0 - predictor.ml_weight
+            predictor.prob_blend_alpha = float(best_trial.params['prob_blend_alpha'])
+            predictor.min_lambda = float(best_trial.params['min_lambda'])
+            predictor.goal_temperature = float(best_trial.params['goal_temperature'])
+            predictor.confidence_threshold = float(best_thr)
+            predictor.strategy = 'optimized'
+
+            # Rebuild dataset with configurable horizon
+            current_season = data_fetcher.get_current_season()
+            start_season = current_season - int(max(1, seasons_back))
+            all_matches_full = data_fetcher.fetch_historical_seasons(start_season, current_season)
+            features_full = feature_engineer.create_features_from_matches(all_matches_full)
+
+            predictor.train(features_full)
+            predictor.save_models("hybrid")
+
+            # Persist run meta
+            out_dir = os.path.join(project_root, 'data', 'predictions')
+            os.makedirs(out_dir, exist_ok=True)
+            meta_path = os.path.join(out_dir, 'run_meta.json')
+            from datetime import datetime as _dt
+            meta = {
+                'script': 'experiments/auto_tune.py',
+                'timestamp': _dt.now().isoformat(),
+                'ml_weight': predictor.ml_weight,
+                'poisson_weight': predictor.poisson_weight,
+                'prob_blend_alpha': predictor.prob_blend_alpha,
+                'min_lambda': predictor.min_lambda,
+                'goal_temperature': predictor.goal_temperature,
+                'confidence_threshold': predictor.confidence_threshold,
+                'max_goals': getattr(predictor, 'max_goals', 8),
+                'strategy': getattr(predictor, 'strategy', 'optimized'),
+            }
+            try:
+                import json as _json
+                with open(meta_path, 'w', encoding='utf-8') as f:
+                    _json.dump(meta, f, indent=2, default=str)
+                print(f"[FINAL] Saved trained models and run meta: {meta_path}")
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[FINAL] WARNING: Failed to train/save final model: {e}")
     return best_params
 
 
@@ -405,6 +508,20 @@ def main():
     parser.add_argument('--objective', type=str, default='points', choices=['points','composite'], help='Optimization objective')
     parser.add_argument('--n-jobs', type=int, default=0, help='Parallel processes (0 = half CPUs)')
     parser.add_argument('--omp-threads', type=int, default=1, help='Threads per process for BLAS/OMP')
+    # Refinement controls
+    parser.add_argument('--refine', action='store_true', help='Enable zoom-in refinement around top configs')
+    parser.add_argument('--refine-top-k', type=int, default=8, help='Top-K coarse configs to refine')
+    parser.add_argument('--refine-steps', type=int, default=5, help='Points per parameter during local sweep')
+    parser.add_argument('--span-ml-weight', type=float, default=0.03, help='Local span for ml_weight')
+    parser.add_argument('--span-prob-alpha', type=float, default=0.05, help='Local span for prob_blend_alpha')
+    parser.add_argument('--span-min-lambda', type=float, default=0.05, help='Local span for min_lambda')
+    parser.add_argument('--span-goal-temp', type=float, default=0.10, help='Local span for goal_temperature')
+    parser.add_argument('--span-conf-thr', type=float, default=0.05, help='Local span for confidence_threshold')
+    # Final model save controls
+    parser.add_argument('--save-final-model', action='store_true', help='Train on full dataset with best params and save models')
+    parser.add_argument('--seasons-back', type=int, default=3, help='Number of past seasons to include for final training')
+    # Optional Optuna scaffold
+    parser.add_argument('--optuna', type=int, default=0, help='Run Optuna with N trials instead of grid (requires optuna)')
     args = parser.parse_args()
 
     # Load data
@@ -420,7 +537,79 @@ def main():
     features_df = feature_engineer.create_features_from_matches(all_matches)
     print(f"Created {len(features_df)} samples")
 
-    best = successive_halving(features_df, n_splits=args.n_splits, max_trials=args.max_trials, progress_interval=args.progress_interval, objective=args.objective, n_jobs=args.n_jobs, omp_threads=args.omp_threads)
+    # Optional Optuna branch (scaffold)
+    if args.optuna and args.optuna > 0:
+        try:
+            import optuna  # type: ignore
+        except Exception:
+            print("Optuna is not installed. Please install optuna to use --optuna.")
+            sys.exit(1)
+
+        def _optuna_objective(trial):
+            params = {
+                'ml_weight': trial.suggest_float('ml_weight', 0.5, 0.9, step=0.01),
+                'prob_blend_alpha': trial.suggest_float('prob_blend_alpha', 0.2, 0.7, step=0.01),
+                'min_lambda': trial.suggest_float('min_lambda', 0.02, 0.4, step=0.01),
+                'goal_temperature': trial.suggest_float('goal_temperature', 1.1, 1.9, step=0.01),
+            }
+            threshold = trial.suggest_float('confidence_threshold', 0.30, 0.70, step=0.01)
+            weights = {'goal': 0.2, 'draw': 0.2, 'away': 0.2, 'zero': 0.2, 'draw_drift': 0.2, 'away_drift': 0.2}
+            tscv = TimeSeriesSplit(n_splits=args.n_splits)
+            tr = evaluate_params(params, features_df, tscv, args.objective, threshold, weights)
+            return tr.obj_score
+
+        print(f"Running Optuna study for {args.optuna} trials...")
+        study = optuna.create_study(direction='maximize')
+        study.optimize(_optuna_objective, n_trials=args.optuna, show_progress_bar=True)
+        best_params = dict(study.best_params)
+        # Persist best params
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        cfg_dir = os.path.join(project_root, 'config')
+        os.makedirs(cfg_dir, exist_ok=True)
+        if yaml is not None:
+            with open(os.path.join(cfg_dir, 'best_params.yaml'), 'w', encoding='utf-8') as f:
+                yaml.safe_dump({
+                    'ml_weight': float(best_params['ml_weight']),
+                    'prob_blend_alpha': float(best_params['prob_blend_alpha']),
+                    'min_lambda': float(best_params['min_lambda']),
+                    'goal_temperature': float(best_params['goal_temperature']),
+                    'confidence_threshold': float(best_params.get('confidence_threshold', 0.5)),
+                    'strategy': 'optimized',
+                }, f, sort_keys=True)
+        else:
+            import json
+            with open(os.path.join(cfg_dir, 'best_params.json'), 'w', encoding='utf-8') as f:
+                json.dump({
+                    'ml_weight': float(best_params['ml_weight']),
+                    'prob_blend_alpha': float(best_params['prob_blend_alpha']),
+                    'min_lambda': float(best_params['min_lambda']),
+                    'goal_temperature': float(best_params['goal_temperature']),
+                    'confidence_threshold': float(best_params.get('confidence_threshold', 0.5)),
+                    'strategy': 'optimized',
+                }, f, indent=2)
+        print("Optuna tuning complete; best params saved. Exiting.")
+        return
+
+    best = successive_halving(
+        features_df,
+        n_splits=args.n_splits,
+        max_trials=args.max_trials,
+        progress_interval=args.progress_interval,
+        objective=args.objective,
+        n_jobs=args.n_jobs,
+        omp_threads=args.omp_threads,
+        quiet_workers=True,
+        enable_refine=args.refine,
+        refine_top_k=args.refine_top_k,
+        refine_steps=args.refine_steps,
+        span_ml_weight=args.span_ml_weight,
+        span_prob_alpha=args.span_prob_alpha,
+        span_min_lambda=args.span_min_lambda,
+        span_goal_temp=args.span_goal_temp,
+        span_conf_thr=args.span_conf_thr,
+        save_final_model=args.save_final_model,
+        seasons_back=args.seasons_back,
+    )
     print("\nBest configuration:")
     for k, v in best.items():
         print(f"  {k}: {v}")
