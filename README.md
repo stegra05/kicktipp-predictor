@@ -60,25 +60,18 @@ The following sections provide detailed information on how to use the different 
 ### Generating Predictions
 The `predict.py` script has several options to customize your predictions:
 -   `--matchday`: Predict a specific matchday.
--   `--strategy`: Choose a prediction strategy (`balanced`, `conservative`, `aggressive`, `safe`).
 -   `--record`: Record predictions for performance tracking.
 -   `--update-results`: Update previous predictions with actual results.
 
 ### Evaluating Model Performance
 -   **`evaluate_model.py`**: Provides a comprehensive evaluation of the model's performance.
 -   **`evaluate_season.py`**: Evaluates the predictor's performance over the entire current season.
--   **`diagnose_model.py`**: Provides detailed insights into model behavior, calibration, and prediction patterns.
-
-### Tuning Hyperparameters
-The `tune_hyperparameters.py` script allows you to optimize the model's weights using cross-validation.
 
 ## Features
 - **Advanced Hybrid Prediction Model**: Combines XGBoost ML models with Dixon-Coles enhanced Poisson models
 - **Probability Calibration**: Isotonic regression calibration for ML expected goals, blended outcome probabilities
 - **Enhanced Confidence Metrics**: Margin-based confidence calculation with entropy-based alternatives
 - **Advanced Feature Engineering**: 80+ features including momentum, strength of schedule, rest days, and goal patterns
-- **Multiple Prediction Strategies**: Balanced, Conservative, Aggressive, and Safe strategies to optimize for different scenarios
-- **Hyperparameter Tuning**: Cross-validation tools for optimizing model weights and parameters
 - **Comprehensive Evaluation**: Detailed metrics, confusion matrices, and performance analysis by outcome/confidence
 - **Performance Tracking**: Automatic tracking of prediction accuracy and points earned
 - **Web Interface**: Clean, responsive web UI to view predictions, league table, and statistics
@@ -102,8 +95,6 @@ kicktipp-predictor/
 ├── predict.py
 ├── evaluate_model.py
 ├── evaluate_season.py
-├── diagnose_model.py
-├── tune_hyperparameters.py
 ├── demo.py
 ├── requirements.txt
 └── README.md

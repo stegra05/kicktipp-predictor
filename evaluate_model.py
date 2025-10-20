@@ -275,34 +275,6 @@ def main():
     print(f"Draw:     {pred_D:5.1f}% vs {act_D:5.1f}%")
     print(f"Away Win: {pred_A:5.1f}% vs {act_A:5.1f}%")
 
-    # Compare strategies
-    print("\n" + "="*80)
-    print("STRATEGY COMPARISON")
-    print("="*80)
-
-    strategies = ['balanced', 'conservative', 'aggressive', 'safe']
-    strategy_results = {}
-
-    for strategy in strategies:
-        preds = predictor.predict_optimized(test_features, strategy=strategy, optimize_for_points=False)
-        metrics = calculate_detailed_metrics(preds, actuals)
-        strategy_results[strategy] = metrics
-
-    print(f"\n{'Strategy':<15} {'Avg Pts':<10} {'Exact':<8} {'Diff':<8} {'Result':<8}")
-    print("-" * 60)
-
-    for strategy in strategies:
-        m = strategy_results[strategy]
-        n = m['total_matches']
-        avg_pts = m['total_points'] / n
-        exact_pct = m['exact_scores'] / n * 100
-        diff_pct = m['correct_differences'] / n * 100
-        result_pct = m['correct_results'] / n * 100
-
-        print(f"{strategy.capitalize():<15} {avg_pts:<10.3f} "
-              f"{exact_pct:<8.1f} {diff_pct:<8.1f} {result_pct:<8.1f}")
-
-    print("\n" + "="*80)
 
 
 if __name__ == "__main__":

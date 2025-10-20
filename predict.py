@@ -33,14 +33,6 @@ def main():
     parser = argparse.ArgumentParser(description='Generate 3. Liga match predictions')
     parser.add_argument('--matchday', type=int, help='Specific matchday to predict')
     parser.add_argument('--days', type=int, default=7, help='Number of days ahead to predict (default: 7)')
-    parser.add_argument('--strategy', choices=['balanced', 'conservative', 'aggressive', 'safe'],
-                       default='safe', help='Prediction strategy (default: safe - best performance)')
-    parser.add_argument('--optimize-for-points', dest='optimize_for_points', action='store_true',
-                       help='Select scoreline that maximizes expected Kicktipp points (default: on)')
-    parser.add_argument('--no-optimize-for-points', dest='optimize_for_points', action='store_false',
-                       help='Disable expected-points optimization')
-    parser.set_defaults(optimize_for_points=True)
-    parser.add_argument('--use-best-params', action='store_true', help='Force reload of best params from config')
     parser.add_argument('--record', action='store_true', help='Record predictions for performance tracking')
     parser.add_argument('--update-results', action='store_true',
                        help='Update previous predictions with actual results')
@@ -123,11 +115,9 @@ def main():
     predictor.poisson_predictor.train(hist_df)
 
     # Generate predictions
-    print(f"Generating predictions using '{args.strategy}' strategy...\n")
+    print("Generating predictions...\n")
     predictions = predictor.predict_optimized(
         features_df,
-        strategy=args.strategy,
-        optimize_for_points=args.optimize_for_points
     )
 
     # Print predictions
