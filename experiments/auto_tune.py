@@ -8,6 +8,9 @@ import os
 import sys
 import csv
 import math
+import argparse
+import random
+from itertools import product
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
@@ -137,7 +140,8 @@ def evaluate_params(params: Dict[str, float],
         predictor.confidence_threshold = float(confidence_threshold)
 
         predictor.train(train_df)
-        preds = predictor.predict_optimized(test_feats, strategy=strategy, use_confidence_adaptive=True, confidence_threshold=confidence_threshold, optimize_for_points=True)
+        # Use simplified maximize-points predictor (strategy handled internally; threshold set above)
+        preds = predictor.predict_optimized(test_feats)
 
         acts = test_df.to_dict('records')
 
@@ -175,12 +179,12 @@ def evaluate_params(params: Dict[str, float],
     )
 
 
-def successive_halving(features_df) -> Dict[str, float]:
+def successive_halving(features_df, n_splits: int, max_trials: int) -> Dict[str, float]:
     data_fetcher = DataFetcher()
     feature_engineer = FeatureEngineer()
 
     # TimeSeries CV (modest folds for stability vs. runtime)
-    tscv = TimeSeriesSplit(n_splits=3)
+    tscv = TimeSeriesSplit(n_splits=n_splits)
 
     # Expanded parameter ranges
     ml_weights = [0.60, 0.65, 0.70, 0.75, 0.80]
@@ -213,23 +217,41 @@ def successive_halving(features_df) -> Dict[str, float]:
                 trial.home_mean_pred, trial.away_mean_pred, trial.home_mean_act, trial.away_mean_act
             ])
 
-    # Coarse pass over the expanded grid
+    # Build full grid and optionally sample down to a budget
+    full_grid = list(product(ml_weights, prob_alphas, min_lambdas, goal_temps, strategies, thresholds))
+    if max_trials > 0 and len(full_grid) > max_trials:
+        random.seed(42)
+        grid = random.sample(full_grid, max_trials)
+    else:
+        grid = full_grid
+
+    # Coarse pass over the (possibly sampled) grid
     candidates: List[Tuple[TrialResult, str, float]] = []
-    for strategy in strategies:
-        for thr in thresholds:
-            for w in ml_weights:
-                for a in prob_alphas:
-                    for m in min_lambdas:
-                        for t in goal_temps:
-                            params = {
-                                'ml_weight': w,
-                                'prob_blend_alpha': a,
-                                'min_lambda': m,
-                                'goal_temperature': t,
-                            }
-                            trial = evaluate_params(params, features_df, tscv, strategy, thr, weights)
-                            log_trial(trial, strategy, thr)
-                            candidates.append((trial, strategy, thr))
+    # Progress accounting: number of trials and fold-trainings
+    total_trials = len(grid)
+    try:
+        n_splits = tscv.get_n_splits(features_df)
+    except Exception:
+        n_splits = 3
+    total_trainings = total_trials * n_splits
+    trials_done = 0
+    trainings_done = 0
+    for w, a, m, t, strategy, thr in grid:
+        params = {
+            'ml_weight': w,
+            'prob_blend_alpha': a,
+            'min_lambda': m,
+            'goal_temperature': t,
+        }
+        trial = evaluate_params(params, features_df, tscv, strategy, thr, weights)
+        log_trial(trial, strategy, thr)
+        candidates.append((trial, strategy, thr))
+        # Update progress
+        trials_done += 1
+        trainings_done += n_splits
+        remaining_trials = total_trials - trials_done
+        remaining_trainings = max(0, total_trainings - trainings_done)
+        print(f"Progress: {trials_done}/{total_trials} trials done, {remaining_trials} left; ~{remaining_trainings} fold-trainings remaining")
 
     # Keep top 50% by objective
     candidates.sort(key=lambda x: x[0].obj_score, reverse=True)
@@ -298,6 +320,12 @@ def main():
     print("AUTOMATED HYPERPARAMETER TUNING")
     print("="*80)
 
+    # CLI args for budget and CV folds
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--max-trials', type=int, default=0, help='Max parameter combos to evaluate (0 = full grid)')
+    parser.add_argument('--n-splits', type=int, default=3, help='TimeSeriesSplit folds')
+    args = parser.parse_args()
+
     # Load data
     print("Loading data...")
     data_fetcher = DataFetcher()
@@ -311,7 +339,7 @@ def main():
     features_df = feature_engineer.create_features_from_matches(all_matches)
     print(f"Created {len(features_df)} samples")
 
-    best = successive_halving(features_df)
+    best = successive_halving(features_df, n_splits=args.n_splits, max_trials=args.max_trials)
     print("\nBest configuration:")
     for k, v in best.items():
         print(f"  {k}: {v}")

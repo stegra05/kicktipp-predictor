@@ -1,8 +1,8 @@
 {
-  "ml_weight": 0.6,
-  "prob_blend_alpha": 0.45,
-  "min_lambda": 0.2,
+  "ml_weight": 0.65,
+  "prob_blend_alpha": 0.4,
+  "min_lambda": 0.3,
   "goal_temperature": 1.5,
-  "confidence_threshold": 0.45,
+  "confidence_threshold": 0.55,
   "strategy": "safe"
 }
