@@ -35,6 +35,12 @@ def main():
     parser.add_argument('--days', type=int, default=7, help='Number of days ahead to predict (default: 7)')
     parser.add_argument('--strategy', choices=['balanced', 'conservative', 'aggressive', 'safe'],
                        default='safe', help='Prediction strategy (default: safe - best performance)')
+    parser.add_argument('--optimize-for-points', dest='optimize_for_points', action='store_true',
+                       help='Select scoreline that maximizes expected Kicktipp points (default: on)')
+    parser.add_argument('--no-optimize-for-points', dest='optimize_for_points', action='store_false',
+                       help='Disable expected-points optimization')
+    parser.set_defaults(optimize_for_points=True)
+    parser.add_argument('--use-best-params', action='store_true', help='Force reload of best params from config')
     parser.add_argument('--record', action='store_true', help='Record predictions for performance tracking')
     parser.add_argument('--update-results', action='store_true',
                        help='Update previous predictions with actual results')
@@ -111,9 +117,18 @@ def main():
         upcoming_matches, historical_matches
     )
 
+    # Train Poisson component on finished historical matches for realistic λs
+    import pandas as pd
+    hist_df = pd.DataFrame([m for m in historical_matches if m['is_finished']])
+    predictor.poisson_predictor.train(hist_df)
+
     # Generate predictions
     print(f"Generating predictions using '{args.strategy}' strategy...\n")
-    predictions = predictor.predict_optimized(features_df, strategy=args.strategy)
+    predictions = predictor.predict_optimized(
+        features_df,
+        strategy=args.strategy,
+        optimize_for_points=args.optimize_for_points
+    )
 
     # Print predictions
     print_predictions(predictions)

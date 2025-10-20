@@ -253,6 +253,10 @@ def main():
 
     print(f"Loaded {len(finished)} finished matches")
 
+    # Train Poisson component on finished matches to initialize strengths and league rates
+    hist_df = pd.DataFrame(finished)
+    predictor.poisson_predictor.train(hist_df)
+
     # Create features
     print("Creating features...")
     features_df = feature_engineer.create_features_from_matches(all_matches)

@@ -78,8 +78,17 @@ def main():
             print(f"Could not generate features for matchday {matchday}.")
             continue
 
-        # Generate predictions (using default 'safe' strategy)
-        predictions = predictor.predict_optimized(features_df, strategy='safe')
+        # Train Poisson component on finished historical matches for realistic λs
+        import pandas as pd
+        hist_df = pd.DataFrame([m for m in historical_matches if m['is_finished']])
+        predictor.poisson_predictor.train(hist_df)
+
+        # Generate predictions (using default 'safe' strategy with expected-points optimization)
+        predictions = predictor.predict_optimized(
+            features_df,
+            strategy='safe',
+            optimize_for_points=True
+        )
 
         # Record predictions and update results immediately
         for pred, actual in zip(predictions, matchday_matches):

@@ -210,6 +210,10 @@ def main():
 
     print(f"Loaded {len(finished)} finished matches")
 
+    # Train Poisson component on finished matches to initialize strengths and league rates
+    hist_df = pd.DataFrame(finished)
+    predictor.poisson_predictor.train(hist_df)
+
     # Create features
     print("Creating features...")
     features_df = feature_engineer.create_features_from_matches(all_matches)
@@ -239,6 +243,38 @@ def main():
     # Print report
     print_evaluation_report(metrics)
 
+    # Additional realism metrics: 0-0 rate and predicted outcome shares
+    print("\n" + "="*80)
+    print("REALISM METRICS")
+    print("="*80)
+
+    # 0-0 rate (predicted vs actual)
+    zero_zero_pred = sum(1 for p in predictions if p['predicted_home_score'] == 0 and p['predicted_away_score'] == 0)
+    zero_zero_act = sum(1 for a in actuals if int(a['home_score']) == 0 and int(a['away_score']) == 0)
+    n = len(predictions)
+    print(f"Predicted 0-0 rate: {zero_zero_pred/n*100:5.1f}% ({zero_zero_pred}/{n})")
+    print(f"Actual 0-0 rate:    {zero_zero_act/n*100:5.1f}% ({zero_zero_act}/{n})")
+
+    # Outcome distribution (predicted)
+    def outcome(h, a):
+        return 'H' if h > a else ('A' if a > h else 'D')
+
+    pred_outcomes = [outcome(p['predicted_home_score'], p['predicted_away_score']) for p in predictions]
+    pred_H = pred_outcomes.count('H') / n * 100
+    pred_D = pred_outcomes.count('D') / n * 100
+    pred_A = pred_outcomes.count('A') / n * 100
+
+    # Outcome distribution (actual)
+    act_outcomes = [outcome(int(a['home_score']), int(a['away_score'])) for a in actuals]
+    act_H = act_outcomes.count('H') / n * 100
+    act_D = act_outcomes.count('D') / n * 100
+    act_A = act_outcomes.count('A') / n * 100
+
+    print("\n--- Outcome Distribution (Predicted vs Actual) ---")
+    print(f"Home Win: {pred_H:5.1f}% vs {act_H:5.1f}%")
+    print(f"Draw:     {pred_D:5.1f}% vs {act_D:5.1f}%")
+    print(f"Away Win: {pred_A:5.1f}% vs {act_A:5.1f}%")
+
     # Compare strategies
     print("\n" + "="*80)
     print("STRATEGY COMPARISON")
@@ -248,7 +284,7 @@ def main():
     strategy_results = {}
 
     for strategy in strategies:
-        preds = predictor.predict_optimized(test_features, strategy=strategy)
+        preds = predictor.predict_optimized(test_features, strategy=strategy, optimize_for_points=False)
         metrics = calculate_detailed_metrics(preds, actuals)
         strategy_results[strategy] = metrics
 

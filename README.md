@@ -82,10 +82,10 @@ This will:
 
 ### 2. Generate Predictions
 
-Generate predictions for upcoming matches:
+Generate predictions for upcoming matches (defaults maximize points: strategy "safe" + expected-points optimization ON):
 
 ```bash
-# Predict matches in the next 7 days
+# Predict matches in the next 7 days (safe + optimize-for-points defaults)
 python predict.py
 
 # Predict a specific matchday
@@ -96,6 +96,9 @@ python predict.py --strategy conservative
 python predict.py --strategy aggressive
 python predict.py --strategy safe
 
+# Disable expected-points optimization explicitly (default is ON)
+python predict.py --no-optimize-for-points
+
 # Record predictions for performance tracking
 python predict.py --record
 
@@ -105,10 +108,10 @@ python predict.py --update-results
 
 ### Prediction Strategies
 
-- **Balanced** (default): Standard hybrid predictions
+- **Safe** (default): Prioritize getting the winner right over exact scores
+- **Balanced**: Standard hybrid predictions
 - **Conservative**: Favor lower-scoring, more common results
 - **Aggressive**: Try to predict exact common scorelines
-- **Safe**: Prioritize getting the winner right over exact scores
 
 ### 3. Evaluate Model Performance
 
@@ -133,7 +136,7 @@ Optimize model weights using cross-validation:
 python tune_hyperparameters.py
 ```
 
-This performs grid search over:
+This performs grid search over (configurable in `experiments/auto_tune.py`):
 - `ml_weight`: Weight for ML model (vs Poisson)
 - `prob_blend_alpha`: Weight for Poisson probabilities (vs ML classifier)
 - `min_lambda`: Minimum expected goals to avoid degenerate predictions

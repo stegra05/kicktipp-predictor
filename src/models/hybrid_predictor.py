@@ -1,9 +1,16 @@
 import pandas as pd
 import numpy as np
 from typing import Dict, List
+import os
+import json
 from .ml_model import MLPredictor
 from .poisson_model import PoissonPredictor
 from scipy.stats import poisson
+
+try:
+    import yaml  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    yaml = None
 
 
 class HybridPredictor:
@@ -31,6 +38,40 @@ class HybridPredictor:
         # Temperature scaling for expected goals (Phase 2)
         # Scales lambdas up to match observed goal rates
         self.goal_temperature = 1.3
+
+        # Confidence threshold for adaptive safe strategy
+        self.confidence_threshold: float = 0.4
+
+        # Attempt to load best params from config if available
+        self._load_best_params_from_config()
+
+    def _load_best_params_from_config(self) -> None:
+        """Load best hyperparameters from config/best_params.yaml or .json if present."""
+        try:
+            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+            cfg_dir = os.path.join(project_root, "config")
+            yaml_path = os.path.join(cfg_dir, "best_params.yaml")
+            json_path = os.path.join(cfg_dir, "best_params.json")
+
+            params = None
+            if os.path.exists(yaml_path) and yaml is not None:
+                with open(yaml_path, "r", encoding="utf-8") as f:
+                    params = yaml.safe_load(f)
+            elif os.path.exists(json_path):
+                with open(json_path, "r", encoding="utf-8") as f:
+                    params = json.load(f)
+
+            if isinstance(params, dict):
+                # Apply known parameters if present
+                self.ml_weight = float(params.get("ml_weight", self.ml_weight))
+                self.poisson_weight = 1.0 - self.ml_weight
+                self.prob_blend_alpha = float(params.get("prob_blend_alpha", self.prob_blend_alpha))
+                self.min_lambda = float(params.get("min_lambda", self.min_lambda))
+                self.goal_temperature = float(params.get("goal_temperature", self.goal_temperature))
+                self.confidence_threshold = float(params.get("confidence_threshold", self.confidence_threshold))
+        except Exception:
+            # Fail quietly; defaults remain
+            pass
 
     def train(self, matches_df: pd.DataFrame):
         """
@@ -258,7 +299,9 @@ class HybridPredictor:
 
     def predict_optimized(self, features_df: pd.DataFrame,
                          strategy: str = 'balanced',
-                         use_confidence_adaptive: bool = True) -> List[Dict]:
+                         use_confidence_adaptive: bool = True,
+                         confidence_threshold: float | None = None,
+                         optimize_for_points: bool = False) -> List[Dict]:
         """
         Predict with optimization strategy for maximizing points.
 
@@ -281,8 +324,36 @@ class HybridPredictor:
 
         optimized_predictions = []
 
+        # Determine threshold to use
+        threshold = self.confidence_threshold if confidence_threshold is None else confidence_threshold
+
         for pred in base_predictions:
             optimized = pred.copy()
+
+            # Optionally pick scoreline that maximizes expected points based on the Poisson grid
+            if optimize_for_points:
+                max_goals = 7
+                hg = float(pred['home_expected_goals'])
+                ag = float(pred['away_expected_goals'])
+                # Build grid with Dixon-Coles adjustment using current rho
+                grid = np.zeros((max_goals, max_goals))
+                rho = getattr(self.poisson_predictor, 'rho', 0.0)
+                for h in range(max_goals):
+                    for a in range(max_goals):
+                        p = poisson.pmf(h, max(hg, 1e-9)) * poisson.pmf(a, max(ag, 1e-9))
+                        if h == 0 and a == 0:
+                            p *= (1.0 + rho)
+                        elif (h == 0 and a == 1) or (h == 1 and a == 0):
+                            p *= (1.0 - rho)
+                        elif h == 1 and a == 1:
+                            p *= (1.0 - rho)
+                        grid[h, a] = p
+                total = np.sum(grid)
+                if total > 0:
+                    grid /= total
+                best_h, best_a, _ = self._calculate_expected_points(grid)
+                optimized['predicted_home_score'] = int(best_h)
+                optimized['predicted_away_score'] = int(best_a)
 
             if strategy == 'conservative':
                 # Reduce predicted goals slightly (conservative)
@@ -325,8 +396,8 @@ class HybridPredictor:
             if use_confidence_adaptive:
                 confidence = pred.get('confidence', 0.5)
 
-                # Low confidence (<0.4): use safe strategy
-                if confidence < 0.4:
+                # Low confidence: use safe strategy
+                if confidence < threshold:
                     home_prob = pred['home_win_probability']
                     away_prob = pred['away_win_probability']
                     draw_prob = pred['draw_probability']
