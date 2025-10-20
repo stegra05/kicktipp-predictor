@@ -5,6 +5,7 @@ import os
 import json
 from .ml_model import MLPredictor
 from .poisson_model import PoissonPredictor
+from .confidence_selector import extract_display_confidence
 from scipy.stats import poisson
 
 try:
@@ -44,6 +45,9 @@ class HybridPredictor:
         # Unified grid size
         self.max_goals = 8
 
+        # Default prediction strategy (used when not overridden)
+        self.strategy: str = "safe"
+
         # Try load best params from config
         try:
             import os, json
@@ -64,12 +68,14 @@ class HybridPredictor:
                 self.min_lambda = float(params.get("min_lambda", self.min_lambda))
                 self.goal_temperature = float(params.get("goal_temperature", self.goal_temperature))
                 self.confidence_threshold = float(params.get("confidence_threshold", self.confidence_threshold))
+                # Optional strategy override from config
+                self.strategy = str(params.get("strategy", self.strategy))
         except Exception:
             pass
 
         print(f"[HybridPredictor] params ml_weight={self.ml_weight:.2f} poisson_weight={self.poisson_weight:.2f} "
               f"alpha={self.prob_blend_alpha:.2f} min_lambda={self.min_lambda:.2f} temp={self.goal_temperature:.2f} "
-              f"conf_thr={self.confidence_threshold:.2f} max_goals={self.max_goals}")
+              f"conf_thr={self.confidence_threshold:.2f} max_goals={self.max_goals} strategy={self.strategy}")
 
 
     def train(self, matches_df: pd.DataFrame):
@@ -337,13 +343,16 @@ class HybridPredictor:
 
         return (best_score[0], best_score[1], best_expected_points)
 
-    def predict_optimized(self, features_df: pd.DataFrame) -> List[Dict]:
+    def predict_optimized(self, features_df: pd.DataFrame, strategy: str | None = None) -> List[Dict]:
         """
         Predict with optimization strategy for maximizing points.
         This version is simplified and always uses the best strategy.
         """
         base_predictions = self.predict(features_df)
         optimized_predictions = []
+        # Currently we use the same flow regardless of strategy value (optimize + safe gating),
+        # but accept the parameter for API compatibility and future control.
+        _effective_strategy = strategy or self.strategy
 
         for pred in base_predictions:
             optimized = pred.copy()
@@ -371,7 +380,8 @@ class HybridPredictor:
             optimized['predicted_away_score'] = int(best_a)
 
             # Confidence-adaptive safe strategy for low-confidence predictions
-            confidence = pred.get('confidence', 0.5)
+            # Use selected confidence metric for gating to improve points
+            confidence = extract_display_confidence(pred)
             if confidence < self.confidence_threshold:
                 home_prob = pred['home_win_probability']
                 away_prob = pred['away_win_probability']
