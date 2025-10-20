@@ -31,6 +31,17 @@ class MLPredictor:
         # Calibrators to map raw goal predictions to calibrated expected goals (lambdas)
         self.home_goal_calibrator: IsotonicRegression | None = None
         self.away_goal_calibrator: IsotonicRegression | None = None
+        # Resolve threads for XGBoost from OMP_NUM_THREADS (fallback to CPU count)
+        self.num_threads = self._resolve_num_threads()
+
+    def _resolve_num_threads(self) -> int:
+        env_value = os.getenv("OMP_NUM_THREADS")
+        if env_value:
+            try:
+                return max(1, int(env_value))
+            except ValueError:
+                pass
+        return max(1, os.cpu_count() or 1)
 
     def train(self, matches_df: pd.DataFrame):
         """
@@ -76,7 +87,9 @@ class MLPredictor:
             max_depth=6,
             learning_rate=0.1,
             objective='count:poisson',
-            random_state=42
+            random_state=42,
+            n_jobs=self.num_threads,
+            nthread=self.num_threads
         )
         self.score_model_home.fit(X, y_home)
 
@@ -87,7 +100,9 @@ class MLPredictor:
             max_depth=6,
             learning_rate=0.1,
             objective='count:poisson',
-            random_state=42
+            random_state=42,
+            n_jobs=self.num_threads,
+            nthread=self.num_threads
         )
         self.score_model_away.fit(X, y_away)
 
@@ -124,7 +139,9 @@ class MLPredictor:
             n_estimators=200,
             max_depth=6,
             learning_rate=0.1,
-            random_state=42
+            random_state=42,
+            n_jobs=self.num_threads,
+            nthread=self.num_threads
         )
         self.result_model.fit(X, y_result_encoded, sample_weight=sample_weights)
 
