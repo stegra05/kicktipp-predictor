@@ -116,7 +116,7 @@ def composite_objective(avg_points: float,
 def evaluate_params(params: Dict[str, float],
                     features_df,
                     tscv: TimeSeriesSplit,
-                    strategy: str,
+                    objective: str,
                     confidence_threshold: float,
                     weights: Dict[str, float]) -> TrialResult:
     fold_points: List[float] = []
@@ -145,7 +145,7 @@ def evaluate_params(params: Dict[str, float],
         predictor.confidence_threshold = float(confidence_threshold)
 
         predictor.train(train_df)
-        # Use simplified maximize-points predictor (strategy handled internally; threshold set above)
+        # Always use maximize-points predictor for points objective
         preds = predictor.predict_optimized(test_feats)
 
         acts = test_df.to_dict('records')
@@ -171,7 +171,7 @@ def evaluate_params(params: Dict[str, float],
         act_D = act_outcomes.count('D') / max(len(act_outcomes), 1)
         act_A = act_outcomes.count('A') / max(len(act_outcomes), 1)
 
-        obj = composite_objective(pts, z0, pH, pD, pA, hpred, apred, hact, aact, act_D, act_A, weights)
+        obj = pts if objective == 'points' else composite_objective(pts, z0, pH, pD, pA, hpred, apred, hact, aact, act_D, act_A, weights)
         fold_objs.append(obj)
 
     avg_points = float(np.mean(fold_points))
@@ -192,7 +192,7 @@ def evaluate_params(params: Dict[str, float],
     )
 
 
-def successive_halving(features_df, n_splits: int, max_trials: int, progress_interval: int = 10) -> Dict[str, float]:
+def successive_halving(features_df, n_splits: int, max_trials: int, progress_interval: int = 10, objective: str = 'points') -> Dict[str, float]:
     data_fetcher = DataFetcher()
     feature_engineer = FeatureEngineer()
 
@@ -200,12 +200,11 @@ def successive_halving(features_df, n_splits: int, max_trials: int, progress_int
     tscv = TimeSeriesSplit(n_splits=n_splits)
 
     # Expanded parameter ranges
-    ml_weights = [0.60, 0.65, 0.70, 0.75, 0.80]
-    prob_alphas = [0.30, 0.35, 0.40, 0.45, 0.50]
-    min_lambdas = [0.15, 0.20, 0.25, 0.30]
-    goal_temps = [1.4, 1.5, 1.6, 1.7]
-    strategies = ['safe', 'conservative']
-    thresholds = [0.40, 0.45, 0.50, 0.55]
+    ml_weights = [0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85]
+    prob_alphas = [0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60]
+    min_lambdas = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35]
+    goal_temps = [1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8]
+    thresholds = [0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65]
 
     weights = {'goal': 0.2, 'draw': 0.2, 'away': 0.2, 'zero': 0.2, 'draw_drift': 0.2, 'away_drift': 0.2}
 
@@ -216,22 +215,22 @@ def successive_halving(features_df, n_splits: int, max_trials: int, progress_int
     log_path = os.path.join(out_dir, 'tuning_runs.csv')
     write_header = not os.path.exists(log_path)
 
-    def log_trial(trial: TrialResult, strategy: str, threshold: float) -> None:
+    def log_trial(trial: TrialResult, objective_type: str, threshold: float) -> None:
         with open(log_path, 'a', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             if write_header and f.tell() == 0:
                 writer.writerow([
-                    'ml_weight','prob_blend_alpha','min_lambda','goal_temperature','strategy','confidence_threshold',
+                    'ml_weight','prob_blend_alpha','min_lambda','goal_temperature','objective_type','confidence_threshold',
                     'avg_points','objective','zero_zero_rate','pred_H','pred_D','pred_A','home_mean_pred','away_mean_pred','home_mean_act','away_mean_act'
                 ])
             writer.writerow([
                 trial.params['ml_weight'], trial.params['prob_blend_alpha'], trial.params['min_lambda'], trial.params['goal_temperature'],
-                strategy, threshold, trial.avg_points, trial.obj_score, trial.zero_zero_rate, trial.pred_H, trial.pred_D, trial.pred_A,
+                objective_type, threshold, trial.avg_points, trial.obj_score, trial.zero_zero_rate, trial.pred_H, trial.pred_D, trial.pred_A,
                 trial.home_mean_pred, trial.away_mean_pred, trial.home_mean_act, trial.away_mean_act
             ])
 
     # Build full grid and optionally sample down to a budget
-    full_grid = list(product(ml_weights, prob_alphas, min_lambdas, goal_temps, strategies, thresholds))
+    full_grid = list(product(ml_weights, prob_alphas, min_lambdas, goal_temps, thresholds))
     if max_trials > 0 and len(full_grid) > max_trials:
         random.seed(42)
         grid = random.sample(full_grid, max_trials)
@@ -247,15 +246,15 @@ def successive_halving(features_df, n_splits: int, max_trials: int, progress_int
         n_splits = 3
     trainings_done = 0
     best_so_far: TrialResult | None = None
-    for idx, (w, a, m, t, strategy, thr) in enumerate(grid, start=1):
+    for idx, (w, a, m, t, thr) in enumerate(grid, start=1):
         params = {
             'ml_weight': w,
             'prob_blend_alpha': a,
             'min_lambda': m,
             'goal_temperature': t,
         }
-        trial = evaluate_params(params, features_df, tscv, strategy, thr, weights)
-        log_trial(trial, strategy, thr)
+        trial = evaluate_params(params, features_df, tscv, objective, thr, weights)
+        log_trial(trial, objective, thr)
         candidates.append((trial, strategy, thr))
         # Condensed progress
         trainings_done += n_splits
@@ -300,7 +299,7 @@ def successive_halving(features_df, n_splits: int, max_trials: int, progress_int
 
     all_candidates = top + refined_candidates
     all_candidates.sort(key=lambda x: x[0].obj_score, reverse=True)
-    best_trial, best_strategy, best_thr = all_candidates[0]
+    best_trial, _unused_strategy, best_thr = all_candidates[0]
 
     # Save to config
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -308,7 +307,7 @@ def successive_halving(features_df, n_splits: int, max_trials: int, progress_int
     os.makedirs(cfg_dir, exist_ok=True)
     best_params = dict(best_trial.params)
     best_params['confidence_threshold'] = float(best_thr)
-    best_params['strategy'] = best_strategy
+    best_params['strategy'] = 'optimized'
     if yaml is not None:
         with open(os.path.join(cfg_dir, 'best_params.yaml'), 'w', encoding='utf-8') as f:
             yaml.safe_dump(best_params, f, sort_keys=True)
@@ -319,8 +318,8 @@ def successive_halving(features_df, n_splits: int, max_trials: int, progress_int
 
     # Print leaderboard
     print("\nTOP 10 CONFIGS BY OBJECTIVE:")
-    for i, (tr, strat, thr) in enumerate(all_candidates[:10], start=1):
-        print(f"{i:2d}. obj={tr.obj_score:.3f} pts={tr.avg_points:.3f} ml={tr.params['ml_weight']:.2f} a={tr.params['prob_blend_alpha']:.2f} minL={tr.params['min_lambda']:.2f} temp={tr.params['goal_temperature']:.2f} strat={strat} thr={thr:.2f} 0-0={tr.zero_zero_rate*100:.1f}% D={tr.pred_D*100:.1f}% A={tr.pred_A*100:.1f}%")
+    for i, (tr, _st, thr) in enumerate(all_candidates[:10], start=1):
+        print(f"{i:2d}. obj={tr.obj_score:.3f} pts={tr.avg_points:.3f} ml={tr.params['ml_weight']:.2f} a={tr.params['prob_blend_alpha']:.2f} minL={tr.params['min_lambda']:.2f} temp={tr.params['goal_temperature']:.2f} thr={thr:.2f} 0-0={tr.zero_zero_rate*100:.1f}% D={tr.pred_D*100:.1f}% A={tr.pred_A*100:.1f}%")
 
     print("\nBest params saved to config/best_params.yaml (or .json)")
     return best_params
@@ -336,6 +335,7 @@ def main():
     parser.add_argument('--max-trials', type=int, default=0, help='Max parameter combos to evaluate (0 = full grid)')
     parser.add_argument('--n-splits', type=int, default=3, help='TimeSeriesSplit folds')
     parser.add_argument('--progress-interval', type=int, default=10, help='Trials per progress print')
+    parser.add_argument('--objective', type=str, default='points', choices=['points','composite'], help='Optimization objective')
     args = parser.parse_args()
 
     # Load data
@@ -351,7 +351,7 @@ def main():
     features_df = feature_engineer.create_features_from_matches(all_matches)
     print(f"Created {len(features_df)} samples")
 
-    best = successive_halving(features_df, n_splits=args.n_splits, max_trials=args.max_trials, progress_interval=args.progress_interval)
+    best = successive_halving(features_df, n_splits=args.n_splits, max_trials=args.max_trials, progress_interval=args.progress_interval, objective=args.objective)
     print("\nBest configuration:")
     for k, v in best.items():
         print(f"  {k}: {v}")
