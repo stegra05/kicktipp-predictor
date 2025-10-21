@@ -126,6 +126,7 @@ def main():
             pred['points_earned'] = points
             pred['is_evaluated'] = True
             pred['matchday'] = matchday
+            pred['strategy'] = 'base'
             all_predictions.append(pred)
 
         # If comparing, also accumulate optimized predictions with a separate tag
@@ -143,7 +144,10 @@ def main():
                 pred['strategy'] = 'optimized'
                 all_predictions.append(pred)
 
-        print(f"Generated and evaluated {len(predictions)} predictions for matchday {matchday}")
+        if args.strategy == "both":
+            print(f"Generated and evaluated {len(predictions)} base + {len(predictions_alt)} optimized predictions for matchday {matchday}")
+        else:
+            print(f"Generated and evaluated {len(predictions)} predictions for matchday {matchday}")
 
     if not all_predictions:
         print("\nNo predictions could be generated for the season.")
@@ -228,7 +232,7 @@ def main():
     os.makedirs(os.path.dirname(dbg_path), exist_ok=True)
     with open(dbg_path, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
-        w.writerow(['matchday','home','away','pred_h','pred_a','act_h','act_a','lambda_h','lambda_a','pH','pD','pA','confidence','margin','entropy_confidence','points'])
+        w.writerow(['matchday','strategy','home','away','pred_h','pred_a','act_h','act_a','lambda_h','lambda_a','pH','pD','pA','confidence','margin','entropy_confidence','points'])
         for p in all_predictions:
             # derive margin/entropy if not present
             pH = float(p['home_win_probability'])
@@ -243,7 +247,7 @@ def main():
             probs = probs / probs.sum() if probs.sum() > 0 else probs
             entropy = float(-_np.sum(probs * _np.log(probs)))
             ent_conf = float(p.get('entropy_confidence', 1.0 - (entropy / math.log(3))))
-            w.writerow([p['matchday'], p['home_team'], p['away_team'],
+            w.writerow([p['matchday'], p.get('strategy','base'), p['home_team'], p['away_team'],
                         p['predicted_home_score'], p['predicted_away_score'],
                         p['actual_home_score'], p['actual_away_score'],
                         f"{p['home_expected_goals']:.3f}", f"{p['away_expected_goals']:.3f}",
@@ -268,12 +272,21 @@ def main():
     print(f"Wrote run meta: {meta_path}")
 
     print("\n--- OVERALL PERFORMANCE ---")
+    # Per-strategy splits (useful when --strategy both)
+    base_preds = [p for p in all_predictions if p.get('strategy', 'base') == 'base']
+    opt_preds = [p for p in all_predictions if p.get('strategy') == 'optimized']
     print(f"Evaluated Matchdays: {first_matchday} - {last_matchday}")
     print(f"Total Matches Evaluated: {total_matches}")
     print(f"Total Points Earned: {total_points}")
     print(f"Average Points per Match: {avg_points:.3f}")
     print(f"Projected Season Total (38 matchdays): {avg_points * 38:.1f} points")
     print(f"Point Efficiency: {(total_points / (total_matches * 4)) * 100:.1f}% (of maximum possible)")
+    if base_preds and opt_preds:
+        bp = sum(p['points_earned'] for p in base_preds)
+        op = sum(p['points_earned'] for p in opt_preds)
+        print("\nPer-strategy totals:")
+        print(f"  Base:      matches={len(base_preds):3d}, points={bp:3d}, avg={bp/len(base_preds):.3f}")
+        print(f"  Optimized: matches={len(opt_preds):3d}, points={op:3d}, avg={op/len(opt_preds):.3f}")
 
     print("\n--- ACCURACY BREAKDOWN ---")
     exact_scores = points_dist[4]
@@ -299,11 +312,36 @@ def main():
         print(f"{conf.capitalize():8s}: {data['total']:3d} matches, avg {avg_pts_conf:.2f} pts")
 
     print("\n--- PERFORMANCE BY MATCHDAY ---")
-    print(f"{'Matchday':<10} {'Matches':<10} {'Points':<10} {'Avg Pts':<10}")
-    print("-" * 42)
-    for md, data in sorted(metrics['matchday_stats'].items()):
-        avg_pts_md = data['points'] / data['matches'] if data['matches'] > 0 else 0
-        print(f"{md:<10} {data['matches']:<10} {data['points']:<10} {avg_pts_md:<10.2f}")
+    if base_preds and opt_preds:
+        from collections import defaultdict as _dd
+        md_base = _dd(lambda: {'points': 0, 'matches': 0})
+        md_opt = _dd(lambda: {'points': 0, 'matches': 0})
+        for p in base_preds:
+            md_base[p['matchday']]['points'] += p['points_earned']
+            md_base[p['matchday']]['matches'] += 1
+        for p in opt_preds:
+            md_opt[p['matchday']]['points'] += p['points_earned']
+            md_opt[p['matchday']]['matches'] += 1
+
+        print("(Base)")
+        print(f"{'Matchday':<10} {'Matches':<10} {'Points':<10} {'Avg Pts':<10}")
+        print("-" * 42)
+        for md, data in sorted(md_base.items()):
+            avg_pts_md = data['points'] / data['matches'] if data['matches'] > 0 else 0
+            print(f"{md:<10} {data['matches']:<10} {data['points']:<10} {avg_pts_md:<10.2f}")
+
+        print("\n(Optimized)")
+        print(f"{'Matchday':<10} {'Matches':<10} {'Points':<10} {'Avg Pts':<10}")
+        print("-" * 42)
+        for md, data in sorted(md_opt.items()):
+            avg_pts_md = data['points'] / data['matches'] if data['matches'] > 0 else 0
+            print(f"{md:<10} {data['matches']:<10} {data['points']:<10} {avg_pts_md:<10.2f}")
+    else:
+        print(f"{'Matchday':<10} {'Matches':<10} {'Points':<10} {'Avg Pts':<10}")
+        print("-" * 42)
+        for md, data in sorted(metrics['matchday_stats'].items()):
+            avg_pts_md = data['points'] / data['matches'] if data['matches'] > 0 else 0
+            print(f"{md:<10} {data['matches']:<10} {data['points']:<10} {avg_pts_md:<10.2f}")
 
     print("\n--- TOP 5 PREDICTED SCORES ---")
     for score, count in metrics['score_predictions'].most_common(5):
