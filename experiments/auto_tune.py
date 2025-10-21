@@ -11,6 +11,7 @@ from typing import Dict, List
 import time
 
 import numpy as np
+import sys
 from contextlib import redirect_stdout, redirect_stderr
 from sklearn.model_selection import TimeSeriesSplit
 
@@ -231,6 +232,7 @@ def main():
         'best_value': float('-inf'),
         'best_trial': None,
         'last_print_len': 0,
+        'last_update_ts': 0.0,
     }
 
     def _progress_cb(study: "optuna.study.Study", trial: "optuna.trial.FrozenTrial") -> None:  # type: ignore[name-defined]
@@ -255,9 +257,20 @@ def main():
         )
         if progress['best_trial'] is not None:
             line += f" (#{progress['best_trial']})"
-        # Clear previous line if shorter
+        # Throttle updates to avoid flooding when parallel logs are noisy
+        now_ts = time.time()
+        should_update = (now_ts - progress['last_update_ts'] >= 0.5) or (done == total)
+        if not should_update:
+            return
+        progress['last_update_ts'] = now_ts
+
+        # Clear previous line if shorter, write to stderr to separate from stdout logs
         pad = max(0, progress['last_print_len'] - len(line))
-        print(line + (' ' * pad), end='', flush=True)
+        if sys.stderr and hasattr(sys.stderr, 'isatty') and sys.stderr.isatty():
+            print(line + (' ' * pad), end='', flush=True, file=sys.stderr)
+        else:
+            # Non-TTY: print as a normal log line
+            print(line.replace('\r', ''), flush=True, file=sys.stderr)
         progress['last_print_len'] = len(line)
 
     print(f"Running Optuna study for {args.n_trials} trials with n_jobs={args.n_jobs}...")
@@ -270,7 +283,7 @@ def main():
         show_progress_bar=False,
     )
     # Ensure newline after progress line
-    print()
+    print(file=sys.stderr)
     duration = time.time() - start
     print(f"Study complete in {duration:.1f}s. Best PPG={study.best_value:.4f}")
 
