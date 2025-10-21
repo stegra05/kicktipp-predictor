@@ -46,8 +46,8 @@ python3 -m kicktipp_predictor predict --record
 # Evaluate whole season
 python3 -m kicktipp_predictor evaluate --season
 
-# Run web UI
-python3 -m kicktipp_predictor web --host 0.0.0.0 --port 5000
+# Run web UI (defaults to 127.0.0.1:8000)
+python3 -m kicktipp_predictor web --host 0.0.0.0 --port 8000
 ```
 
 ## Usage
@@ -120,7 +120,7 @@ python3 -m kicktipp_predictor tune --optuna 50
 ### Technology Stack
 
 #### Backend
-- **Python 3.8+**
+- **Python 3.10+**
 - **Pandas**: Data manipulation
 - **NumPy**: Numerical operations
 - **Scikit-learn**: ML utilities
@@ -208,10 +208,25 @@ python experiments/auto_tune.py --max-trials 100 --n-splits 3
 
 The tuner will output the best-performing parameters to `config/best_params.yaml` (or `.json`), which are automatically used by the `HybridPredictor`.
 
+### Optional Dependencies
+
+Some features are optional and can be installed via extras:
+
+```bash
+# Hyperparameter tuning support (Optuna)
+python3 -m pip install -e .[tuning]
+
+# Plotting/analysis (SHAP + Matplotlib + Seaborn)
+python3 -m pip install -e .[plots]
+
+# Install both sets of extras
+python3 -m pip install -e .[tuning,plots]
+```
+
 ## Web Interface
 The web interface provides a user-friendly way to view the predictions and other relevant information. To start it, run:
 ```bash
-python3 -m kicktipp_predictor web --host 0.0.0.0 --port 5000
+python3 -m kicktipp_predictor web --host 0.0.0.0 --port 8000
 ```
 The interface includes the following pages:
 -   **Predictions**: Displays the upcoming matches with their predicted scores, outcome probabilities, and confidence levels.
@@ -232,7 +247,7 @@ The interface includes the following pages:
 - **"No trained models found"**: Run `python3 -m kicktipp_predictor train` first.
 - **"No module named kicktipp_predictor"**: Run `python3 -m pip install -e .` or set `PYTHONPATH=$PWD/src`.
 - **"Not enough historical data"**: The API may be unavailable; retry later or check connectivity.
-- **Web UI not loading**: Verify port 5000 availability. Try `http://127.0.0.1:5000`.
+- **Web UI not loading**: Verify port 8000 availability. Try `http://127.0.0.1:8000`.
 
 ## Development
 - Editable install: `python3 -m pip install -e .`
