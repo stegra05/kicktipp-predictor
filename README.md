@@ -257,3 +257,30 @@ The interface includes the following pages:
 
 ## Disclaimer
 This predictor is for entertainment purposes only. Football is unpredicted and no model can guarantee accurate predictions.
+
+## Evaluation
+
+Run an offline evaluation on a rolling test split (last 30% of samples):
+
+```bash
+python3 -m kicktipp_predictor evaluate
+```
+
+Artifacts are written under `data/predictions/`:
+- `metrics.json`: probabilistic metrics per variant (hybrid, ml, poisson)
+- `metrics_table.txt`: compact human-readable summary
+- `debug_eval.csv`: per-match rows with pH/pD/pA, points, confidence; feeds `confidence_selector`
+- `calibration_home.png`, `calibration_draw.png`, `calibration_away.png`: reliability diagrams
+- `confusion_matrix.png`: outcome confusion matrix (H/D/A)
+- `confidence_buckets.(csv|png)`: points by confidence bins
+- `shap/*.png`: SHAP summary plots (if `shap` and plotting libs are installed)
+
+Reported metrics include:
+- Brier score, Log-loss, Ranked Probability Score (RPS)
+- Expected Calibration Error (ECE) per class
+- Accuracy and average points per match
+
+Baselines: the report compares Hybrid vs ML-only vs Poisson-only on the same split.
+
+Notes:
+- SHAP is optional; install extras in `requirements.txt` if you want plots.
