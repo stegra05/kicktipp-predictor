@@ -1,16 +1,10 @@
-#!/usr/bin/env python3
-"""
-Script to train the prediction models on historical data.
-Run this initially and periodically to update the models with new data.
-"""
-
-import sys
-from src.scraper.data_fetcher import DataFetcher
-from src.features.feature_engineering import FeatureEngineer
-from src.models.hybrid_predictor import HybridPredictor
+from kicktipp_predictor.core.scraper.data_fetcher import DataFetcher
+from kicktipp_predictor.core.features.feature_engineering import FeatureEngineer
+from kicktipp_predictor.models.hybrid_predictor import HybridPredictor
 
 
-def main():
+def run_training(config_path: str = "config/best_params.json") -> None:
+    import sys
     print("="*60)
     print("3. LIGA PREDICTOR - MODEL TRAINING")
     print("="*60)
@@ -106,7 +100,7 @@ def main():
     print(f"  Away: {away_diff_pct:.1f}%")
 
     if home_diff_pct > 15 or away_diff_pct > 15:
-        print("\n⚠️  WARNING: Goal prediction mismatch > 15%!")
+        print("\nWARNING: Goal prediction mismatch > 15%!")
         print("   Consider adjusting goal_temperature parameter")
 
     # Save models
@@ -117,9 +111,5 @@ def main():
     print("TRAINING COMPLETE!")
     print("="*60)
     print(f"\nModels saved to data/models/")
-    print(f"You can now run predict.py to generate predictions")
-    print()
 
 
-if __name__ == "__main__":
-    main()

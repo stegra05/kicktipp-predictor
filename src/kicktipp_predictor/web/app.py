@@ -1,10 +1,4 @@
 from flask import Flask, render_template, jsonify, request
-import sys
-import os
-
-# Add parent directory to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-
 from kicktipp_predictor.core.scraper.data_fetcher import DataFetcher
 from kicktipp_predictor.core.features.feature_engineering import FeatureEngineer
 from kicktipp_predictor.models.hybrid_predictor import HybridPredictor
@@ -49,11 +43,11 @@ def get_upcoming_predictions():
         if not ensure_models_loaded():
             return jsonify({
                 'success': False,
-                'error': 'Models not trained. Run train_model.py to create data/models/hybrid_*.pkl'
+                'error': 'Models not trained. Run training to create data/models/hybrid_*.pkl'
             })
 
         days = request.args.get('days', 7, type=int)
-        strategy = request.args.get('strategy', 'safe')  # Changed to 'safe' for best performance
+        strategy = request.args.get('strategy', 'safe')
 
         # Get upcoming matches
         upcoming_matches = data_fetcher.get_upcoming_matches(days=days)
@@ -125,7 +119,7 @@ def get_current_matchday():
         if not ensure_models_loaded():
             return jsonify({
                 'success': False,
-                'error': 'Models not trained. Run train_model.py to create data/models/hybrid_*.pkl'
+                'error': 'Models not trained. Run training to create data/models/hybrid_*.pkl'
             })
 
         current_season = data_fetcher.get_current_season()
@@ -268,5 +262,4 @@ def table():
     return render_template('table.html')
 
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+

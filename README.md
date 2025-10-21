@@ -17,37 +17,38 @@ A hybrid machine learning and statistical predictor for Germany's 3. Bundesliga 
 Follow these steps to set up and run the predictor.
 
 ### 1. Installation
-Clone the repository and install the required dependencies:
+Clone the repository and install the package in editable mode (includes CLI):
 ```bash
 git clone https://github.com/your-username/kicktipp-predictor.git
 cd kicktipp-predictor
-pip install -r requirements.txt
+python3 -m pip install -e .
 ```
 
-### 2. System Verification
-Run the demo script to ensure all components are working correctly. This will test data fetching and feature engineering.
+If you prefer without install, set `PYTHONPATH` to include `src`:
 ```bash
-python demo.py
+export PYTHONPATH="$PWD/src:$PYTHONPATH"
 ```
 
-### 3. Initial Model Training
-Train the prediction models using historical data. This process may take a few minutes.
+### 2. CLI Quickstart
 ```bash
-python train_model.py
-```
+# Show help
+python3 -m kicktipp_predictor --help
 
-### 4. Generate Predictions
-Generate predictions for the upcoming matches. The `--record` flag saves the predictions for performance tracking.
-```bash
-python predict.py --record
-```
+# Train models
+python3 -m kicktipp_predictor train
 
-### 5. View in Browser
-Start the web interface to see the predictions, league table, and performance statistics.
-```bash
-python src/web/app.py
+# Predict upcoming (7 days)
+python3 -m kicktipp_predictor predict --days 7
+
+# Predict and record to data/predictions
+python3 -m kicktipp_predictor predict --record
+
+# Evaluate whole season
+python3 -m kicktipp_predictor evaluate --season
+
+# Run web UI
+python3 -m kicktipp_predictor web --host 0.0.0.0 --port 5000
 ```
-Open your browser and navigate to `http://localhost:5000`.
 
 ## Usage
 
@@ -56,62 +57,44 @@ This is the recommended weekly routine for generating predictions.
 
 1.  **Update Results:** After a matchday is complete, update the performance tracker with the actual scores.
     ```bash
-    python predict.py --update-results
+    python3 -m kicktipp_predictor predict --update-results
     ```
 
 2.  **Generate New Predictions:** Generate and save predictions for the next matchday.
     ```bash
-    python predict.py --record
+    python3 -m kicktipp_predictor predict --record
     ```
 
 3.  **View Predictions:** Use the web interface to view the latest predictions.
     ```bash
-    python src/web/app.py
+    python3 -m kicktipp_predictor web
     ```
 
 ### Monthly Maintenance
 To keep the models accurate, retrain them monthly with the latest match data.
 ```bash
-python train_model.py
+python3 -m kicktipp_predictor train
 ```
 
-## Command-Line Scripts
+## CLI Commands
 
-The primary interface for the predictor is through the command-line scripts.
+All functionality is available through the CLI:
 
-### `demo.py`
-Tests the data fetching and feature engineering components to verify that the system is correctly installed and configured.
+- `train`: Train models on historical data
+- `predict [--days N | --matchday N] [--record] [--update-results]`: Generate predictions
+- `evaluate [--season]`: Evaluate on test split or entire season
+- `web [--host HOST] [--port PORT]`: Run the Flask web UI
+- `tune [options]`: Hyperparameter tuning (wrapper around `experiments/auto_tune.py`)
+
+Examples:
 ```bash
-python demo.py
-```
+# Grid-based tuning with refinement
+python3 -m kicktipp_predictor tune \
+  --max-trials 100 --n-splits 3 --objective points \
+  --n-jobs 4 --omp-threads 2 --refine
 
-### `train_model.py`
-Trains the machine learning and statistical models on historical data. This script fetches the last three seasons of data, engineers features, and saves the trained models to the `data/models` directory.
-```bash
-python train_model.py
-```
-
-### `predict.py`
-Generates predictions for upcoming matches.
-```bash
-python predict.py [OPTIONS]
-```
-**Options:**
--   `--matchday <number>`: Predict a specific matchday. If not provided, predicts matches for the next 7 days.
--   `--days <number>`: The number of days ahead to look for upcoming matches (default: 7).
--   `--record`: Save the generated predictions to track performance over time.
--   `--update-results`: Update the performance tracker with the actual results from the latest matches.
-
-### `evaluate_model.py`
-Provides a comprehensive evaluation of the model's performance on a held-out test set of historical data. This script outputs detailed metrics, including accuracy, points per match, and performance by confidence level.
-```bash
-python evaluate_model.py
-```
-
-### `evaluate_season.py`
-Evaluates the predictor's performance across the entire current season. It generates predictions for each matchday and compares them against the actual results.
-```bash
-python evaluate_season.py
+# Optuna-based tuning (requires `optuna`)
+python3 -m kicktipp_predictor tune --optuna 50
 ```
 
 ## System Architecture
@@ -156,22 +139,28 @@ python evaluate_season.py
 ```
 kicktipp-predictor/
 ├── src/
-│   ├── scraper/
-│   ├── features/
-│   ├── models/
-│   └── web/
+│   └── kicktipp_predictor/
+│       ├── __init__.py
+│       ├── __main__.py
+│       ├── cli.py
+│       ├── core/
+│       │   ├── features/
+│       │   └── scraper/
+│       ├── models/
+│       │   ├── train.py
+│       │   ├── predict.py
+│       │   └── evaluate.py
+│       └── web/
+│           ├── app.py
+│           └── templates/ | static/
 ├── data/
 │   ├── cache/
 │   ├── models/
 │   └── predictions/
 ├── experiments/
 ├── config/
-├── train_model.py
-├── predict.py
-├── evaluate_model.py
-├── evaluate_season.py
-├── demo.py
-├── requirements.txt
+├── tests/
+├── pyproject.toml
 └── README.md
 ```
 
@@ -197,11 +186,11 @@ The model's prediction strategy is determined by the parameters in `config/best_
 ## Advanced Usage
 
 ### Hyperparameter Tuning
-The `experiments/auto_tune.py` script provides a powerful way to optimize the model's hyperparameters. It uses a time-series cross-validation approach to find the best combination of parameters, which are then saved to `config/best_params.json`.
+Use the CLI `tune` command to optimize hyperparameters via time-series CV. Best params are written to `config/best_params.yaml` (or `.json`).
 
-To run the tuner, use the following command:
+To run the tuner, for grid-based search:
 ```bash
-python experiments/auto_tune.py --max-trials 100 --n-splits 3
+python3 -m kicktipp_predictor tune --max-trials 100 --n-splits 3 --objective points --refine
 ```
 
 **Arguments:**
@@ -210,24 +199,61 @@ python experiments/auto_tune.py --max-trials 100 --n-splits 3
 - `--objective <name>`: The optimization objective. Can be `points` (default) or `composite` (balances points with realism).
 - `--refine`: Enable a second refinement step to zoom in on the best-performing parameter configurations.
 - `--save-final-model`: Train and save a new model using the best-found parameters.
+ - `--optuna <N>`: Run Optuna with N trials instead of grid (requires `optuna`).
 
-The tuner will output the best-performing parameters to `config/best_params.json`, which are then automatically used by the `HybridPredictor`.
+Advanced users can still call the underlying script directly:
+```bash
+python experiments/auto_tune.py --max-trials 100 --n-splits 3
+```
+
+The tuner will output the best-performing parameters to `config/best_params.yaml` (or `.json`), which are automatically used by the `HybridPredictor`.
 
 ## Web Interface
-The web interface provides a user-friendly way to view the predictions and other relevant information. To start the web interface, run:
+The web interface provides a user-friendly way to view the predictions and other relevant information. To start it, run:
 ```bash
-python src/web/app.py
+python3 -m kicktipp_predictor web --host 0.0.0.0 --port 5000
 ```
 The interface includes the following pages:
 -   **Predictions**: Displays the upcoming matches with their predicted scores, outcome probabilities, and confidence levels.
 -   **League Table**: Shows the current 3. Liga league table.
 -   **Statistics**: Provides an overview of the model's performance, including average points per match and accuracy.
 
-## Troubleshooting
--   **"No trained models found"**: Run `python train_model.py` first.
--   **"Module not found"**: Ensure dependencies are installed with `pip install -r requirements.txt`.
--   **"Not enough historical data"**: The API might be temporarily unavailable. Try again later or check your internet connection.
--   **"Web interface not loading"**: Check if port 5000 is in use. Try accessing via `http://127.0.0.1:5000`.
+## Advanced Options & Troubleshooting
+
+### Configuration and paths
+- Best parameters are read from `config/best_params.yaml` or `config/best_params.json` (auto-loaded by the `HybridPredictor`).
+- Models are saved/loaded under `data/models`.
+- Predictions and performance logs are stored under `data/predictions`.
+
+### Environment variables
+- `OMP_NUM_THREADS`: caps threads used by XGBoost/BLAS (e.g. `export OMP_NUM_THREADS=4`).
+
+### Common issues
+- **"No trained models found"**: Run `python3 -m kicktipp_predictor train` first.
+- **"No module named kicktipp_predictor"**: Run `python3 -m pip install -e .` or set `PYTHONPATH=$PWD/src`.
+- **"Not enough historical data"**: The API may be unavailable; retry later or check connectivity.
+- **Web UI not loading**: Verify port 5000 availability. Try `http://127.0.0.1:5000`.
+
+## Development
+- Editable install: `python3 -m pip install -e .`
+- Run tests: `pytest` (includes a smoke test for imports/CLI)
+- Code layout follows `src/` packaging; primary entry point is the Typer CLI in `kicktipp_predictor/cli.py`.
+
+## Developer Guide
+
+### Local development
+- Create a virtualenv and editable-install the package: `python3 -m pip install -e .`
+- Run the web app locally: `python3 -m kicktipp_predictor web`
+- Execute commands via CLI: `python3 -m kicktipp_predictor --help`
+
+### Testing
+- Run tests with `pytest`.
+- Add tests under `tests/`.
+
+### Releasing
+- Ensure models train and predictions run.
+- Update `README.md` and `pyproject.toml` as needed.
+- Tag and build a wheel if distributing externally.
 
 ## Disclaimer
 This predictor is for entertainment purposes only. Football is unpredicted and no model can guarantee accurate predictions.

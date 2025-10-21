@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+
+{% block title %}Statistics - 3. Liga Predictor{% endblock %}
+
+{% block content %}
+<div class="header-section">
+    <h2>Prediction Performance Statistics</h2>
+</div>
+
+<div id="loading" class="loading">Loading statistics...</div>
+<div id="error" class="error" style="display: none;"></div>
+
+<div id="stats-container">
+    <!-- Statistics will be loaded here -->
+</div>
+
+<script>
+    async function loadStatistics() {
+        const loading = document.getElementById('loading');
+        const error = document.getElementById('error');
+        const container = document.getElementById('stats-container');
+
+        loading.style.display = 'block';
+        error.style.display = 'none';
+        container.innerHTML = '';
+
+        try {
+            const response = await fetch('/api/performance');
+            const data = await response.json();
+
+            loading.style.display = 'none';
+
+            if (!data.success) {
+                error.textContent = data.error || 'Failed to load statistics';
+                error.style.display = 'block';
+                return;
+            }
+
+            displayStatistics(data.stats);
+        } catch (err) {
+            loading.style.display = 'none';
+            error.textContent = 'Error loading statistics: ' + err.message;
+            error.style.display = 'block';
+        }
+    }
+
+    function displayStatistics(stats) {
+        const container = document.getElementById('stats-container');
+
+        if (stats.total_predictions === 0) {
+            container.innerHTML = '<p class="no-data">No predictions evaluated yet. Predictions will appear here once matches are completed.</p>';
+            return;
+        }
+
+        const projectedSeason = (stats.avg_points_per_match * 38).toFixed(1);
+
+        container.innerHTML = `
+            <div class="stats-grid">
+                <div class="stat-card highlight">
+                    <h3>Total Points</h3>
+                    <div class="stat-value">${stats.total_points}</div>
+                    <div class="stat-label">from ${stats.total_predictions} predictions</div>
+                </div>
+
+                <div class="stat-card highlight">
+                    <h3>Average Points/Match</h3>
+                    <div class="stat-value">${stats.avg_points_per_match.toFixed(2)}</div>
+                    <div class="stat-label">Projected season: ${projectedSeason} pts</div>
+                </div>
+
+                <div class="stat-card">
+                    <h3>Exact Scores</h3>
+                    <div class="stat-value">${stats.exact_scores}</div>
+                    <div class="stat-label">${stats.exact_score_percentage.toFixed(1)}% (4 points)</div>
+                </div>
+
+                <div class="stat-card">
+                    <h3>Correct Differences</h3>
+                    <div class="stat-value">${stats.correct_differences}</div>
+                    <div class="stat-label">${stats.difference_percentage.toFixed(1)}% (3 points)</div>
+                </div>
+
+                <div class="stat-card">
+                    <h3>Correct Results</h3>
+                    <div class="stat-value">${stats.correct_results}</div>
+                    <div class="stat-label">${stats.result_percentage.toFixed(1)}% (2 points)</div>
+                </div>
+
+                <div class="stat-card">
+                    <h3>Incorrect</h3>
+                    <div class="stat-value">${stats.incorrect}</div>
+                    <div class="stat-label">${stats.incorrect_percentage.toFixed(1)}% (0 points)</div>
+                </div>
+            </div>
+
+            <div class="accuracy-chart">
+                <h3>Accuracy Breakdown</h3>
+                <div class="chart-bar">
+                    <div class="bar-segment exact" style="width: ${stats.exact_score_percentage}%">
+                        <span>${stats.exact_score_percentage.toFixed(1)}%</span>
+                    </div>
+                    <div class="bar-segment difference" style="width: ${stats.difference_percentage}%">
+                        <span>${stats.difference_percentage.toFixed(1)}%</span>
+                    </div>
+                    <div class="bar-segment result" style="width: ${stats.result_percentage}%">
+                        <span>${stats.result_percentage.toFixed(1)}%</span>
+                    </div>
+                    <div class="bar-segment incorrect" style="width: ${stats.incorrect_percentage}%">
+                        <span>${stats.incorrect_percentage.toFixed(1)}%</span>
+                    </div>
+                </div>
+                <div class="chart-legend">
+                    <div class="legend-item">
+                        <span class="legend-color exact"></span>
+                        <span>Exact Score</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color difference"></span>
+                        <span>Correct Difference</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color result"></span>
+                        <span>Correct Result</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color incorrect"></span>
+                        <span>Incorrect</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    window.onload = loadStatistics;
+</script>
+{% endblock %}
+
+
