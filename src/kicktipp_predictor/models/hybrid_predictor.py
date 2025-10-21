@@ -191,6 +191,19 @@ class HybridPredictor:
             draw_prob = self.prob_blend_alpha * grid_draw + (1 - self.prob_blend_alpha) * ml_draw
             away_win_prob = self.prob_blend_alpha * grid_away_win + (1 - self.prob_blend_alpha) * ml_away_win
 
+            # Near-tie draw nudge: if top two classes are very close and grid suggests
+            # comparable or higher draw, give draw a tiny bump so draws can surface.
+            try:
+                probs_temp = np.array([home_win_prob, draw_prob, away_win_prob], dtype=float)
+                top_two_margin = float(np.sort(probs_temp)[-1] - np.sort(probs_temp)[-2])
+                # Conditions: very small margin and grid_draw within small epsilon of max grid side
+                if top_two_margin < 0.03:
+                    grid_max_side = max(grid_home_win, grid_away_win)
+                    if grid_draw >= grid_max_side - 0.02:
+                        draw_prob = float(min(1.0, draw_prob + 0.02))
+            except Exception:
+                pass
+
             # Normalize to ensure probabilities sum to 1
             total_prob = home_win_prob + draw_prob + away_win_prob
             if total_prob > 0:

@@ -142,7 +142,7 @@ class MLPredictor:
         try:
             # Find encoded index for label 'D'
             d_index = int(np.where(self.label_encoder.classes_ == 'D')[0][0])
-            DRAW_WEIGHT_BOOST = 1.25
+            DRAW_WEIGHT_BOOST = 1.5
             if d_index in cw_map:
                 cw_map[d_index] = float(cw_map[d_index] * DRAW_WEIGHT_BOOST)
         except Exception:
