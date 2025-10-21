@@ -303,6 +303,7 @@ class DataLoader:
         features = {
             'match_id': match['match_id'],
             'matchday': match['matchday'],
+            'date': match['date'],
             'home_team': home_team,
             'away_team': away_team,
         }

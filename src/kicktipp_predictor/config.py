@@ -90,6 +90,10 @@ class ModelConfig:
     test_size: float = 0.2
     min_training_matches: int = 50
 
+    # Time-decay weighting (recency)
+    use_time_decay: bool = True
+    time_decay_half_life_days: float = 90.0
+
     # Threading
     n_jobs: int = field(default_factory=lambda: max(1, int(os.getenv("OMP_NUM_THREADS", "0")) or os.cpu_count() or 1))
 
@@ -140,6 +144,10 @@ class Config:
                         config.model.min_lambda = float(params["min_lambda"])
                     if "draw_boost" in params:
                         config.model.draw_boost = float(params["draw_boost"])
+                    if "use_time_decay" in params:
+                        config.model.use_time_decay = bool(params["use_time_decay"])
+                    if "time_decay_half_life_days" in params:
+                        config.model.time_decay_half_life_days = float(params["time_decay_half_life_days"])
 
                     # Outcome classifier hyperparameters
                     if "outcome_n_estimators" in params:

@@ -64,6 +64,9 @@ def _apply_params_to_config(params: Dict[str, float]) -> None:
         cfg.model.draw_boost = float(params['draw_boost'])
     if 'min_lambda' in params:
         cfg.model.min_lambda = float(params['min_lambda'])
+    if 'time_decay_half_life_days' in params:
+        cfg.model.time_decay_half_life_days = float(params['time_decay_half_life_days'])
+        cfg.model.use_time_decay = True
 
     # Outcome classifier
     if 'outcome_n_estimators' in params:
@@ -119,6 +122,8 @@ def _objective_builder(features_df, n_splits: int, omp_threads: int, verbose: bo
             'goals_colsample_bytree': trial.suggest_float('goals_colsample_bytree', 0.5, 1.0, step=0.05),
             # Scoreline selection floor
             'min_lambda': trial.suggest_float('min_lambda', 0.05, 0.40, step=0.01),
+            # Time-decay half-life
+            'time_decay_half_life_days': trial.suggest_float('time_decay_half_life_days', 30.0, 240.0, step=15.0),
         }
 
         fold_points: List[float] = []

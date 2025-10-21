@@ -1,56 +1,61 @@
+### 2\. Enhance Recency in Feature Engineering
 
-2. Enhance Recency in Feature Engineering
+  * **Concept 🧠:** While weighted data tells the model *which matches* are important, modifying features tells the model *which patterns* are important. The goal is to give the model both a short-term and long-term "memory." The volatility in your matchday performance suggests the model is missing sharp, recent changes in team form.
 
-Concept 🧠 This method is about creating new features that explicitly measure short-term momentum. While your current model looks at form over the last 5 games, a team's performance in the next match might be better predicted by an even shorter window (e.g., the last 2-3 games). This helps capture "hot streaks" or sudden "slumps" that longer-term averages might smooth over.
+  * **How to Implement 👨‍💻:** This involves making changes in `src/kicktipp_predictor/data.py` to create new features that are more sensitive to recent performance.
 
-How to Implement 💻 This involves modifying your data.py file to add new columns to your feature set.
+    1.  **Add Short-Term Form Windows:** In your `_get_form_features` function, you currently use `last_n: int = 5`. You can create additional features based on a shorter window.
 
-Short-Term Form Features: In the _get_form_features function, you can call it multiple times with different last_n values to create distinct features. For example: home_form_points_L5 and home_form_points_L3.
+        ```python
+        # In data.py, inside _create_match_features
 
-Exponentially Weighted Moving Averages (EWMA): This is a more elegant way to prioritize recency. Instead of a simple average, an EWMA gives exponentially more weight to recent data points. Pandas has a built-in .ewm() function.
+        # Existing long-term form
+        features.update(self._get_form_features(home_team, home_history, prefix='home_long_term', last_n=10))
 
-Here's an example for _get_form_features in src/kicktipp_predictor/data.py:
+        # Standard form
+        features.update(self._get_form_features(home_team, home_history, prefix='home', last_n=5))
 
-Python
-# In DataLoader._get_form_features
+        # New short-term "hot streak" form
+        features.update(self._get_form_features(home_team, home_history, prefix='home_short_term', last_n=2))
+        ```
 
-# ... after calculating points, goals, etc. for each match in 'recent'
-# Create a small DataFrame to easily use .ewm()
-recent_df = pd.DataFrame(recent_matches_data) # You'd need to structure this
+    2.  **Use Exponentially Weighted Moving Averages (EWMA):** This is a more elegant method than using multiple windows. It creates a smoothed average where recent data points have exponentially more weight. You can use this for stats like goals scored/conceded.
 
-# Example for points per game
-# The 'span' parameter controls the decay. A smaller span gives more weight to recent data.
-ewm_ppg = recent_df['points'].ewm(span=3).mean().iloc[-1]
+        ```python
+        # This is more conceptual, but in your feature engineering...
+        # Instead of a simple rolling mean for a team's goals:
+        team_stats['avg_goals'] = team_stats['goals_scored'].rolling(window=5).mean()
 
-# Return this as a new feature
-return {
-    # ... your existing features ...
-    f'{prefix}_ewm_ppg_S3': ewm_ppg,
-}
-Complexity of Implementation: Medium. It requires careful modification and testing of your feature engineering code but doesn't touch the model training logic itself.
+        # You would use an EWMA:
+        team_stats['ewma_goals'] = team_stats['goals_scored'].ewm(span=5, adjust=False).mean()
+        ```
 
-Estimated Effect: Medium to High 🚀. Feature engineering is often where the biggest gains are found. Creating features that are more sensitive to immediate form is directly aligned with your goal of improving weekly prediction accuracy.
+        The `span` parameter is roughly equivalent to the window size. This creates a feature that is much more responsive to the latest match result.
 
-3. Bayesian Hierarchical Models
+  * **Complexity:** **Low to Medium**. It involves modifying your feature generation code in `data.py`. While not difficult, it requires careful handling of your pandas DataFrames to ensure calculations are correct.
 
-Concept 🧠 This is a fundamentally different approach. Instead of finding one single "best" value for a team's attack or defense strength, a Bayesian model estimates a full probability distribution for them. It's "hierarchical" because it assumes each team's individual strength is related to the overall league's average strength.
+  * **Estimated Effect:** **Medium**. Providing the model with more nuanced, time-sensitive features allows it to better distinguish between a team's baseline quality (long-term form) and its immediate momentum (short-term form). This should help reduce the volatility seen in the per-matchday summary.
 
-This structure is perfect for sports because:
+-----
 
-It handles uncertainty: At the start of a season, the model is very uncertain about a team's strength, so the distribution is wide. As the team plays more, the distribution gets narrower and more certain.
+### 3\. Bayesian Hierarchical Models
 
-It avoids overfitting on small data: It uses the league average as a "sensible default" (a "prior"), preventing it from making extreme predictions based on one or two fluke results early in the season.
+  * **Concept 🧠:** This is a fundamental shift in your modeling approach. Instead of having one "true" skill value for a team, a Bayesian model treats a team's attack and defense strength as **probability distributions**. The "hierarchical" part means that each team's skill is assumed to be drawn from a common, league-wide distribution.
 
-How to Implement 💻 This requires rewriting your prediction logic using a probabilistic programming library like PyMC. You would not use XGBoost for this.
+      * **Analogy:** Imagine estimating the skill of a new player. You start with a general belief about the *average skill of all players in the league* (the hierarchy). When they play their first game, you don't completely trust that single result. Instead, you slightly update your belief about them, pulling it away from the league average. As they play more games, your belief about their specific skill becomes stronger and relies less on the league average.
 
-Define the Model Structure: You'd define latent (unobserved) variables for each team's attack and defense parameters, drawn from a shared league-wide distribution.
+    This is perfect for the "cold start" problem at the beginning of a season, where you have little data. It provides a principled way to combine prior knowledge with new evidence.
 
-Define the Likelihood: You'd model the number of goals scored in a match as a Poisson distribution, where the rate parameter (lambda) is a function of the home team's attack and the away team's defense.
+  * **How to Implement 👨‍💻:** This requires moving away from XGBoost and using a probabilistic programming library like **PyMC** (Python) or **Stan**.
 
-Run Inference: You'd use an MCMC sampler (e.g., NUTS) to run thousands of simulations to figure out the most plausible posterior distributions for every team's parameters.
+    1.  **Define the Model Structure:**
+          * Create parameters for each team's attack strength (`atts_team_i`) and defense strength (`defs_team_i`).
+          * Define these parameters as being drawn from a common normal distribution (e.g., `Normal(mu_atts, sigma_atts)`). This is the hierarchy.
+          * Define priors for the league-wide mean and standard deviation (e.g., `mu_atts`, `sigma_atts`).
+    2.  **Define the Likelihood:** The number of goals a team scores in a match is modeled with a **Poisson distribution**. The rate (`lambda`) of the Poisson is determined by the home team's attack, the away team's defense, and a home-field advantage term.
+    3.  **Run Inference:** Use a Markov Chain Monte Carlo (MCMC) sampler to find the posterior distributions for every team's attack and defense strength based on the match data.
+    4.  **Make Predictions:** To predict a future match, you sample from the posterior distributions of the two teams' strengths to simulate the match thousands of times, allowing you to calculate the probability of a home win, draw, or away win.
 
-Predict: To predict a new match, you would simulate thousands of outcomes using the posterior distributions of the two teams' strengths to get a probability for every possible scoreline.
+  * **Complexity:** **High**. This is a significant undertaking. It requires learning a new modeling paradigm, a new library, and the concepts of Bayesian inference (priors, posteriors, MCMC). It's a fantastic learning project but is much more involved than the other two methods.
 
-Complexity of Implementation: Hard 🤯. This is a major undertaking that requires learning Bayesian statistics and a new programming framework. It's more of a data science research project than a quick code change.
-
-Estimated Effect: High 🏆. If done correctly, these models are often state-of-the-art for sports prediction precisely because they handle the early-season data scarcity so well. They provide incredibly rich outputs (e.g., the exact probability of a 3-2 result) and are very robust.
+  * **Estimated Effect:** **High**. If implemented well, this approach is often considered state-of-the-art for sports modeling. It is robust to sparse data, provides full probability distributions for outcomes, and gives you a measure of uncertainty for every parameter.

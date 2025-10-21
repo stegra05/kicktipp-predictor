@@ -120,7 +120,7 @@ class MatchPredictor:
 
         # Identify feature columns
         exclude_cols = ['match_id', 'home_team', 'away_team', 'home_score',
-                       'away_score', 'goal_difference', 'result']
+                       'away_score', 'goal_difference', 'result', 'date']
         self.feature_columns = [col for col in training_data.columns
                                if col not in exclude_cols]
 
@@ -128,6 +128,18 @@ class MatchPredictor:
         y_home = training_data['home_score']
         y_away = training_data['away_score']
         y_result = training_data['result']
+
+        # Compute time-decay sample weights (recency)
+        use_time_decay = getattr(self.config.model, 'use_time_decay', False)
+        if use_time_decay and 'date' in training_data.columns:
+            training_data['date'] = pd.to_datetime(training_data['date'])
+            most_recent_date = training_data['date'].max()
+            days_old = (most_recent_date - training_data['date']).dt.days.astype(float)
+            half_life = float(getattr(self.config.model, 'time_decay_half_life_days', 90.0))
+            decay_rate = np.log(2.0) / max(1.0, half_life)
+            time_weights_all = np.exp(-decay_rate * days_old.values)
+        else:
+            time_weights_all = np.ones(len(training_data), dtype=float)
 
         # Encode result labels
         y_result_encoded = self.label_encoder.fit_transform(y_result)
@@ -139,14 +151,14 @@ class MatchPredictor:
         self._log("Outcome distribution:", {k: f"{int(v)} ({v/total:.1%})" for k, v in counts.items()})
 
         # Train goal regressors
-        self._train_goal_models(X, y_home, y_away)
+        self._train_goal_models(X, y_home, y_away, sample_weights=time_weights_all)
 
         # Train outcome classifier
-        self._train_outcome_model(X, y_result_encoded)
+        self._train_outcome_model(X, y_result_encoded, time_weights_all)
 
         self._log("Training completed!")
 
-    def _train_goal_models(self, X: pd.DataFrame, y_home: pd.Series, y_away: pd.Series):
+    def _train_goal_models(self, X: pd.DataFrame, y_home: pd.Series, y_away: pd.Series, sample_weights: np.ndarray | None = None):
         """Train home and away goal regressors."""
         self._log("Training goal regressors...")
         start = time.perf_counter()
@@ -175,20 +187,24 @@ class MatchPredictor:
             n_jobs=self.config.model.n_jobs,
         )
 
-        self.home_goals_model.fit(X, y_home)
-        self.away_goals_model.fit(X, y_away)
+        if sample_weights is not None:
+            self.home_goals_model.fit(X, y_home, sample_weight=sample_weights)
+            self.away_goals_model.fit(X, y_away, sample_weight=sample_weights)
+        else:
+            self.home_goals_model.fit(X, y_home)
+            self.away_goals_model.fit(X, y_away)
 
         elapsed = time.perf_counter() - start
         self._log(f"Goal regressors trained in {elapsed:.2f}s")
 
-    def _train_outcome_model(self, X: pd.DataFrame, y_result_encoded: np.ndarray):
-        """Train outcome classifier with class weights."""
+    def _train_outcome_model(self, X: pd.DataFrame, y_result_encoded: np.ndarray, time_weights_all: np.ndarray):
+        """Train outcome classifier with class and time-decay weights."""
         self._log("Training outcome classifier...")
         start = time.perf_counter()
 
         # Split for proper evaluation
-        X_train, X_val, y_train, y_val = train_test_split(
-            X, y_result_encoded,
+        X_train, X_val, y_train, y_val, tw_train, tw_val = train_test_split(
+            X, y_result_encoded, time_weights_all,
             test_size=self.config.model.test_size,
             random_state=self.config.model.random_state,
             stratify=y_result_encoded
@@ -205,6 +221,8 @@ class MatchPredictor:
         # Use balanced weights directly for sample weighting
         weight_map = {c: float(w) for c, w in zip(classes_unique, class_weights)}
         sample_weights = np.array([weight_map[int(y)] for y in y_train], dtype=float)
+        # Combine with time-decay weights on the training fold
+        sample_weights = sample_weights * tw_train
 
         # Train with early stopping
         self.outcome_model = XGBClassifier(
@@ -225,6 +243,7 @@ class MatchPredictor:
             X_train, y_train,
             sample_weight=sample_weights,
             eval_set=[(X_val, y_val)],
+            sample_weight_eval_set=[tw_val],
             verbose=False,
         )
 
