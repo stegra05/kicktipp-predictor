@@ -67,6 +67,14 @@ def _apply_params_to_config(params: Dict[str, float]) -> None:
     if 'time_decay_half_life_days' in params:
         cfg.model.time_decay_half_life_days = float(params['time_decay_half_life_days'])
         cfg.model.use_time_decay = True
+    # Optional feature knobs (recognized if present)
+    if 'form_last_n' in params:
+        try:
+            cfg.model.form_last_n = int(params['form_last_n'])
+        except Exception:
+            cfg.model.form_last_n = int(float(params['form_last_n']))
+    if 'momentum_decay' in params:
+        cfg.model.momentum_decay = float(params['momentum_decay'])
 
     # Outcome classifier
     if 'outcome_n_estimators' in params:
@@ -79,6 +87,14 @@ def _apply_params_to_config(params: Dict[str, float]) -> None:
         cfg.model.outcome_subsample = float(params['outcome_subsample'])
     if 'outcome_colsample_bytree' in params:
         cfg.model.outcome_colsample_bytree = float(params['outcome_colsample_bytree'])
+    if 'outcome_reg_alpha' in params:
+        cfg.model.outcome_reg_alpha = float(params['outcome_reg_alpha'])
+    if 'outcome_reg_lambda' in params:
+        cfg.model.outcome_reg_lambda = float(params['outcome_reg_lambda'])
+    if 'outcome_gamma' in params:
+        cfg.model.outcome_gamma = float(params['outcome_gamma'])
+    if 'outcome_min_child_weight' in params:
+        cfg.model.outcome_min_child_weight = float(params['outcome_min_child_weight'])
 
     # Goal regressors
     if 'goals_n_estimators' in params:
@@ -91,10 +107,20 @@ def _apply_params_to_config(params: Dict[str, float]) -> None:
         cfg.model.goals_subsample = float(params['goals_subsample'])
     if 'goals_colsample_bytree' in params:
         cfg.model.goals_colsample_bytree = float(params['goals_colsample_bytree'])
+    if 'goals_reg_alpha' in params:
+        cfg.model.goals_reg_alpha = float(params['goals_reg_alpha'])
+    if 'goals_reg_lambda' in params:
+        cfg.model.goals_reg_lambda = float(params['goals_reg_lambda'])
+    if 'goals_gamma' in params:
+        cfg.model.goals_gamma = float(params['goals_gamma'])
+    if 'goals_min_child_weight' in params:
+        cfg.model.goals_min_child_weight = float(params['goals_min_child_weight'])
 
 
-def _objective_builder(features_df, n_splits: int, omp_threads: int, verbose: bool):
+def _objective_builder(base_features_df, all_matches, n_splits: int, omp_threads: int, verbose: bool):
     tscv = TimeSeriesSplit(n_splits=n_splits)
+    # Cache features by feature-knob tuple to avoid recomputation across trials
+    features_cache: Dict[tuple, any] = {}
 
     def objective(trial: "optuna.trial.Trial") -> float:  # type: ignore[name-defined]
         # Limit BLAS/OMP threads to avoid oversubscription
@@ -114,19 +140,48 @@ def _objective_builder(features_df, n_splits: int, omp_threads: int, verbose: bo
             'outcome_learning_rate': trial.suggest_float('outcome_learning_rate', 0.02, 0.30, step=0.01),
             'outcome_subsample': trial.suggest_float('outcome_subsample', 0.5, 1.0, step=0.05),
             'outcome_colsample_bytree': trial.suggest_float('outcome_colsample_bytree', 0.5, 1.0, step=0.05),
+            'outcome_reg_alpha': trial.suggest_float('outcome_reg_alpha', 0.0, 1.0, step=0.05),
+            'outcome_reg_lambda': trial.suggest_float('outcome_reg_lambda', 0.5, 3.0, step=0.05),
+            'outcome_gamma': trial.suggest_float('outcome_gamma', 0.0, 5.0, step=0.1),
+            'outcome_min_child_weight': trial.suggest_float('outcome_min_child_weight', 1.0, 10.0, step=0.5),
             # Goals XGB
             'goals_n_estimators': trial.suggest_int('goals_n_estimators', 100, 600, step=25),
             'goals_max_depth': trial.suggest_int('goals_max_depth', 3, 10),
             'goals_learning_rate': trial.suggest_float('goals_learning_rate', 0.02, 0.30, step=0.01),
             'goals_subsample': trial.suggest_float('goals_subsample', 0.5, 1.0, step=0.05),
             'goals_colsample_bytree': trial.suggest_float('goals_colsample_bytree', 0.5, 1.0, step=0.05),
+            'goals_reg_alpha': trial.suggest_float('goals_reg_alpha', 0.0, 1.0, step=0.05),
+            'goals_reg_lambda': trial.suggest_float('goals_reg_lambda', 0.5, 3.0, step=0.05),
+            'goals_gamma': trial.suggest_float('goals_gamma', 0.0, 5.0, step=0.1),
+            'goals_min_child_weight': trial.suggest_float('goals_min_child_weight', 1.0, 10.0, step=0.5),
             # Scoreline selection floor
             'min_lambda': trial.suggest_float('min_lambda', 0.05, 0.40, step=0.01),
             # Time-decay half-life
             'time_decay_half_life_days': trial.suggest_float('time_decay_half_life_days', 30.0, 240.0, step=15.0),
+            # Feature-engineering knobs (optional)
+            'form_last_n': trial.suggest_int('form_last_n', 3, 10, step=1),
+            'momentum_decay': trial.suggest_float('momentum_decay', 0.70, 0.99, step=0.01),
         }
 
         fold_points: List[float] = []
+
+        # Determine which feature set to use for this trial
+        # Apply params to config now so DataLoader sees knobs
+        reset_config()
+        _apply_params_to_config(params)
+
+        # Cache key by (form_last_n, momentum_decay)
+        cfg = get_config()
+        key = (int(getattr(cfg.model, 'form_last_n', 5)), float(round(getattr(cfg.model, 'momentum_decay', 0.9), 3)))
+
+        if key not in features_cache:
+            # Recompute features for this knob combo
+            dl = DataLoader()
+            if verbose:
+                print(f"[FEATS] Building features for knobs form_last_n={key[0]} momentum_decay={key[1]}...")
+            feats_df = dl.create_features_from_matches(all_matches)
+            features_cache[key] = feats_df
+        features_df = features_cache[key]
 
         for train_idx, test_idx in tscv.split(features_df):
             # Reset and apply params
@@ -156,7 +211,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--n-trials', type=int, default=100, help='Optuna trials')
     parser.add_argument('--n-splits', type=int, default=3, help='TimeSeriesSplit folds')
-    parser.add_argument('--n-jobs', type=int, default=0, help='Parallel Optuna workers (0=serial)')
     parser.add_argument('--omp-threads', type=int, default=1, help='Threads per worker for BLAS/OMP')
     parser.add_argument('--save-final-model', action='store_true', help='Train on full dataset with best params and save models')
     parser.add_argument('--seasons-back', type=int, default=3, help='Number of past seasons to include for final training')
@@ -213,7 +267,7 @@ def main():
 
     # Verbosity reflects CLI flag only (quiet by default, even with multiple jobs)
     effective_verbose = bool(args.verbose)
-    objective = _objective_builder(features_df, args.n_splits, args.omp_threads, effective_verbose)
+    objective = _objective_builder(features_df, all_matches, args.n_splits, args.omp_threads, effective_verbose)
 
     # Configure pruner
     pruner = None
@@ -285,7 +339,7 @@ def main():
         progress['last_print_len'] = len(line)
 
     if args.verbose:
-        print(f"Running Optuna study for {args.n_trials} trials with n_jobs={args.n_jobs}...")
+        print(f"Running Optuna study for {args.n_trials} trials with n_jobs=1...")
     start = time.time()
     study.optimize(
         objective,

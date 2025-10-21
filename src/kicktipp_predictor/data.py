@@ -380,6 +380,13 @@ class DataLoader:
     def _get_form_features(self, team: str, history: List[Dict], prefix: str,
                           last_n: int = 5) -> Dict:
         """Calculate team form over last N matches."""
+        # Allow config override for last_n
+        try:
+            cfg_last_n = int(getattr(self.config.model, 'form_last_n', last_n))
+            last_n = cfg_last_n if cfg_last_n > 0 else last_n
+        except Exception:
+            pass
+
         recent = history[-last_n:] if len(history) >= last_n else history
 
         points = 0
@@ -427,6 +434,13 @@ class DataLoader:
     def _get_momentum_features(self, team: str, history: List[Dict],
                                prefix: str, decay: float = 0.9) -> Dict:
         """Calculate exponentially weighted momentum features."""
+        # Allow config override for decay
+        try:
+            cfg_decay = float(getattr(self.config.model, 'momentum_decay', decay))
+            if 0.0 < cfg_decay < 1.0:
+                decay = cfg_decay
+        except Exception:
+            pass
         if not history:
             return {
                 f'{prefix}_momentum_points': 0,

@@ -73,6 +73,11 @@ class ModelConfig:
     outcome_learning_rate: float = 0.1
     outcome_subsample: float = 0.8
     outcome_colsample_bytree: float = 0.8
+    # Regularization and constraints
+    outcome_reg_alpha: float = 0.0
+    outcome_reg_lambda: float = 1.0
+    outcome_gamma: float = 0.0
+    outcome_min_child_weight: float = 1.0
 
     # XGBoost Goal Regressors
     goals_n_estimators: int = 200
@@ -80,6 +85,11 @@ class ModelConfig:
     goals_learning_rate: float = 0.1
     goals_subsample: float = 0.8
     goals_colsample_bytree: float = 0.8
+    # Regularization and constraints
+    goals_reg_alpha: float = 0.0
+    goals_reg_lambda: float = 1.0
+    goals_gamma: float = 0.0
+    goals_min_child_weight: float = 1.0
 
     # Poisson grid for scoreline selection
     max_goals: int = 8
@@ -93,6 +103,10 @@ class ModelConfig:
     # Time-decay weighting (recency)
     use_time_decay: bool = True
     time_decay_half_life_days: float = 90.0
+
+    # Feature engineering knobs
+    form_last_n: int = 5
+    momentum_decay: float = 0.9
 
     # Threading
     n_jobs: int = field(default_factory=lambda: max(1, int(os.getenv("OMP_NUM_THREADS", "0")) or os.cpu_count() or 1))
@@ -148,6 +162,10 @@ class Config:
                         config.model.use_time_decay = bool(params["use_time_decay"])
                     if "time_decay_half_life_days" in params:
                         config.model.time_decay_half_life_days = float(params["time_decay_half_life_days"])
+                    if "form_last_n" in params:
+                        config.model.form_last_n = int(params["form_last_n"])
+                    if "momentum_decay" in params:
+                        config.model.momentum_decay = float(params["momentum_decay"])
 
                     # Outcome classifier hyperparameters
                     if "outcome_n_estimators" in params:
@@ -160,6 +178,14 @@ class Config:
                         config.model.outcome_subsample = float(params["outcome_subsample"])
                     if "outcome_colsample_bytree" in params:
                         config.model.outcome_colsample_bytree = float(params["outcome_colsample_bytree"])
+                    if "outcome_reg_alpha" in params:
+                        config.model.outcome_reg_alpha = float(params["outcome_reg_alpha"])
+                    if "outcome_reg_lambda" in params:
+                        config.model.outcome_reg_lambda = float(params["outcome_reg_lambda"])
+                    if "outcome_gamma" in params:
+                        config.model.outcome_gamma = float(params["outcome_gamma"])
+                    if "outcome_min_child_weight" in params:
+                        config.model.outcome_min_child_weight = float(params["outcome_min_child_weight"])
 
                     # Goal regressors hyperparameters
                     if "goals_n_estimators" in params:
@@ -172,6 +198,14 @@ class Config:
                         config.model.goals_subsample = float(params["goals_subsample"])
                     if "goals_colsample_bytree" in params:
                         config.model.goals_colsample_bytree = float(params["goals_colsample_bytree"])
+                    if "goals_reg_alpha" in params:
+                        config.model.goals_reg_alpha = float(params["goals_reg_alpha"])
+                    if "goals_reg_lambda" in params:
+                        config.model.goals_reg_lambda = float(params["goals_reg_lambda"])
+                    if "goals_gamma" in params:
+                        config.model.goals_gamma = float(params["goals_gamma"])
+                    if "goals_min_child_weight" in params:
+                        config.model.goals_min_child_weight = float(params["goals_min_child_weight"])
 
                     if os.getenv("KTP_VERBOSE") == "1":
                         print(f"[Config] Loaded from {config_file}")
