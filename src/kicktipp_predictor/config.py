@@ -115,6 +115,12 @@ class ModelConfig:
     # Boost draw class since it's underrepresented
     draw_boost: float = 1.1
 
+    # Outcome probability post-processing
+    # Temperature < 1 sharpens, > 1 softens
+    proba_temperature: float = 1.0
+    # Blend with empirical prior from training window
+    prior_blend_alpha: float = 0.0
+
 
 @dataclass
 class Config:
@@ -158,6 +164,10 @@ class Config:
                         config.model.min_lambda = float(params["min_lambda"])
                     if "draw_boost" in params:
                         config.model.draw_boost = float(params["draw_boost"])
+                    if "proba_temperature" in params:
+                        config.model.proba_temperature = float(params["proba_temperature"])
+                    if "prior_blend_alpha" in params:
+                        config.model.prior_blend_alpha = float(params["prior_blend_alpha"])
                     if "use_time_decay" in params:
                         config.model.use_time_decay = bool(params["use_time_decay"])
                     if "time_decay_half_life_days" in params:

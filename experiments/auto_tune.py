@@ -18,6 +18,7 @@ os.environ.setdefault('NUMEXPR_NUM_THREADS', '1')
 os.environ.setdefault('XGBOOST_NUM_THREADS', '1')
 
 import numpy as np
+import pandas as pd
 import sys
 from sklearn.model_selection import TimeSeriesSplit
 
@@ -30,6 +31,7 @@ if PROJECT_ROOT not in sys.path:
 from kicktipp_predictor.data import DataLoader
 from kicktipp_predictor.predictor import MatchPredictor
 from kicktipp_predictor.config import reset_config, get_config
+from kicktipp_predictor.evaluate import compute_points
 
 try:
     import yaml  # type: ignore
@@ -96,6 +98,12 @@ def _apply_params_to_config(params: Dict[str, float]) -> None:
     if 'outcome_min_child_weight' in params:
         cfg.model.outcome_min_child_weight = float(params['outcome_min_child_weight'])
 
+    # Post-processing probabilities
+    if 'proba_temperature' in params:
+        cfg.model.proba_temperature = float(params['proba_temperature'])
+    if 'prior_blend_alpha' in params:
+        cfg.model.prior_blend_alpha = float(params['prior_blend_alpha'])
+
     # Goal regressors
     if 'goals_n_estimators' in params:
         cfg.model.goals_n_estimators = int(params['goals_n_estimators'])
@@ -133,7 +141,7 @@ def _objective_builder(base_features_df, all_matches, n_splits: int, omp_threads
         # Search space
         params: Dict[str, float] = {
             # Class weighting
-            'draw_boost': trial.suggest_float('draw_boost', 1.0, 2.0, step=0.05),
+            'draw_boost': trial.suggest_float('draw_boost', 1.0, 2.5, step=0.05),
             # Outcome XGB
             'outcome_n_estimators': trial.suggest_int('outcome_n_estimators', 100, 600, step=25),
             'outcome_max_depth': trial.suggest_int('outcome_max_depth', 3, 10),
@@ -158,6 +166,9 @@ def _objective_builder(base_features_df, all_matches, n_splits: int, omp_threads
             'min_lambda': trial.suggest_float('min_lambda', 0.05, 0.40, step=0.01),
             # Time-decay half-life
             'time_decay_half_life_days': trial.suggest_float('time_decay_half_life_days', 30.0, 240.0, step=15.0),
+            # Outcome proba post-processing
+            'proba_temperature': trial.suggest_float('proba_temperature', 0.7, 1.3, step=0.05),
+            'prior_blend_alpha': trial.suggest_float('prior_blend_alpha', 0.0, 0.3, step=0.05),
             # Feature-engineering knobs (optional)
             'form_last_n': trial.suggest_int('form_last_n', 3, 10, step=1),
             'momentum_decay': trial.suggest_float('momentum_decay', 0.70, 0.99, step=0.01),
@@ -197,9 +208,29 @@ def _objective_builder(base_features_df, all_matches, n_splits: int, omp_threads
             predictor.train(train_df)
             preds = predictor.predict(test_feats)
 
-            acts = test_df.to_dict('records')
-            pts = calculate_points(preds, acts) / max(len(acts), 1)
-            fold_points.append(pts)
+            # Build per-match points vector
+            ph = np.array([int(p.get('predicted_home_score', 0)) for p in preds], dtype=int)
+            pa = np.array([int(p.get('predicted_away_score', 0)) for p in preds], dtype=int)
+            ah = np.asarray(test_df['home_score'], dtype=int)
+            aa = np.asarray(test_df['away_score'], dtype=int)
+            points_vec = compute_points(ph, pa, ah, aa).astype(float)
+
+            # Recency weights for validation fold
+            if 'date' in test_df.columns:
+                fold_dates = pd.to_datetime(test_df['date'])
+                days_old = (fold_dates.max() - fold_dates).dt.days.astype(float)
+                half_life = float(params['time_decay_half_life_days'])
+                decay_rate = np.log(2.0) / max(1.0, half_life)
+                weights = np.exp(-decay_rate * days_old.values)
+            else:
+                weights = np.ones_like(points_vec, dtype=float)
+
+            weighted_ppg = float(np.sum(points_vec * weights) / max(1.0, np.sum(weights)))
+            unweighted_ppg = float(np.mean(points_vec)) if len(points_vec) else 0.0
+            if verbose:
+                print(f"[FOLD] weighted_ppg={weighted_ppg:.4f} unweighted_ppg={unweighted_ppg:.4f} n={len(points_vec)}")
+
+            fold_points.append(weighted_ppg)
 
         # Objective: average points per game (maximize)
         return float(np.mean(fold_points)) if fold_points else 0.0

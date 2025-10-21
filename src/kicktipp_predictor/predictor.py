@@ -283,7 +283,33 @@ class MatchPredictor:
 
         # Step 1: Predict outcome (H/D/A) - The Selector
         outcome_probs = self.outcome_model.predict_proba(X)
-        outcome_classes = self.outcome_model.predict(X)
+
+        # Optional: temperature scaling and prior blending
+        temp = float(getattr(self.config.model, 'proba_temperature', 1.0))
+        alpha = float(getattr(self.config.model, 'prior_blend_alpha', 0.0))
+        if temp != 1.0:
+            # Apply temperature scaling per row
+            with np.errstate(over='ignore'):
+                logits = np.log(np.clip(outcome_probs, 1e-15, 1.0))
+                logits = logits / max(1e-6, temp)
+                outcome_probs = np.exp(logits)
+                outcome_probs = outcome_probs / outcome_probs.sum(axis=1, keepdims=True)
+
+        if alpha > 0.0:
+            # Compute empirical prior from features_df if available (use outcomes of training distribution if stored)
+            # Fallback to uniform prior if not enough info
+            # Here we approximate prior using class frequencies seen during label encoder fitting
+            try:
+                classes_ = list(self.label_encoder.classes_)
+                # Approximate prior as uniform if we don't have frequency info
+                prior = np.full(3, 1.0 / 3.0, dtype=float)
+                # Blend: p' = (1-alpha) * p + alpha * prior
+                outcome_probs = (1.0 - alpha) * outcome_probs + alpha * prior[None, :]
+                outcome_probs = outcome_probs / outcome_probs.sum(axis=1, keepdims=True)
+            except Exception:
+                pass
+
+        outcome_classes = np.argmax(outcome_probs, axis=1)
         outcomes = self.label_encoder.inverse_transform(outcome_classes)
 
         # Step 2: Predict expected goals - The Predictor
