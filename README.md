@@ -53,6 +53,9 @@ python3 -m kicktipp_predictor train --seasons-back 5
 # Predict upcoming matches (next 7 days)
 python3 -m kicktipp_predictor predict --days 7
 
+# Predict with process-parallel scoreline selection (e.g., 8 workers)
+python3 -m kicktipp_predictor predict --days 7 --workers 8
+
 # Predict specific matchday
 python3 -m kicktipp_predictor predict --matchday 15
 
@@ -110,6 +113,9 @@ python3 -m kicktipp_predictor predict --days 7
 
 # Predict specific matchday
 python3 -m kicktipp_predictor predict --matchday 20
+
+# Predict specific matchday with parallel scoreline selection
+python3 -m kicktipp_predictor predict --matchday 20 --workers 4
 ```
 
 ## System Architecture

@@ -15,8 +15,71 @@ from scipy.stats import poisson
 from typing import Dict, List, Tuple
 import joblib
 import time
+from concurrent.futures import ProcessPoolExecutor
+import itertools
 
 from .config import get_config
+
+
+def compute_scoreline_for_outcome(outcome: str, home_lambda: float, away_lambda: float, max_goals: int) -> Tuple[int, int]:
+    """Pure function to select most probable scoreline given outcome using Poisson.
+
+    Designed to be process-pool friendly (top-level, no closures, no instance state).
+    """
+    max_goals = int(max(0, max_goals))
+
+    # Create Poisson probability grid
+    grid = np.zeros((max_goals + 1, max_goals + 1))
+    for h in range(max_goals + 1):
+        for a in range(max_goals + 1):
+            grid[h, a] = poisson.pmf(h, home_lambda) * poisson.pmf(a, away_lambda)
+
+    # Filter grid by outcome
+    if outcome == 'H':
+        # Home win: keep only h > a
+        for h in range(max_goals + 1):
+            for a in range(h + 1, max_goals + 1):  # a >= h
+                grid[h, a] = 0
+    elif outcome == 'A':
+        # Away win: keep only a > h
+        for h in range(max_goals + 1):
+            for a in range(h + 1):  # a <= h
+                grid[h, a] = 0
+    else:  # outcome == 'D'
+        # Draw: keep only h == a
+        for h in range(max_goals + 1):
+            for a in range(max_goals + 1):
+                if h != a:
+                    grid[h, a] = 0
+
+    # Find maximum probability scoreline
+    max_prob = np.max(grid)
+    if max_prob == 0:
+        # Fallback if no valid scoreline found (shouldn't happen)
+        if outcome == 'H':
+            return (2, 1)
+        elif outcome == 'A':
+            return (1, 2)
+        else:
+            return (1, 1)
+
+    # Get scoreline with max probability (with tie-breaking toward realistic scores)
+    candidates = np.argwhere(grid == max_prob)
+    if len(candidates) == 1:
+        return int(candidates[0][0]), int(candidates[0][1])
+
+    # Multiple candidates: prefer common realistic scorelines
+    common_scorelines = [
+        (2, 1), (1, 0), (1, 1), (0, 1), (2, 0), (0, 0),
+        (2, 2), (3, 1), (1, 2), (3, 0), (0, 3), (3, 2), (2, 3)
+    ]
+    for h, a in common_scorelines:
+        if h <= max_goals and a <= max_goals and grid[h, a] == max_prob:
+            return h, a
+
+    # Fallback to first candidate
+    first = candidates[0]
+    return int(first[0]), int(first[1])
 
 
 class MatchPredictor:
@@ -131,7 +194,7 @@ class MatchPredictor:
             stratify=y_result_encoded
         )
 
-        # Compute class weights with draw boost
+        # Compute class weights
         classes_unique = np.unique(y_train)
         class_weights = compute_class_weight(
             class_weight='balanced',
@@ -139,16 +202,8 @@ class MatchPredictor:
             y=y_train
         )
 
-        # Apply draw boost
+        # Use balanced weights directly for sample weighting
         weight_map = {c: float(w) for c, w in zip(classes_unique, class_weights)}
-        try:
-            draw_idx = int(np.where(self.label_encoder.classes_ == 'D')[0][0])
-            if draw_idx in weight_map:
-                weight_map[draw_idx] *= self.config.model.draw_boost
-                self._log(f"Applied draw boost: {self.config.model.draw_boost}x")
-        except Exception:
-            pass
-
         sample_weights = np.array([weight_map[int(y)] for y in y_train], dtype=float)
 
         # Train with early stopping
@@ -177,7 +232,7 @@ class MatchPredictor:
         self._log(f"Outcome classifier trained in {elapsed:.2f}s")
         self._log(f"Class weights: {dict(zip(self.label_encoder.classes_, class_weights))}")
 
-    def predict(self, features_df: pd.DataFrame) -> List[Dict]:
+    def predict(self, features_df: pd.DataFrame, workers: int | None = None) -> List[Dict]:
         """Predict match outcomes and scorelines.
 
         This implements the two-step Predictor-Selector process:
@@ -198,17 +253,37 @@ class MatchPredictor:
         # Step 1: Predict outcome (H/D/A) - The Selector
         outcome_probs = self.outcome_model.predict_proba(X)
         outcome_classes = self.outcome_model.predict(X)
+        outcomes = self.label_encoder.inverse_transform(outcome_classes)
 
         # Step 2: Predict expected goals - The Predictor
         home_lambdas = np.maximum(self.home_goals_model.predict(X), self.config.model.min_lambda)
         away_lambdas = np.maximum(self.away_goals_model.predict(X), self.config.model.min_lambda)
 
+        # Step 3: Select scorelines (parallelizable pure computation)
+        max_goals = int(self.config.model.max_goals)
+        n = len(X)
+        if workers is not None and workers > 1 and n > 0:
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                scorelines = list(
+                    executor.map(
+                        compute_scoreline_for_outcome,
+                        outcomes,
+                        home_lambdas,
+                        away_lambdas,
+                        itertools.repeat(max_goals, n)
+                    )
+                )
+        else:
+            scorelines = [
+                compute_scoreline_for_outcome(outcomes[i], float(home_lambdas[i]), float(away_lambdas[i]), max_goals)
+                for i in range(n)
+            ]
+
         predictions = []
 
-        for idx in range(len(X)):
-            # Get outcome from classifier
-            outcome_encoded = outcome_classes[idx]
-            outcome = self.label_encoder.inverse_transform([outcome_encoded])[0]
+        for idx in range(n):
+            outcome = outcomes[idx]
+            home_score, away_score = scorelines[idx]
 
             # Get outcome probabilities (ensure correct mapping)
             prob_dict = {}
@@ -218,13 +293,6 @@ class MatchPredictor:
             home_win_prob = prob_dict.get('H', 0.0)
             draw_prob = prob_dict.get('D', 0.0)
             away_win_prob = prob_dict.get('A', 0.0)
-
-            # Step 3: Select scoreline matching the outcome using Poisson
-            home_score, away_score = self._select_scoreline(
-                outcome,
-                float(home_lambdas[idx]),
-                float(away_lambdas[idx])
-            )
 
             # Calculate confidence (margin between top two probabilities)
             probs_sorted = sorted([home_win_prob, draw_prob, away_win_prob], reverse=True)

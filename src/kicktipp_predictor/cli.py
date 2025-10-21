@@ -49,6 +49,7 @@ def train(
 def predict(
     days: int = typer.Option(7, help="Days ahead to predict"),
     matchday: int | None = typer.Option(None, help="Specific matchday to predict"),
+    workers: int = typer.Option(1, help="Process workers for scoreline selection ( >1 enables parallelism)"),
 ):
     """Make predictions for upcoming matches."""
     from kicktipp_predictor.data import DataLoader
@@ -96,7 +97,7 @@ def predict(
         return
 
     # Make predictions
-    predictions = predictor.predict(features_df)
+    predictions = predictor.predict(features_df, workers=workers)
 
     # Display predictions
     print("\n" + "=" * 80)
