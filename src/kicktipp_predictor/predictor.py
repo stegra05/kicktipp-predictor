@@ -9,7 +9,6 @@ import pandas as pd
 import numpy as np
 from xgboost import XGBClassifier, XGBRegressor
 from sklearn.preprocessing import LabelEncoder
-from sklearn.utils.class_weight import compute_class_weight
 from sklearn.model_selection import train_test_split
 from scipy.stats import poisson
 from typing import Dict, List, Tuple
@@ -253,17 +252,13 @@ class MatchPredictor:
             stratify=y_result_encoded
         )
 
-        # Compute class weights
-        classes_unique = np.unique(y_train)
-        class_weights = compute_class_weight(
-            class_weight='balanced',
-            classes=classes_unique,
-            y=y_train
-        )
-
-        # Use balanced weights directly for sample weighting
-        weight_map = {c: float(w) for c, w in zip(classes_unique, class_weights)}
-        sample_weights = np.array([weight_map[int(y)] for y in y_train], dtype=float)
+        # Use draw_boost: upweight draws in the training fold (safe if no draws in split)
+        classes_arr = self.label_encoder.classes_
+        sample_weights = np.ones(len(y_train), dtype=float)
+        draw_boost = float(getattr(self.config.model, 'draw_boost', 1.0))
+        if 'D' in classes_arr and draw_boost != 1.0:
+            draw_class_label = np.where(classes_arr == 'D')[0][0]
+            sample_weights[y_train == draw_class_label] = draw_boost
         # Combine with time-decay weights on the training fold
         sample_weights = sample_weights * tw_train
 
@@ -296,7 +291,7 @@ class MatchPredictor:
 
         elapsed = time.perf_counter() - start
         self._log(f"Outcome classifier trained in {elapsed:.2f}s")
-        self._log(f"Class weights: {dict(zip(self.label_encoder.classes_, class_weights))}")
+        self._log(f"Applied draw_boost={draw_boost} with time-decay weighting")
 
     def predict(self, features_df: pd.DataFrame, workers: int | None = None) -> List[Dict]:
         """Predict match outcomes and scorelines.
