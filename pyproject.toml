@@ -35,6 +35,10 @@ kicktipp-predictor = "kicktipp_predictor.cli:app"
 [tool.setuptools]
 package-dir = {"" = "src"}
 
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["kicktipp_predictor*"]
+
 [tool.setuptools.package-data]
 "kicktipp_predictor.web" = [
   "templates/*.html",

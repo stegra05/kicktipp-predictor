@@ -36,8 +36,9 @@ class HybridPredictor:
         self.min_lambda = 0.12
 
         # Temperature scaling for expected goals (Phase 2)
-        # Scales lambdas up to match observed goal rates
-        self.goal_temperature = 1.3
+        # Separate temperatures for home and away lambdas
+        self.goal_temperature_home = 1.3
+        self.goal_temperature_away = 1.3
 
         # Confidence threshold for adaptive safe strategy
         self.confidence_threshold: float = 0.4
@@ -65,7 +66,14 @@ class HybridPredictor:
                 self.poisson_weight = 1.0 - self.ml_weight
                 self.prob_blend_alpha = float(params.get("prob_blend_alpha", self.prob_blend_alpha))
                 self.min_lambda = float(params.get("min_lambda", self.min_lambda))
-                self.goal_temperature = float(params.get("goal_temperature", self.goal_temperature))
+                # Back-compat: allow either separate temps or single shared temp
+                if "goal_temperature_home" in params or "goal_temperature_away" in params:
+                    self.goal_temperature_home = float(params.get("goal_temperature_home", self.goal_temperature_home))
+                    self.goal_temperature_away = float(params.get("goal_temperature_away", self.goal_temperature_away))
+                else:
+                    shared_temp = float(params.get("goal_temperature", self.goal_temperature_home))
+                    self.goal_temperature_home = shared_temp
+                    self.goal_temperature_away = shared_temp
                 self.confidence_threshold = float(params.get("confidence_threshold", self.confidence_threshold))
                 # Optional strategy override from config
                 self.strategy = str(params.get("strategy", self.strategy))
@@ -73,7 +81,7 @@ class HybridPredictor:
             pass
 
         print(f"[HybridPredictor] params ml_weight={self.ml_weight:.2f} poisson_weight={self.poisson_weight:.2f} "
-              f"alpha={self.prob_blend_alpha:.2f} min_lambda={self.min_lambda:.2f} temp={self.goal_temperature:.2f} "
+              f"alpha={self.prob_blend_alpha:.2f} min_lambda={self.min_lambda:.2f} tempH={self.goal_temperature_home:.2f} tempA={self.goal_temperature_away:.2f} "
               f"conf_thr={self.confidence_threshold:.2f} max_goals={self.max_goals} strategy={self.strategy}")
 
 
@@ -131,8 +139,8 @@ class HybridPredictor:
             away_lambda = max(away_lambda, self.min_lambda)
 
             # Apply temperature scaling to match observed goal distributions (Phase 2)
-            home_lambda *= self.goal_temperature
-            away_lambda *= self.goal_temperature
+            home_lambda *= self.goal_temperature_home
+            away_lambda *= self.goal_temperature_away
 
             # Build probability grid with DC correction
             grid = np.zeros((self.max_goals, self.max_goals))
@@ -266,46 +274,97 @@ class HybridPredictor:
 
         return hybrid_predictions
 
-    def fit_goal_temperature(self, recent_matches_df: pd.DataFrame, clamp: tuple = (0.9, 1.4)) -> None:
+    def fit_goal_temperature(self, recent_matches_df: pd.DataFrame, clamp: tuple = (0.7, 2.0)) -> None:
         """
-        Fit goal_temperature so predicted total goals from Poisson prior roughly
-        match recent actual totals. Trains a temporary Poisson on recent data
-        (assumes caller already trained poisson_predictor). Adjusts self.goal_temperature
-        multiplicatively and clamps to a reasonable range.
+        Backward-compatible API: fit separate home/away goal temperatures based on
+        recent finished matches using the Poisson prior expectations.
 
         Args:
             recent_matches_df: DataFrame of finished matches with columns
                                ['home_team','away_team','home_score','away_score']
-            clamp: (min, max) bounds for temperature
+            clamp: (min, max) bounds for temperatures
         """
         try:
             if recent_matches_df is None or len(recent_matches_df) == 0:
                 return
-            # Compute recent actual average total goals
-            actual_total = float((recent_matches_df['home_score'] + recent_matches_df['away_score']).mean())
-            if not np.isfinite(actual_total) or actual_total <= 0:
+
+            # Actual means
+            actual_home_mean = float(recent_matches_df['home_score'].mean())
+            actual_away_mean = float(recent_matches_df['away_score'].mean())
+            if not np.isfinite(actual_home_mean) or not np.isfinite(actual_away_mean):
                 return
 
-            # Estimate predicted totals over a small random sample of recent fixtures
-            sample = recent_matches_df.sample(min(200, len(recent_matches_df)), random_state=42)
-            preds = []
+            # Predicted (Poisson prior) means over a capped random sample
+            sample = recent_matches_df.sample(min(400, len(recent_matches_df)), random_state=42)
+            pred_home_vals: list[float] = []
+            pred_away_vals: list[float] = []
             for _, m in sample.iterrows():
                 p = self.poisson_predictor.predict_match(m['home_team'], m['away_team'])
-                preds.append(p['home_expected_goals'] + p['away_expected_goals'])
-            if not preds:
+                pred_home_vals.append(float(p['home_expected_goals']))
+                pred_away_vals.append(float(p['away_expected_goals']))
+            if not pred_home_vals or not pred_away_vals:
                 return
-            pred_total = float(np.mean(preds))
-            if pred_total <= 0:
+            pred_home_mean = float(np.mean(pred_home_vals))
+            pred_away_mean = float(np.mean(pred_away_vals))
+            if pred_home_mean <= 0 or pred_away_mean <= 0:
                 return
 
-            # Scale temperature by ratio of actual to predicted totals
-            new_temp = float(self.goal_temperature) * (actual_total / pred_total)
-            new_temp = max(clamp[0], min(clamp[1], new_temp))
-            if abs(new_temp - self.goal_temperature) > 1e-3:
-                print(f"[HybridPredictor] Adjusting goal_temperature {self.goal_temperature:.3f} -> {new_temp:.3f}")
-                self.goal_temperature = new_temp
+            new_temp_h = float(self.goal_temperature_home) * (actual_home_mean / pred_home_mean)
+            new_temp_a = float(self.goal_temperature_away) * (actual_away_mean / pred_away_mean)
+            new_temp_h = max(clamp[0], min(clamp[1], new_temp_h))
+            new_temp_a = max(clamp[0], min(clamp[1], new_temp_a))
+
+            if abs(new_temp_h - self.goal_temperature_home) > 1e-3 or abs(new_temp_a - self.goal_temperature_away) > 1e-3:
+                print(f"[HybridPredictor] Adjusting goal temperatures H {self.goal_temperature_home:.3f}->{new_temp_h:.3f} "
+                      f"A {self.goal_temperature_away:.3f}->{new_temp_a:.3f}")
+                self.goal_temperature_home = new_temp_h
+                self.goal_temperature_away = new_temp_a
         except Exception:
-            # Robust to any data issues; fallback to existing temperature
+            # Robust to any data issues; fallback to existing temperatures
+            pass
+
+    def fit_goal_temperatures_from_validation(self, actual_df: pd.DataFrame, features_df: pd.DataFrame,
+                                              clamp: tuple = (0.7, 2.0)) -> None:
+        """
+        Fit separate home/away temperatures using a validation split by aligning
+        combined pre-temperature lambdas to actual average goals.
+        """
+        try:
+            if actual_df is None or features_df is None or len(actual_df) == 0 or len(features_df) == 0:
+                return
+
+            # Compute combined lambdas BEFORE temperature scaling, mirroring predict()
+            ml_preds = self.ml_predictor.predict(features_df)
+            poisson_preds = []
+            for _, row in features_df.iterrows():
+                poisson_pred = self.poisson_predictor.predict_match(row['home_team'], row['away_team'])
+                poisson_preds.append(poisson_pred)
+
+            home_lambdas = []
+            away_lambdas = []
+            for i in range(len(ml_preds)):
+                ml_pred = ml_preds[i]
+                pp = poisson_preds[i]
+                hl = (self.ml_weight * ml_pred['home_expected_goals'] + self.poisson_weight * pp['home_expected_goals'])
+                al = (self.ml_weight * ml_pred['away_expected_goals'] + self.poisson_weight * pp['away_expected_goals'])
+                hl = max(hl, self.min_lambda)
+                al = max(al, self.min_lambda)
+                home_lambdas.append(float(hl))
+                away_lambdas.append(float(al))
+
+            pred_home_mean = float(np.mean(home_lambdas)) if home_lambdas else 0.0
+            pred_away_mean = float(np.mean(away_lambdas)) if away_lambdas else 0.0
+
+            actual_home_mean = float(actual_df['home_score'].mean())
+            actual_away_mean = float(actual_df['away_score'].mean())
+
+            if pred_home_mean > 0 and np.isfinite(actual_home_mean):
+                self.goal_temperature_home = max(clamp[0], min(clamp[1], actual_home_mean / pred_home_mean))
+            if pred_away_mean > 0 and np.isfinite(actual_away_mean):
+                self.goal_temperature_away = max(clamp[0], min(clamp[1], actual_away_mean / pred_away_mean))
+
+            print(f"[HybridPredictor] Fitted validation goal temps: tempH={self.goal_temperature_home:.3f} tempA={self.goal_temperature_away:.3f}")
+        except Exception:
             pass
 
     def _calculate_expected_points(self, grid: np.ndarray) -> tuple:

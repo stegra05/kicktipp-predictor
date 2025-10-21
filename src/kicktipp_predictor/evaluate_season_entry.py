@@ -73,7 +73,7 @@ def run() -> None:
         prev_season_matches = data_fetcher.fetch_season_matches(current_season - 1)
         historical_matches.extend([m for m in prev_season_matches if m.get('is_finished')])
 
-    # Fit goal temperature once on prior finished matches (train Poisson first)
+    # Fit goal temperatures once on prior finished matches (train Poisson first)
     try:
         hist_df_for_temp = pd.DataFrame([m for m in historical_matches if m.get('date') is not None])
         if not hist_df_for_temp.empty:

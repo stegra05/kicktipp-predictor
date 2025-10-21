@@ -111,9 +111,21 @@ class FeatureEngineer:
         features.update(self._get_form_features(home_team, home_history, prefix='home'))
         features.update(self._get_form_features(away_team, away_history, prefix='away'))
 
+        # Draw-oriented absolute differences between teams
+        try:
+            features['abs_form_points_diff'] = abs(features.get('home_form_points', 0) - features.get('away_form_points', 0))
+        except Exception:
+            features['abs_form_points_diff'] = 0
+
         # Momentum features (exponentially weighted recent form)
         features.update(self._get_momentum_features(home_team, home_history, prefix='home'))
         features.update(self._get_momentum_features(away_team, away_history, prefix='away'))
+
+        # Momentum absolute difference
+        try:
+            features['abs_momentum_score_diff'] = abs(features.get('home_momentum_score', 0.0) - features.get('away_momentum_score', 0.0))
+        except Exception:
+            features['abs_momentum_score_diff'] = 0.0
 
         # Head-to-head features
         features.update(self._get_h2h_features(home_team, away_team, ref_hist))
@@ -250,7 +262,7 @@ class FeatureEngineer:
 
         num_h2h = len(recent_h2h)
 
-        return {
+        result = {
             'h2h_matches': num_h2h,
             'h2h_home_wins': home_wins,
             'h2h_draws': draws,
@@ -259,6 +271,9 @@ class FeatureEngineer:
             'h2h_away_goals': away_goals,
             'h2h_home_win_rate': home_wins / num_h2h if num_h2h > 0 else 0,
         }
+        # Draw rate over recent H2H
+        result['h2h_draw_rate'] = (draws / num_h2h) if num_h2h > 0 else 0.0
+        return result
 
     def _get_home_away_features(self, team: str, history: List[Dict],
                                venue: str) -> Dict:
@@ -343,7 +358,7 @@ class FeatureEngineer:
         home_data = table.get(home_team, {'points': 0, 'position': 20, 'played': 0})
         away_data = table.get(away_team, {'points': 0, 'position': 20, 'played': 0})
 
-        return {
+        base = {
             'home_table_position': home_data['position'],
             'away_table_position': away_data['position'],
             'home_table_points': home_data['points'],
@@ -351,6 +366,14 @@ class FeatureEngineer:
             'table_position_diff': home_data['position'] - away_data['position'],
             'table_points_diff': home_data['points'] - away_data['points'],
         }
+        # Absolute differences as draw indicators
+        try:
+            base['abs_table_position_diff'] = abs(base['table_position_diff'])
+            base['abs_table_points_diff'] = abs(base['table_points_diff'])
+        except Exception:
+            base['abs_table_position_diff'] = 0
+            base['abs_table_points_diff'] = 0
+        return base
 
     def _calculate_table(self, matches: List[Dict]) -> Dict:
         """Calculate league table from matches."""
