@@ -1,0 +1,56 @@
+
+2. Enhance Recency in Feature Engineering
+
+Concept 🧠 This method is about creating new features that explicitly measure short-term momentum. While your current model looks at form over the last 5 games, a team's performance in the next match might be better predicted by an even shorter window (e.g., the last 2-3 games). This helps capture "hot streaks" or sudden "slumps" that longer-term averages might smooth over.
+
+How to Implement 💻 This involves modifying your data.py file to add new columns to your feature set.
+
+Short-Term Form Features: In the _get_form_features function, you can call it multiple times with different last_n values to create distinct features. For example: home_form_points_L5 and home_form_points_L3.
+
+Exponentially Weighted Moving Averages (EWMA): This is a more elegant way to prioritize recency. Instead of a simple average, an EWMA gives exponentially more weight to recent data points. Pandas has a built-in .ewm() function.
+
+Here's an example for _get_form_features in src/kicktipp_predictor/data.py:
+
+Python
+# In DataLoader._get_form_features
+
+# ... after calculating points, goals, etc. for each match in 'recent'
+# Create a small DataFrame to easily use .ewm()
+recent_df = pd.DataFrame(recent_matches_data) # You'd need to structure this
+
+# Example for points per game
+# The 'span' parameter controls the decay. A smaller span gives more weight to recent data.
+ewm_ppg = recent_df['points'].ewm(span=3).mean().iloc[-1]
+
+# Return this as a new feature
+return {
+    # ... your existing features ...
+    f'{prefix}_ewm_ppg_S3': ewm_ppg,
+}
+Complexity of Implementation: Medium. It requires careful modification and testing of your feature engineering code but doesn't touch the model training logic itself.
+
+Estimated Effect: Medium to High 🚀. Feature engineering is often where the biggest gains are found. Creating features that are more sensitive to immediate form is directly aligned with your goal of improving weekly prediction accuracy.
+
+3. Bayesian Hierarchical Models
+
+Concept 🧠 This is a fundamentally different approach. Instead of finding one single "best" value for a team's attack or defense strength, a Bayesian model estimates a full probability distribution for them. It's "hierarchical" because it assumes each team's individual strength is related to the overall league's average strength.
+
+This structure is perfect for sports because:
+
+It handles uncertainty: At the start of a season, the model is very uncertain about a team's strength, so the distribution is wide. As the team plays more, the distribution gets narrower and more certain.
+
+It avoids overfitting on small data: It uses the league average as a "sensible default" (a "prior"), preventing it from making extreme predictions based on one or two fluke results early in the season.
+
+How to Implement 💻 This requires rewriting your prediction logic using a probabilistic programming library like PyMC. You would not use XGBoost for this.
+
+Define the Model Structure: You'd define latent (unobserved) variables for each team's attack and defense parameters, drawn from a shared league-wide distribution.
+
+Define the Likelihood: You'd model the number of goals scored in a match as a Poisson distribution, where the rate parameter (lambda) is a function of the home team's attack and the away team's defense.
+
+Run Inference: You'd use an MCMC sampler (e.g., NUTS) to run thousands of simulations to figure out the most plausible posterior distributions for every team's parameters.
+
+Predict: To predict a new match, you would simulate thousands of outcomes using the posterior distributions of the two teams' strengths to get a probability for every possible scoreline.
+
+Complexity of Implementation: Hard 🤯. This is a major undertaking that requires learning Bayesian statistics and a new programming framework. It's more of a data science research project than a quick code change.
+
+Estimated Effect: High 🏆. If done correctly, these models are often state-of-the-art for sports prediction precisely because they handle the early-season data scarcity so well. They provide incredibly rich outputs (e.g., the exact probability of a 3-2 result) and are very robust.

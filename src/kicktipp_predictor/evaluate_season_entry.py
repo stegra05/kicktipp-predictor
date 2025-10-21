@@ -339,3 +339,205 @@ def run() -> None:
     print(f"\nSeason artifacts written to {out_dir}")
 
 
+
+    # ------------------------------------------------------------------
+    # Per-matchday metrics with baseline comparison and plots
+    # ------------------------------------------------------------------
+    try:
+        import matplotlib.pyplot as plt  # type: ignore
+    except Exception:
+        plt = None  # type: ignore
+
+    # Build matchday -> indices mapping (aligned with features_all / preds_all / P / pts)
+    if 'matchday' not in features_all.columns:
+        print("\nWARNING: No 'matchday' column in features; skipping per-matchday breakdown.")
+        return
+
+    matchdays = []
+    md_to_idx: dict[int, list[int]] = {}
+    for i, md_val in enumerate(features_all['matchday'].tolist()):
+        try:
+            md = int(md_val)
+        except Exception:
+            continue
+        if md not in md_to_idx:
+            md_to_idx[md] = []
+            matchdays.append(md)
+        md_to_idx[md].append(i)
+
+    matchdays = sorted(matchdays)
+
+    # Helper for true-class prob per row
+    mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
+    y_idx_all = np.array([mapping.get(lbl, -1) for lbl in y_true], dtype=int)
+
+    rows = []
+    cum_points = 0
+    cum_points_baseline = 0
+
+    avg_pts_series = []
+    avg_pts_series_baseline = []
+    cum_pts_series = []
+    cum_pts_series_baseline = []
+
+    for md in matchdays:
+        idx_list = md_to_idx.get(md, [])
+        if not idx_list:
+            continue
+
+        idx = np.array(idx_list, dtype=int)
+
+        # Slices
+        P_md = P[idx]
+        y_md = [y_true[i] for i in idx_list]
+        y_idx_md = y_idx_all[idx]
+        ph_md = ph[idx]
+        pa_md = pa[idx]
+        ah_md = ah[idx]
+        aa_md = aa[idx]
+        pts_md = pts[idx]
+
+        n_md = len(idx)
+
+        # Points
+        total_pts = int(np.sum(pts_md))
+        avg_pts = float(np.mean(pts_md)) if n_md else 0.0
+        points_0 = int(np.sum(pts_md == 0))
+        points_2 = int(np.sum(pts_md == 2))
+        points_3 = int(np.sum(pts_md == 3))
+        points_4 = int(np.sum(pts_md == 4))
+
+        # Classification accuracy
+        acc = float(np.mean(np.argmax(P_md, axis=1) == y_idx_md)) if n_md else float('nan')
+
+        # Exact/diff/result counts
+        exact_mask = (ph_md == ah_md) & (pa_md == aa_md)
+        diff_mask = ((ph_md - pa_md) == (ah_md - aa_md)) & (~exact_mask)
+        result_mask = (((ph_md > pa_md) & (ah_md > aa_md)) | ((ph_md == pa_md) & (ah_md == aa_md)) | ((ph_md < pa_md) & (ah_md < aa_md))) & (~exact_mask) & (~diff_mask)
+        exact_count = int(np.sum(exact_mask))
+        diff_count = int(np.sum(diff_mask))
+        result_count = int(np.sum(result_mask))
+
+        # Probabilistic metrics
+        brier = brier_score_multiclass(y_md, P_md)
+        logloss = log_loss_multiclass(y_md, P_md)
+        rps = ranked_probability_score_3c(y_md, P_md)
+
+        # Confidence: avg max-prob, avg true-class prob
+        max_prob = float(np.mean(np.max(P_md, axis=1))) if n_md else float('nan')
+        p_true_vals = []
+        for i_row in range(n_md):
+            ti = y_idx_md[i_row]
+            if ti >= 0:
+                p_true_vals.append(float(P_md[i_row, ti]))
+        avg_true_prob = float(np.mean(p_true_vals)) if p_true_vals else float('nan')
+
+        # Score errors (MAE)
+        mae_home = float(np.mean(np.abs(ph_md - ah_md))) if n_md else float('nan')
+        mae_away = float(np.mean(np.abs(pa_md - aa_md))) if n_md else float('nan')
+        mae_gd = float(np.mean(np.abs((ph_md - pa_md) - (ah_md - aa_md)))) if n_md else float('nan')
+
+        # Baseline: always 2-1 home
+        base_ph = np.full(n_md, 2, dtype=int)
+        base_pa = np.full(n_md, 1, dtype=int)
+        base_pts = compute_points(base_ph, base_pa, ah_md, aa_md)
+        base_total = int(np.sum(base_pts))
+        base_avg = float(np.mean(base_pts)) if n_md else 0.0
+        base_acc = float(np.mean(np.array(y_md) == 'H')) if n_md else float('nan')
+
+        # Deltas
+        d_avg = avg_pts - base_avg
+        d_total = total_pts - base_total
+        d_acc = acc - base_acc
+
+        # Cumulative
+        cum_points += total_pts
+        cum_points_baseline += base_total
+
+        avg_pts_series.append(avg_pts)
+        avg_pts_series_baseline.append(base_avg)
+        cum_pts_series.append(cum_points)
+        cum_pts_series_baseline.append(cum_points_baseline)
+
+        rows.append({
+            'matchday': md,
+            'n': n_md,
+            'avg_points': avg_pts,
+            'total_points': total_pts,
+            'points_0': points_0,
+            'points_2': points_2,
+            'points_3': points_3,
+            'points_4': points_4,
+            'accuracy': float(acc),
+            'exact_count': exact_count,
+            'diff_count': diff_count,
+            'result_count': result_count,
+            'brier': float(brier),
+            'log_loss': float(logloss),
+            'rps': float(rps),
+            'avg_max_prob': max_prob,
+            'avg_true_prob': avg_true_prob,
+            'mae_home': mae_home,
+            'mae_away': mae_away,
+            'mae_gd': mae_gd,
+            'baseline_avg_points': base_avg,
+            'baseline_total_points': base_total,
+            'baseline_accuracy': float(base_acc),
+            'delta_avg_points': d_avg,
+            'delta_total_points': d_total,
+            'delta_accuracy': d_acc,
+            'cum_points': cum_points,
+            'cum_points_baseline': cum_points_baseline,
+        })
+
+    # Save CSV
+    per_md_df = pd.DataFrame(rows)
+    per_md_csv = os.path.join(out_dir, 'per_matchday_metrics_season.csv')
+    try:
+        per_md_df.sort_values('matchday').to_csv(per_md_csv, index=False)
+        print(f"Per-matchday metrics written to {per_md_csv}")
+    except Exception as e:
+        print(f"Failed to write per-matchday CSV: {e}")
+
+    # Console table
+    if len(rows) > 0:
+        print("\n" + "-"*80)
+        print("PER-MATCHDAY SUMMARY")
+        print("-"*80)
+        print(f"{'MD':>3}  {'n':>2}  {'avg':>5}  {'tot':>4}  {'base':>5}  {'Δavg':>5}  {'acc':>5}  {'ex/diff/res':>10}")
+        for r in sorted(rows, key=lambda x: x['matchday']):
+            ex_dr = f"{r['exact_count']}/{r['diff_count']}/{r['result_count']}"
+            print(f"{int(r['matchday']):3d}  {int(r['n']):2d}  {r['avg_points']:.2f}  {int(r['total_points']):4d}  "
+                  f"{r['baseline_avg_points']:.2f}  {r['delta_avg_points']:+.2f}  {r['accuracy']:.2f}  {ex_dr:>10}")
+
+    # Plots
+    if plt is not None and len(matchdays) == len(avg_pts_series):
+        try:
+            # Per-matchday average points
+            fig, ax = plt.subplots(figsize=(8, 4))
+            ax.plot(matchdays, avg_pts_series, label='Model', marker='o')
+            ax.plot(matchdays, avg_pts_series_baseline, label='Baseline (2-1 H)', marker='o')
+            ax.set_xlabel('Matchday')
+            ax.set_ylabel('Avg points')
+            ax.set_title('Per-matchday Avg Points (Season)')
+            ax.grid(True, alpha=0.3)
+            ax.legend()
+            plt.tight_layout()
+            plt.savefig(os.path.join(out_dir, 'per_matchday_points_season.png'))
+            plt.close(fig)
+
+            # Cumulative points
+            fig2, ax2 = plt.subplots(figsize=(8, 4))
+            ax2.plot(matchdays, cum_pts_series, label='Model', marker='o')
+            ax2.plot(matchdays, cum_pts_series_baseline, label='Baseline (2-1 H)', marker='o')
+            ax2.set_xlabel('Matchday')
+            ax2.set_ylabel('Cumulative points')
+            ax2.set_title('Cumulative Points (Season)')
+            ax2.grid(True, alpha=0.3)
+            ax2.legend()
+            plt.tight_layout()
+            plt.savefig(os.path.join(out_dir, 'per_matchday_points_cum_season.png'))
+            plt.close(fig2)
+        except Exception:
+            pass
+
