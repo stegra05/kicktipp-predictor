@@ -12,7 +12,6 @@ import time
 
 import numpy as np
 import sys
-from contextlib import redirect_stdout, redirect_stderr
 from sklearn.model_selection import TimeSeriesSplit
 
 # Ensure project root is on sys.path so `src.*` imports work when running this file directly
@@ -127,17 +126,9 @@ def _objective_builder(features_df, n_splits: int, omp_threads: int, verbose: bo
             test_df = features_df.iloc[test_idx]
             test_feats = test_df.drop(columns=['home_score','away_score','goal_difference','result'], errors='ignore')
 
-            if not verbose:
-                # Suppress noisy prints from the inner training/prediction loop
-                with open(os.devnull, 'w') as devnull:
-                    with redirect_stdout(devnull), redirect_stderr(devnull):
-                        predictor = MatchPredictor(quiet=not verbose)
-                        predictor.train(train_df)
-                        preds = predictor.predict(test_feats)
-            else:
-                predictor = MatchPredictor(quiet=not verbose)
-                predictor.train(train_df)
-                preds = predictor.predict(test_feats)
+            predictor = MatchPredictor(quiet=not verbose)
+            predictor.train(train_df)
+            preds = predictor.predict(test_feats)
 
             acts = test_df.to_dict('records')
             pts = calculate_points(preds, acts) / max(len(acts), 1)
@@ -207,8 +198,8 @@ def main():
     if args.verbose:
         print(f"Planned: trials={total_trials} | cv-trainings={total_cv_trainings} | workers={args.n_jobs or 1} x threads={args.omp_threads or 1}")
 
-    # Avoid stdout redirection when using parallel workers (not thread-safe)
-    effective_verbose = bool(args.verbose or (args.n_jobs and args.n_jobs > 1))
+    # Verbosity reflects CLI flag only (quiet by default, even with multiple jobs)
+    effective_verbose = bool(args.verbose)
     objective = _objective_builder(features_df, args.n_splits, args.omp_threads, effective_verbose)
 
     # Configure pruner
@@ -321,16 +312,9 @@ def main():
             all_matches_full = data_loader.fetch_historical_seasons(start_season, current_season)
             features_full = data_loader.create_features_from_matches(all_matches_full)
 
-            if not args.verbose:
-                with open(os.devnull, 'w') as devnull:
-                    with redirect_stdout(devnull), redirect_stderr(devnull):
-                        predictor = MatchPredictor(quiet=not args.verbose)
-                        predictor.train(features_full)
-                        predictor.save_models()
-            else:
-                predictor = MatchPredictor(quiet=not args.verbose)
-                predictor.train(features_full)
-                predictor.save_models()
+            predictor = MatchPredictor(quiet=not args.verbose)
+            predictor.train(features_full)
+            predictor.save_models()
             if args.verbose:
                 print("[FINAL] Saved trained models.")
         except Exception as e:  # pragma: no cover
