@@ -195,6 +195,14 @@ def run_evaluation(season: bool = False) -> None:
     pred_h_labels = [LABELS_ORDER[i] for i in np.argmax(P_h, axis=1)]
     pred_counts_h = {lab: pred_h_labels.count(lab) for lab in LABELS_ORDER}
     print("Hybrid predicted    : " + "  ".join([f"{lab}={pred_counts_h.get(lab,0)} ({pred_counts_h.get(lab,0)/max(1,len(pred_h_labels)):.2%})" for lab in LABELS_ORDER]))
+    # ML-only
+    pred_m_labels = [LABELS_ORDER[i] for i in np.argmax(P_m, axis=1)]
+    pred_counts_m = {lab: pred_m_labels.count(lab) for lab in LABELS_ORDER}
+    print("ML predicted        : " + "  ".join([f"{lab}={pred_counts_m.get(lab,0)} ({pred_counts_m.get(lab,0)/max(1,len(pred_m_labels)):.2%})" for lab in LABELS_ORDER]))
+    # Poisson-only
+    pred_p_labels = [LABELS_ORDER[i] for i in np.argmax(P_p, axis=1)]
+    pred_counts_p = {lab: pred_p_labels.count(lab) for lab in LABELS_ORDER}
+    print("Poisson predicted   : " + "  ".join([f"{lab}={pred_counts_p.get(lab,0)} ({pred_counts_p.get(lab,0)/max(1,len(pred_p_labels)):.2%})" for lab in LABELS_ORDER]))
 
     # Predicted scores
     ph_h, pa_h = _scores_from_preds(hybrid_preds)
@@ -239,6 +247,16 @@ def run_evaluation(season: bool = False) -> None:
     pt_counts = {p: int(np.sum(pts_h == p)) for p in unique_pts}
     print("Counts by points    : " + ", ".join([f"{p}p={pt_counts[p]}" for p in unique_pts]))
     print(f"Avg points          : {np.mean(pts_h) if len(pts_h) else 0.0:.3f}  Total: {int(np.sum(pts_h))}")
+    # Points distribution (ML)
+    print("\nPOINTS DISTRIBUTION (ML-only)")
+    pt_counts_m = {p: int(np.sum(pts_m == p)) for p in unique_pts}
+    print("Counts by points    : " + ", ".join([f"{p}p={pt_counts_m[p]}" for p in unique_pts]))
+    print(f"Avg points          : {np.mean(pts_m) if len(pts_m) else 0.0:.3f}  Total: {int(np.sum(pts_m))}")
+    # Points distribution (Poisson)
+    print("\nPOINTS DISTRIBUTION (Poisson-only)")
+    pt_counts_p = {p: int(np.sum(pts_p == p)) for p in unique_pts}
+    print("Counts by points    : " + ", ".join([f"{p}p={pt_counts_p[p]}" for p in unique_pts]))
+    print(f"Avg points          : {np.mean(pts_p) if len(pts_p) else 0.0:.3f}  Total: {int(np.sum(pts_p))}")
 
     # Save artifacts
     out_dir = os.path.join('data', 'predictions')
@@ -281,6 +299,19 @@ def run_evaluation(season: bool = False) -> None:
     plot_reliability_curve(curve_H, 'H', os.path.join(out_dir, 'calibration_home.png'))
     plot_reliability_curve(curve_D, 'D', os.path.join(out_dir, 'calibration_draw.png'))
     plot_reliability_curve(curve_A, 'A', os.path.join(out_dir, 'calibration_away.png'))
+    # Additional calibration plots for ML-only and Poisson-only (variant-specific filenames)
+    curve_H_m = reliability_diagram(y_true, P_m, 'H', n_bins=10)
+    curve_D_m = reliability_diagram(y_true, P_m, 'D', n_bins=10)
+    curve_A_m = reliability_diagram(y_true, P_m, 'A', n_bins=10)
+    plot_reliability_curve(curve_H_m, 'H', os.path.join(out_dir, 'calibration_home_ml.png'))
+    plot_reliability_curve(curve_D_m, 'D', os.path.join(out_dir, 'calibration_draw_ml.png'))
+    plot_reliability_curve(curve_A_m, 'A', os.path.join(out_dir, 'calibration_away_ml.png'))
+    curve_H_p = reliability_diagram(y_true, P_p, 'H', n_bins=10)
+    curve_D_p = reliability_diagram(y_true, P_p, 'D', n_bins=10)
+    curve_A_p = reliability_diagram(y_true, P_p, 'A', n_bins=10)
+    plot_reliability_curve(curve_H_p, 'H', os.path.join(out_dir, 'calibration_home_poisson.png'))
+    plot_reliability_curve(curve_D_p, 'D', os.path.join(out_dir, 'calibration_draw_poisson.png'))
+    plot_reliability_curve(curve_A_p, 'A', os.path.join(out_dir, 'calibration_away_poisson.png'))
 
     # Confusion matrix (hybrid)
     cm_stats = confusion_matrix_stats(y_true, P_h)
@@ -302,6 +333,42 @@ def run_evaluation(season: bool = False) -> None:
             rc = float(stats.get('recall', float('nan')))
             print(f"Class {lab}         : precision={pr:.3f} recall={rc:.3f}")
 
+    # Confusion matrix (ML-only)
+    cm_stats_m = confusion_matrix_stats(y_true, P_m)
+    cm_m = np.array(cm_stats_m['matrix'], dtype=int)
+    plot_confusion_matrix(cm_m, os.path.join(out_dir, 'confusion_matrix_ml.png'))
+    print("\nCONFUSION MATRIX (ML-only)")
+    print(header)
+    for i, lab in enumerate(LABELS_ORDER):
+        row = cm_m[i]
+        print(f"Actual {lab}       : {row[0]:5d} {row[1]:5d} {row[2]:5d}")
+    print(f"Overall accuracy   : {cm_stats_m.get('accuracy', float('nan')):.3f}")
+    per_class_m = cm_stats_m.get('per_class', {})
+    if isinstance(per_class_m, dict):
+        for lab in LABELS_ORDER:
+            stats = per_class_m.get(lab, {})
+            pr = float(stats.get('precision', float('nan')))
+            rc = float(stats.get('recall', float('nan')))
+            print(f"Class {lab}         : precision={pr:.3f} recall={rc:.3f}")
+
+    # Confusion matrix (Poisson-only)
+    cm_stats_p = confusion_matrix_stats(y_true, P_p)
+    cm_p = np.array(cm_stats_p['matrix'], dtype=int)
+    plot_confusion_matrix(cm_p, os.path.join(out_dir, 'confusion_matrix_poisson.png'))
+    print("\nCONFUSION MATRIX (Poisson-only)")
+    print(header)
+    for i, lab in enumerate(LABELS_ORDER):
+        row = cm_p[i]
+        print(f"Actual {lab}       : {row[0]:5d} {row[1]:5d} {row[2]:5d}")
+    print(f"Overall accuracy   : {cm_stats_p.get('accuracy', float('nan')):.3f}")
+    per_class_p = cm_stats_p.get('per_class', {})
+    if isinstance(per_class_p, dict):
+        for lab in LABELS_ORDER:
+            stats = per_class_p.get(lab, {})
+            pr = float(stats.get('precision', float('nan')))
+            rc = float(stats.get('recall', float('nan')))
+            print(f"Class {lab}         : precision={pr:.3f} recall={rc:.3f}")
+
     # Confidence bucket analysis (hybrid)
     _, _, _, combined_all = _confidence_bundle(P_h)
     conf_df = bin_by_confidence(combined_all, y_true, P_h, pts_h, n_bins=5)
@@ -314,6 +381,28 @@ def run_evaluation(season: bool = False) -> None:
             print(f"bin={r['bin']:<14} count={int(r['count']):4d}  avg_pts={float(r['avg_points']):.3f}  "
                   f"acc={float(r['accuracy']):.3f}  avg_conf={float(r['avg_confidence']):.3f}")
 
+    # Confidence bucket analysis (ML-only)
+    _, _, _, combined_all_m = _confidence_bundle(P_m)
+    conf_df_m = bin_by_confidence(combined_all_m, y_true, P_m, pts_m, n_bins=5)
+    conf_df_m.to_csv(os.path.join(out_dir, 'confidence_buckets_ml.csv'), index=False)
+    plot_confidence_buckets(conf_df_m, os.path.join(out_dir, 'confidence_buckets_ml.png'))
+    if len(conf_df_m) > 0:
+        print("\nCONFIDENCE BUCKETS (ML-only)")
+        for _, r in conf_df_m.iterrows():
+            print(f"bin={r['bin']:<14} count={int(r['count']):4d}  avg_pts={float(r['avg_points']):.3f}  "
+                  f"acc={float(r['accuracy']):.3f}  avg_conf={float(r['avg_confidence']):.3f}")
+
+    # Confidence bucket analysis (Poisson-only)
+    _, _, _, combined_all_p = _confidence_bundle(P_p)
+    conf_df_p = bin_by_confidence(combined_all_p, y_true, P_p, pts_p, n_bins=5)
+    conf_df_p.to_csv(os.path.join(out_dir, 'confidence_buckets_poisson.csv'), index=False)
+    plot_confidence_buckets(conf_df_p, os.path.join(out_dir, 'confidence_buckets_poisson.png'))
+    if len(conf_df_p) > 0:
+        print("\nCONFIDENCE BUCKETS (Poisson-only)")
+        for _, r in conf_df_p.iterrows():
+            print(f"bin={r['bin']:<14} count={int(r['count']):4d}  avg_pts={float(r['avg_points']):.3f}  "
+                  f"acc={float(r['accuracy']):.3f}  avg_conf={float(r['avg_confidence']):.3f}")
+
     # SHAP analysis (optional; safe no-op if deps missing)
     try:
         # Use the exact features used for ML models
@@ -322,16 +411,16 @@ def run_evaluation(season: bool = False) -> None:
     except Exception:
         pass
 
-    # Build detailed rows for examples
+    # Build detailed rows for examples (Hybrid)
     max_prob_h, margin_h, entropy_h, combined_h = _confidence_bundle(P_h)
     mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
     # Extend debug rows to include teams and p_true
-    debug_rows: List[Dict] = []
+    debug_rows_h: List[Dict] = []
     for i in range(len(test_df)):
         actual_lab = y_true[i]
         true_idx = mapping.get(actual_lab, -1)
         p_true = float(P_h[i, true_idx]) if true_idx >= 0 else float('nan')
-        debug_rows.append({
+        debug_rows_h.append({
             'match_id': int(test_df.iloc[i]['match_id']) if 'match_id' in test_df.columns else None,
             'home_team': test_features.iloc[i]['home_team'] if 'home_team' in test_features.columns else None,
             'away_team': test_features.iloc[i]['away_team'] if 'away_team' in test_features.columns else None,
@@ -346,20 +435,20 @@ def run_evaluation(season: bool = False) -> None:
             'margin': float(margin_h[i]),
             'entropy_conf': float(entropy_h[i]),
         })
-    # Save enriched debug
-    pd.DataFrame(debug_rows).to_csv(os.path.join(out_dir, 'debug_eval.csv'), index=False)
+    # Save enriched debug for hybrid (canonical filename)
+    pd.DataFrame(debug_rows_h).to_csv(os.path.join(out_dir, 'debug_eval.csv'), index=False)
 
-    # Top/bottom cases
+    # Top/bottom cases for Hybrid
     def _safe_key(v: float) -> float:
         try:
             return float(v)
         except Exception:
             return float('nan')
-    correct = [r for r in debug_rows if r['actual'] == r['pred']]
-    wrong = [r for r in debug_rows if r['actual'] != r['pred']]
+    correct = [r for r in debug_rows_h if r['actual'] == r['pred']]
+    wrong = [r for r in debug_rows_h if r['actual'] != r['pred']]
     correct_sorted = sorted(correct, key=lambda r: _safe_key(r['confidence']), reverse=True)[:5]
     wrong_sorted = sorted(wrong, key=lambda r: _safe_key(r['confidence']), reverse=True)[:5]
-    worst_ptrue = sorted(debug_rows, key=lambda r: _safe_key(r['p_true']))[:5]
+    worst_ptrue = sorted(debug_rows_h, key=lambda r: _safe_key(r['p_true']))[:5]
 
     print("\n" + "-"*80)
     print("EXAMPLES (Hybrid)")
@@ -380,10 +469,116 @@ def run_evaluation(season: bool = False) -> None:
             teams = f"{r.get('home_team','?')} - {r.get('away_team','?')}"
             print(f"  {teams:30s}  act={r['actual']}  p_true={r['p_true']:.3f}  pred={r['pred']}  conf={r['confidence']:.3f}")
 
+    # Build detailed rows and examples for ML-only
+    max_prob_m, margin_m, entropy_m, combined_m = _confidence_bundle(P_m)
+    debug_rows_m: List[Dict] = []
+    for i in range(len(test_df)):
+        actual_lab = y_true[i]
+        true_idx = mapping.get(actual_lab, -1)
+        p_true_m = float(P_m[i, true_idx]) if true_idx >= 0 else float('nan')
+        debug_rows_m.append({
+            'match_id': int(test_df.iloc[i]['match_id']) if 'match_id' in test_df.columns else None,
+            'home_team': test_features.iloc[i]['home_team'] if 'home_team' in test_features.columns else None,
+            'away_team': test_features.iloc[i]['away_team'] if 'away_team' in test_features.columns else None,
+            'actual': actual_lab,
+            'pred': LABELS_ORDER[int(np.argmax(P_m[i]))],
+            'pH': float(P_m[i, 0]),
+            'pD': float(P_m[i, 1]),
+            'pA': float(P_m[i, 2]),
+            'p_true': p_true_m,
+            'points': int(pts_m[i]),
+            'confidence': float(combined_m[i]),
+            'margin': float(margin_m[i]),
+            'entropy_conf': float(entropy_m[i]),
+        })
+    pd.DataFrame(debug_rows_m).to_csv(os.path.join(out_dir, 'debug_eval_ml.csv'), index=False)
+
+    correct_m = [r for r in debug_rows_m if r['actual'] == r['pred']]
+    wrong_m = [r for r in debug_rows_m if r['actual'] != r['pred']]
+    correct_sorted_m = sorted(correct_m, key=lambda r: _safe_key(r['confidence']), reverse=True)[:5]
+    wrong_sorted_m = sorted(wrong_m, key=lambda r: _safe_key(r['confidence']), reverse=True)[:5]
+    worst_ptrue_m = sorted(debug_rows_m, key=lambda r: _safe_key(r['p_true']))[:5]
+
+    print("\n" + "-"*80)
+    print("EXAMPLES (ML-only)")
+    print("-"*80)
+    if correct_sorted_m:
+        print("Top 5 confident CORRECT predictions:")
+        for r in correct_sorted_m:
+            teams = f"{r.get('home_team','?')} - {r.get('away_team','?')}"
+            print(f"  {teams:30s}  pred={r['pred']} act={r['actual']}  conf={r['confidence']:.3f}  points={r['points']}")
+    if wrong_sorted_m:
+        print("\nTop 5 confident WRONG predictions:")
+        for r in wrong_sorted_m:
+            teams = f"{r.get('home_team','?')} - {r.get('away_team','?')}"
+            print(f"  {teams:30s}  pred={r['pred']} act={r['actual']}  conf={r['confidence']:.3f}  p_true={r['p_true']:.3f}")
+    if worst_ptrue_m:
+        print("\nLowest probability assigned to TRUE outcome (worst log-loss cases):")
+        for r in worst_ptrue_m:
+            teams = f"{r.get('home_team','?')} - {r.get('away_team','?')}"
+            print(f"  {teams:30s}  act={r['actual']}  p_true={r['p_true']:.3f}  pred={r['pred']}  conf={r['confidence']:.3f}")
+
+    # Build detailed rows and examples for Poisson-only
+    max_prob_p, margin_p, entropy_p, combined_p = _confidence_bundle(P_p)
+    debug_rows_p: List[Dict] = []
+    for i in range(len(test_df)):
+        actual_lab = y_true[i]
+        true_idx = mapping.get(actual_lab, -1)
+        p_true_p = float(P_p[i, true_idx]) if true_idx >= 0 else float('nan')
+        debug_rows_p.append({
+            'match_id': int(test_df.iloc[i]['match_id']) if 'match_id' in test_df.columns else None,
+            'home_team': test_features.iloc[i]['home_team'] if 'home_team' in test_features.columns else None,
+            'away_team': test_features.iloc[i]['away_team'] if 'away_team' in test_features.columns else None,
+            'actual': actual_lab,
+            'pred': LABELS_ORDER[int(np.argmax(P_p[i]))],
+            'pH': float(P_p[i, 0]),
+            'pD': float(P_p[i, 1]),
+            'pA': float(P_p[i, 2]),
+            'p_true': p_true_p,
+            'points': int(pts_p[i]),
+            'confidence': float(combined_p[i]),
+            'margin': float(margin_p[i]),
+            'entropy_conf': float(entropy_p[i]),
+        })
+    pd.DataFrame(debug_rows_p).to_csv(os.path.join(out_dir, 'debug_eval_poisson.csv'), index=False)
+
+    correct_p = [r for r in debug_rows_p if r['actual'] == r['pred']]
+    wrong_p = [r for r in debug_rows_p if r['actual'] != r['pred']]
+    correct_sorted_p = sorted(correct_p, key=lambda r: _safe_key(r['confidence']), reverse=True)[:5]
+    wrong_sorted_p = sorted(wrong_p, key=lambda r: _safe_key(r['confidence']), reverse=True)[:5]
+    worst_ptrue_p = sorted(debug_rows_p, key=lambda r: _safe_key(r['p_true']))[:5]
+
+    print("\n" + "-"*80)
+    print("EXAMPLES (Poisson-only)")
+    print("-"*80)
+    if correct_sorted_p:
+        print("Top 5 confident CORRECT predictions:")
+        for r in correct_sorted_p:
+            teams = f"{r.get('home_team','?')} - {r.get('away_team','?')}"
+            print(f"  {teams:30s}  pred={r['pred']} act={r['actual']}  conf={r['confidence']:.3f}  points={r['points']}")
+    if wrong_sorted_p:
+        print("\nTop 5 confident WRONG predictions:")
+        for r in wrong_sorted_p:
+            teams = f"{r.get('home_team','?')} - {r.get('away_team','?')}"
+            print(f"  {teams:30s}  pred={r['pred']} act={r['actual']}  conf={r['confidence']:.3f}  p_true={r['p_true']:.3f}")
+    if worst_ptrue_p:
+        print("\nLowest probability assigned to TRUE outcome (worst log-loss cases):")
+        for r in worst_ptrue_p:
+            teams = f"{r.get('home_team','?')} - {r.get('away_team','?')}"
+            print(f"  {teams:30s}  act={r['actual']}  p_true={r['p_true']:.3f}  pred={r['pred']}  conf={r['confidence']:.3f}")
+
     # Calibration (ECE) snapshot for hybrid
     ece_h = metrics_h.get('ece')
     if isinstance(ece_h, dict):
         print("\nECE by class (Hybrid): " + ", ".join([f"{lab}={float(ece_h.get(lab, float('nan'))):.4f}" for lab in LABELS_ORDER]))
+    # ECE for ML-only
+    ece_m = metrics_m.get('ece')
+    if isinstance(ece_m, dict):
+        print("ECE by class (ML-only): " + ", ".join([f"{lab}={float(ece_m.get(lab, float('nan'))):.4f}" for lab in LABELS_ORDER]))
+    # ECE for Poisson-only
+    ece_p = metrics_p.get('ece')
+    if isinstance(ece_p, dict):
+        print("ECE by class (Poisson-only): " + ", ".join([f"{lab}={float(ece_p.get(lab, float('nan'))):.4f}" for lab in LABELS_ORDER]))
 
     # Final summary
     print("\n" + "="*80)
