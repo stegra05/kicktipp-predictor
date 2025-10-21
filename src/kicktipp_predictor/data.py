@@ -391,7 +391,8 @@ class DataLoader:
 
         # Home side merge
         home_hist = hist_merge.rename(columns={'team': 'home_team'})
-        home_hist = home_hist.sort_values(['home_team', 'date'])
+        # merge_asof requires the right keys (on=date) to be globally sorted by 'date'
+        home_hist = home_hist.sort_values(['date'])
         features_df = pd.merge_asof(
             upcoming.sort_values('date'),
             home_hist,
@@ -406,7 +407,8 @@ class DataLoader:
 
         # Away side merge
         away_hist = hist_merge.rename(columns={'team': 'away_team'})
-        away_hist = away_hist.sort_values(['away_team', 'date'])
+        # Ensure global sort by 'date' for merge_asof
+        away_hist = away_hist.sort_values(['date'])
         features_df = pd.merge_asof(
             features_df.sort_values('date'),
             away_hist,
@@ -430,9 +432,11 @@ class DataLoader:
         if ewma_long_df is not None and not ewma_long_df.empty:
             # Prepare EWMA frames
             ewm_home = ewma_long_df.rename(columns={'team': 'home_team'})[['home_team', 'date', 'goals_for_ewm5', 'goals_against_ewm5', 'goal_diff_ewm5', 'points_ewm5']]
-            ewm_home = ewm_home.sort_values(['home_team', 'date'])
+            # Ensure global sort by 'date' for merge_asof
+            ewm_home = ewm_home.sort_values(['date'])
             ewm_away = ewma_long_df.rename(columns={'team': 'away_team'})[['away_team', 'date', 'goals_for_ewm5', 'goals_against_ewm5', 'goal_diff_ewm5', 'points_ewm5']]
-            ewm_away = ewm_away.sort_values(['away_team', 'date'])
+            # Ensure global sort by 'date' for merge_asof
+            ewm_away = ewm_away.sort_values(['date'])
 
             features_df = pd.merge_asof(
                 features_df.sort_values('date'), ewm_home,
