@@ -227,15 +227,15 @@ class MatchPredictor:
 
         # Fit with early stopping and appropriate eval metric
         esr = int(getattr(self.config.model, 'goals_early_stopping_rounds', 25))
-        self.home_goals_model.set_params(eval_metric='poisson-nloglik')
-        self.away_goals_model.set_params(eval_metric='poisson-nloglik')
+        self.home_goals_model.set_params(eval_metric='poisson-nloglik', early_stopping_rounds=esr)
+        self.away_goals_model.set_params(eval_metric='poisson-nloglik', early_stopping_rounds=esr)
 
         if sw_tr is not None:
-            self.home_goals_model.fit(X_tr, yh_tr, sample_weight=sw_tr, eval_set=[(X_val, yh_val)], early_stopping_rounds=esr, verbose=False)
-            self.away_goals_model.fit(X_tr, ya_tr, sample_weight=sw_tr, eval_set=[(X_val, ya_val)], early_stopping_rounds=esr, verbose=False)
+            self.home_goals_model.fit(X_tr, yh_tr, sample_weight=sw_tr, eval_set=[(X_val, yh_val)], verbose=False)
+            self.away_goals_model.fit(X_tr, ya_tr, sample_weight=sw_tr, eval_set=[(X_val, ya_val)], verbose=False)
         else:
-            self.home_goals_model.fit(X_tr, yh_tr, eval_set=[(X_val, yh_val)], early_stopping_rounds=esr, verbose=False)
-            self.away_goals_model.fit(X_tr, ya_tr, eval_set=[(X_val, ya_val)], early_stopping_rounds=esr, verbose=False)
+            self.home_goals_model.fit(X_tr, yh_tr, eval_set=[(X_val, yh_val)], verbose=False)
+            self.away_goals_model.fit(X_tr, ya_tr, eval_set=[(X_val, ya_val)], verbose=False)
 
         elapsed = time.perf_counter() - start
         self._log(f"Goal regressors trained in {elapsed:.2f}s")

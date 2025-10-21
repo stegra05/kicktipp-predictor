@@ -107,3 +107,5 @@ data/models/
 *~
 
 *.log
+best_params.yaml
+.gitignore
