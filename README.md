@@ -94,7 +94,7 @@ All functionality is available through the CLI:
 
 - **`train [--seasons-back N]`**: Train models on historical data (default: 3 seasons)
 - **`predict [--days N | --matchday N]`**: Generate predictions for upcoming matches
-- **`evaluate`**: Evaluate model performance on test data
+- **`evaluate [--season] [--dynamic] [--retrain-every N]`**: Evaluate on a test split or across the current season; with `--dynamic`, retrain every N matchdays (default: 1)
 - **`web [--host HOST] [--port PORT]`**: Run the Flask web UI
 - **`tune [options]`**: Hyperparameter tuning (wrapper around `experiments/auto_tune.py`)
 
@@ -118,6 +118,22 @@ python3 -m kicktipp_predictor predict --matchday 20
 # Predict specific matchday with parallel scoreline selection
 python3 -m kicktipp_predictor predict --matchday 20 --workers 4
 ```
+
+### Season Evaluation (Static vs Dynamic)
+```bash
+# Static season evaluation (train-once predictor state; evaluates finished matchdays)
+python3 -m kicktipp_predictor evaluate --season
+
+# Dynamic season evaluation (expanding window): retrain before each evaluated matchday
+python3 -m kicktipp_predictor evaluate --season --dynamic
+
+# Dynamic with less frequent retraining (e.g., every 4 matchdays)
+python3 -m kicktipp_predictor evaluate --season --dynamic --retrain-every 4
+```
+
+Notes:
+- `--dynamic` mirrors real usage more closely by incrementally retraining as the season unfolds.
+- This is significantly slower (retraining many times). Use `--retrain-every N` to control cadence.
 
 ## System Architecture
 

@@ -121,6 +121,8 @@ def predict(
 def evaluate(
     detailed: bool = typer.Option(False, help="Run detailed evaluation with calibration and plots"),
     season: bool = typer.Option(False, help="Evaluate performance across the current season (finished matches)"),
+    dynamic: bool = typer.Option(False, help="Enable expanding-window retraining during season evaluation"),
+    retrain_every: int = typer.Option(1, help="Retrain every N matchdays when --dynamic is set"),
 ):
     """Evaluate predictor performance on test data."""
     from kicktipp_predictor.data import DataLoader
@@ -145,7 +147,7 @@ def evaluate(
 
     if season:
         from kicktipp_predictor.models.evaluate import run_evaluation
-        run_evaluation(season=True)
+        run_evaluation(season=True, dynamic=dynamic, retrain_every=retrain_every)
         return
 
     if detailed:

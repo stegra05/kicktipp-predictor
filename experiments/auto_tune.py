@@ -141,7 +141,7 @@ def _objective_builder(base_features_df, all_matches, n_splits: int, omp_threads
         # Search space
         params: Dict[str, float] = {
             # Class weighting
-            'draw_boost': trial.suggest_float('draw_boost', 1.0, 2.5, step=0.05),
+            'draw_boost': trial.suggest_float('draw_boost', 1.4, 2.2, step=0.1),
             # Outcome XGB
             'outcome_n_estimators': trial.suggest_int('outcome_n_estimators', 100, 600, step=25),
             'outcome_max_depth': trial.suggest_int('outcome_max_depth', 3, 10),

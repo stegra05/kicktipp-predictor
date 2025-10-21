@@ -20,7 +20,7 @@ from kicktipp_predictor.metrics import (
 )
 
 
-def run() -> None:
+def run(dynamic: bool = False, retrain_every: int = 1) -> None:
     import sys
     from collections import defaultdict, Counter
     import pandas as pd
@@ -67,47 +67,101 @@ def run() -> None:
     # Get historical data for feature context (finished-only; augment with previous season if sparse)
     print("Fetching historical data for context...")
     historical_matches_all = data_loader.fetch_season_matches(current_season)
-    historical_matches = [m for m in historical_matches_all if m.get('is_finished')]
-    if len(historical_matches) < 50:
+    historical_finished = [m for m in historical_matches_all if m.get('is_finished')]
+    if len(historical_finished) < 50:
         print("Fetching additional finished matches from previous season...")
         prev_season_matches = data_loader.fetch_season_matches(current_season - 1)
-        historical_matches.extend([m for m in prev_season_matches if m.get('is_finished')])
+        historical_finished.extend([m for m in prev_season_matches if m.get('is_finished')])
 
-    for matchday in range(first_matchday, last_matchday + 1):
-        print(f"--- Processing Matchday {matchday} ---")
+    if not dynamic:
+        # Original train-once prediction loop using a fixed historical context
+        historical_matches = list(historical_finished)
+        for matchday in range(first_matchday, last_matchday + 1):
+            print(f"--- Processing Matchday {matchday} ---")
 
-        # Get matches for the current matchday
-        matchday_matches = [m for m in finished_matches if m['matchday'] == matchday]
-        if not matchday_matches:
-            print(f"No finished matches for matchday {matchday}.")
-            continue
+            matchday_matches = [m for m in finished_matches if m['matchday'] == matchday]
+            if not matchday_matches:
+                print(f"No finished matches for matchday {matchday}.")
+                continue
 
-        # Create features
-        features_df = data_loader.create_prediction_features(
-            matchday_matches, historical_matches
-        )
-
-        if features_df.empty:
-            print(f"Could not generate features for matchday {matchday}.")
-            continue
-
-        # Generate predictions
-        predictions = predictor.predict(features_df)
-
-        # Record predictions and update results immediately
-        for pred, actual in zip(predictions, matchday_matches):
-            points = tracker._calculate_points(
-                pred['predicted_home_score'], pred['predicted_away_score'],
-                actual['home_score'], actual['away_score']
+            features_df = data_loader.create_prediction_features(
+                matchday_matches, historical_matches
             )
-            pred['actual_home_score'] = actual['home_score']
-            pred['actual_away_score'] = actual['away_score']
-            pred['points_earned'] = points
-            pred['is_evaluated'] = True
-            pred['matchday'] = matchday
-            all_predictions.append(pred)
 
-        print(f"Generated and evaluated {len(predictions)} predictions for matchday {matchday}")
+            if features_df.empty:
+                print(f"Could not generate features for matchday {matchday}.")
+                continue
+
+            predictions = predictor.predict(features_df)
+
+            for pred, actual in zip(predictions, matchday_matches):
+                points = tracker._calculate_points(
+                    pred['predicted_home_score'], pred['predicted_away_score'],
+                    actual['home_score'], actual['away_score']
+                )
+                pred['actual_home_score'] = actual['home_score']
+                pred['actual_away_score'] = actual['away_score']
+                pred['points_earned'] = points
+                pred['is_evaluated'] = True
+                pred['matchday'] = matchday
+                all_predictions.append(pred)
+
+            print(f"Generated and evaluated {len(predictions)} predictions for matchday {matchday}")
+    else:
+        # Dynamic expanding-window: retrain and grow context each matchday
+        initial_training_matches = [m for m in historical_finished if m['matchday'] < first_matchday]
+        cumulative_training_matches = list(initial_training_matches)
+
+        for matchday in range(first_matchday, last_matchday + 1):
+            print(f"\n--- Processing Matchday {matchday} ---")
+
+            # Retrain according to schedule
+            try:
+                every = max(1, int(retrain_every))
+            except Exception:
+                every = 1
+            if (matchday - first_matchday) % every == 0:
+                print(f"Retraining model with {len(cumulative_training_matches)} matches...")
+                train_df = data_loader.create_features_from_matches(cumulative_training_matches)
+                if not train_df.empty:
+                    predictor.train(train_df)
+                    print("Model retrained successfully.")
+                else:
+                    print("No training features available yet; skipping retrain.")
+
+            matchday_matches = [m for m in finished_matches if m['matchday'] == matchday]
+            if not matchday_matches:
+                print(f"No finished matches for matchday {matchday}.")
+                continue
+
+            features_df = data_loader.create_prediction_features(
+                matchday_matches, cumulative_training_matches
+            )
+
+            if features_df.empty:
+                print(f"Could not generate features for matchday {matchday}.")
+                # still expand training window with these finished matches
+                cumulative_training_matches.extend(matchday_matches)
+                continue
+
+            predictions = predictor.predict(features_df)
+
+            for pred, actual in zip(predictions, matchday_matches):
+                points = tracker._calculate_points(
+                    pred['predicted_home_score'], pred['predicted_away_score'],
+                    actual['home_score'], actual['away_score']
+                )
+                pred['actual_home_score'] = actual['home_score']
+                pred['actual_away_score'] = actual['away_score']
+                pred['points_earned'] = points
+                pred['is_evaluated'] = True
+                pred['matchday'] = matchday
+                all_predictions.append(pred)
+
+            print(f"Evaluated {len(predictions)} predictions for matchday {matchday}")
+
+            # Expand training context with the latest finished matches
+            cumulative_training_matches.extend(matchday_matches)
 
     if not all_predictions:
         print("\nNo predictions could be generated for the season.")
@@ -124,14 +178,9 @@ def run() -> None:
     # ------------------------------------------------------------------
     # Expanded season analysis (align with non-season evaluation depth)
     # ------------------------------------------------------------------
-    # Build a unified features dataframe for all finished matches
-    season_df = pd.DataFrame(finished_matches)
-    features_all = data_loader.create_prediction_features(
-        finished_matches, historical_matches
-    )
-    if features_all is None or len(features_all) == 0:
-        print("\nUnable to build features for season-level analysis.")
-        return
+    # When dynamic mode is enabled, compute metrics directly from collected predictions.
+    # Otherwise, rebuild features for all finished matches and re-predict once.
+    use_dynamic_preds = bool(dynamic)
 
     # Helper builders
     def _actual_labels(df) -> list:
@@ -163,37 +212,74 @@ def run() -> None:
         pa = np.asarray([int(p.get('predicted_away_score', 0)) for p in preds], dtype=int)
         return ph, pa
 
-    # Generate season-wide predictions
-    print("\nGenerating season-wide predictions...")
-    preds_all = predictor.predict(features_all)
-
-    # Ground truth aligned to features_all order
-    id_to_actual = {m['match_id']: (m['home_score'], m['away_score']) for m in finished_matches if m.get('match_id') is not None}
-    actual_home_list = []
-    actual_away_list = []
-    y_true = []
-    for _, row in features_all.iterrows():
-        mid = int(row['match_id']) if 'match_id' in features_all.columns else None
-        if mid is None or mid not in id_to_actual:
-            # Skip if actual not found (shouldn't happen); keep arrays aligned by adding NaNs placeholder
-            actual_home_list.append(np.nan)
-            actual_away_list.append(np.nan)
-            y_true.append('D')
-        else:
-            ah_i, aa_i = id_to_actual[mid]
-            actual_home_list.append(int(ah_i))
-            actual_away_list.append(int(aa_i))
-            if ah_i > aa_i:
+    if use_dynamic_preds:
+        preds_all = list(all_predictions)
+        # Build ground truth and probabilities from stored predictions
+        ah = np.asarray([int(p.get('actual_home_score', 0)) for p in preds_all], dtype=int)
+        aa = np.asarray([int(p.get('actual_away_score', 0)) for p in preds_all], dtype=int)
+        y_true = []
+        for i in range(len(preds_all)):
+            if ah[i] > aa[i]:
                 y_true.append('H')
-            elif aa_i > ah_i:
+            elif aa[i] > ah[i]:
                 y_true.append('A')
             else:
                 y_true.append('D')
-    ah = np.asarray(actual_home_list, dtype=int)
-    aa = np.asarray(actual_away_list, dtype=int)
 
-    # Probability matrix
-    P = _proba_from_preds(preds_all)
+        P = np.array([
+            [float(p.get('home_win_probability', 1/3)), float(p.get('draw_probability', 1/3)), float(p.get('away_win_probability', 1/3))]
+            for p in preds_all
+        ], dtype=float)
+        P = np.clip(P, 1e-15, 1.0)
+        P = P / P.sum(axis=1, keepdims=True)
+
+        ph = np.asarray([int(p.get('predicted_home_score', 0)) for p in preds_all], dtype=int)
+        pa = np.asarray([int(p.get('predicted_away_score', 0)) for p in preds_all], dtype=int)
+        pts = compute_points(ph, pa, ah, aa)
+    else:
+        # Build a unified features dataframe for all finished matches
+        season_df = pd.DataFrame(finished_matches)
+        features_all = data_loader.create_prediction_features(
+            finished_matches, historical_finished
+        )
+        if features_all is None or len(features_all) == 0:
+            print("\nUnable to build features for season-level analysis.")
+            return
+
+        # Generate season-wide predictions
+        print("\nGenerating season-wide predictions...")
+        preds_all = predictor.predict(features_all)
+
+        # Ground truth aligned to features_all order
+        id_to_actual = {m['match_id']: (m['home_score'], m['away_score']) for m in finished_matches if m.get('match_id') is not None}
+        actual_home_list = []
+        actual_away_list = []
+        y_true = []
+        for _, row in features_all.iterrows():
+            mid = int(row['match_id']) if 'match_id' in features_all.columns else None
+            if mid is None or mid not in id_to_actual:
+                actual_home_list.append(np.nan)
+                actual_away_list.append(np.nan)
+                y_true.append('D')
+            else:
+                ah_i, aa_i = id_to_actual[mid]
+                actual_home_list.append(int(ah_i))
+                actual_away_list.append(int(aa_i))
+                if ah_i > aa_i:
+                    y_true.append('H')
+                elif aa_i > ah_i:
+                    y_true.append('A')
+                else:
+                    y_true.append('D')
+        ah = np.asarray(actual_home_list, dtype=int)
+        aa = np.asarray(actual_away_list, dtype=int)
+
+        # Probability matrix
+        P = _proba_from_preds(preds_all)
+
+        # Scores and points
+        ph, pa = _scores_from_preds(preds_all)
+        pts = compute_points(ph, pa, ah, aa)
 
     # Label distribution and sanity
     print("\n" + "-"*80)

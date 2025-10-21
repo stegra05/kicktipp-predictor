@@ -21,10 +21,10 @@ import os
 from typing import Dict, List, Tuple
 
 
-def run_evaluation(season: bool = False) -> None:
+def run_evaluation(season: bool = False, dynamic: bool = False, retrain_every: int = 1) -> None:
     if season:
         from kicktipp_predictor.evaluate_season_entry import run as season_eval
-        season_eval()
+        season_eval(dynamic=dynamic, retrain_every=retrain_every)
         return
 
     print("="*80)
