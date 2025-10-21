@@ -226,22 +226,37 @@ These parameters can be tuned using the `tune` command (see Advanced Usage below
 ### Hyperparameter Tuning (Optuna-only, PPG objective)
 Use the CLI `tune` command to optimize hyperparameters via time-series CV using Optuna. The objective is average Kicktipp points per game (PPG). Best params are written to `config/best_params.yaml`.
 
-Run the tuner:
+Serial example (no storage required):
 ```bash
-python3 -m kicktipp_predictor tune --n-trials 200 --n-splits 3 --n-jobs 4 --omp-threads 2
+python3 -m kicktipp_predictor tune --n-trials 200 --n-splits 3 --workers 1
 ```
 
-**Arguments:**
-- `--n-trials <number>`: Number of Optuna trials.
+Parallel example (database-coordinated workers):
+```bash
+python3 -m kicktipp_predictor tune \
+  --n-trials 200 \
+  --n-splits 3 \
+  --workers 8 \
+  --storage "sqlite:////absolute/path/kicktipp_study.db?timeout=60" \
+  --save-final-model --seasons-back 5
+```
+
+Notes:
+- `--n-trials` is the total trial budget across all workers (evenly split).
+- `--workers` controls process-level parallelism. Each worker is single-process internally to avoid nested threading issues.
+- When `--workers > 1`, a shared `--storage` is required (SQLite URL with `?timeout=60` recommended, or a remote RDBMS). A 0-trial initialization run is handled automatically by the CLI.
+
+Common options:
+- `--n-trials <number>`: Total Optuna trials across all workers.
 - `--n-splits <number>`: Time-series CV folds.
-- `--n-jobs <number>`: Parallel Optuna workers (set >0 for multi-processing).
-- `--omp-threads <number>`: Threads per worker for BLAS/OMP/XGBoost.
+- `--workers <number>`: Number of worker processes (default: 1).
+- `--storage <url>`: Optuna storage URL (required if `--workers > 1`).
 - `--save-final-model`: Train and save a model with the best parameters after tuning.
 - `--seasons-back <number>`: Historical seasons for final training when saving the model.
 
-Advanced users can still call the underlying script directly:
+Advanced users can still call the underlying worker script directly (single-process worker):
 ```bash
-python experiments/auto_tune.py --n-trials 200 --n-splits 3 --n-jobs 4 --omp-threads 2
+python experiments/auto_tune.py --n-trials 200 --n-splits 3 --storage "sqlite:////absolute/path/kicktipp_study.db?timeout=60"
 ```
 
 The tuner outputs the best-performing parameters to `config/best_params.yaml`, which are automatically used by `MatchPredictor`.

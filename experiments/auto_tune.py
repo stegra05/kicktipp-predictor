@@ -196,7 +196,8 @@ def main():
     total_trials = int(max(0, args.n_trials))
     total_cv_trainings = total_trials * int(max(1, args.n_splits))
     if args.verbose:
-        print(f"Planned: trials={total_trials} | cv-trainings={total_cv_trainings} | workers={args.n_jobs or 1} x threads={args.omp_threads or 1}")
+        # Force single worker per process to avoid nested parallelism
+        print(f"Planned: trials={total_trials} | cv-trainings={total_cv_trainings} | workers=1 x threads={args.omp_threads or 1}")
 
     # Verbosity reflects CLI flag only (quiet by default, even with multiple jobs)
     effective_verbose = bool(args.verbose)
@@ -274,7 +275,7 @@ def main():
     study.optimize(
         objective,
         n_trials=args.n_trials,
-        n_jobs=args.n_jobs if args.n_jobs and args.n_jobs > 0 else 1,
+        n_jobs=1,  # enforce single worker per process to avoid nested parallelism issues
         callbacks=[_progress_cb],
         show_progress_bar=False,
     )
@@ -284,7 +285,12 @@ def main():
     if args.verbose:
         print(f"Study complete in {duration:.1f}s. Best PPG={study.best_value:.4f}")
 
-    # Persist best params
+    # Persist best params if any trials executed
+    if study.best_trial is None:
+        if args.verbose:
+            print("No trials executed; skipping best-params save and final model training.")
+        return
+
     best_params = dict(study.best_params)
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     cfg_dir = os.path.join(project_root, 'config')

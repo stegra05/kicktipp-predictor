@@ -185,19 +185,18 @@ def web(host: str = "127.0.0.1", port: int = 8000):
 
 @app.command()
 def tune(
-    n_trials: int = typer.Option(100, help="Optuna trials"),
+    n_trials: int = typer.Option(100, help="Total Optuna trials across all workers"),
     n_splits: int = typer.Option(3, help="TimeSeriesSplit folds"),
-    n_jobs: int = typer.Option(0, help="Parallel Optuna workers (0=serial)"),
-    omp_threads: int = typer.Option(1, help="Threads per worker for BLAS/OMP"),
+    workers: int = typer.Option(1, help="Number of parallel worker processes"),
     save_final_model: bool = typer.Option(False, help="Train final model on full data and save"),
     seasons_back: int = typer.Option(3, help="Past seasons to include for final training"),
     verbose: bool = typer.Option(False, help="Enable verbose inner logs during tuning"),
-    storage: str | None = typer.Option(None, help="Optuna storage URL for multi-process tuning (e.g., sqlite:///study.db)"),
+    storage: str | None = typer.Option(None, help="Optuna storage URL for multi-process tuning (e.g., sqlite:////abs/path/study.db?timeout=60)"),
     study_name: str | None = typer.Option(None, help="Optuna study name when using storage"),
     pruner: str = typer.Option("median", help="Pruner: none|median|hyperband"),
     pruner_startup_trials: int = typer.Option(20, help="Trials before enabling pruning (median)"),
 ):
-    """Run Optuna hyperparameter tuning optimizing PPG (wrapper around experiments/auto_tune.py)."""
+    """Run Optuna tuning via DB-coordinated multi-worker orchestration."""
     import sys
     import subprocess
     from pathlib import Path
@@ -209,32 +208,85 @@ def tune(
         typer.echo(f"Could not find {autotune_path}. Run from a checkout with experiments present.")
         raise typer.Exit(code=1)
 
-    cmd = [
-        sys.executable,
-        str(autotune_path),
-        "--n-trials", str(n_trials),
-        "--n-splits", str(n_splits),
-        "--n-jobs", str(n_jobs),
-        "--omp-threads", str(omp_threads),
-    ]
-    if save_final_model:
-        cmd.append("--save-final-model")
-    cmd += ["--seasons-back", str(seasons_back)]
-    if verbose:
-        cmd.append("--verbose")
-    if storage:
-        cmd += ["--storage", storage]
-    if study_name:
-        cmd += ["--study-name", study_name]
-    if pruner:
-        cmd += ["--pruner", pruner]
-    if pruner_startup_trials is not None:
-        cmd += ["--pruner-startup-trials", str(pruner_startup_trials)]
+    if workers < 1:
+        workers = 1
 
-    # Stream output
-    proc = subprocess.Popen(cmd, cwd=str(pkg_root))
-    proc.wait()
-    raise typer.Exit(code=proc.returncode)
+    # Require storage for multi-worker coordination
+    if workers > 1 and not storage:
+        typer.echo("When --workers > 1, you must provide --storage (e.g., sqlite:////abs/path/study.db?timeout=60)")
+        raise typer.Exit(code=2)
+
+    def base_args(trials: int) -> list[str]:
+        args = [
+            sys.executable,
+            str(autotune_path),
+            "--n-trials", str(max(0, int(trials))),
+            "--n-splits", str(n_splits),
+            # Worker script enforces single-thread internally; no n-jobs or omp-threads here
+        ]
+        if verbose:
+            args.append("--verbose")
+        if storage:
+            args += ["--storage", storage]
+        if study_name:
+            args += ["--study-name", study_name]
+        if pruner:
+            args += ["--pruner", pruner]
+        if pruner_startup_trials is not None:
+            args += ["--pruner-startup-trials", str(pruner_startup_trials)]
+        return args
+
+    # Serial execution
+    if workers == 1:
+        cmd = base_args(n_trials)
+        if save_final_model:
+            cmd += ["--save-final-model", "--seasons-back", str(seasons_back)]
+        proc = subprocess.Popen(cmd, cwd=str(pkg_root))
+        proc.wait()
+        raise typer.Exit(code=proc.returncode)
+
+    # Multi-worker execution
+    # 1) Initialize the study/db with a 0-trial run
+    init_cmd = base_args(0)
+    init_proc = subprocess.Popen(init_cmd, cwd=str(pkg_root))
+    init_proc.wait()
+    if init_proc.returncode != 0:
+        typer.echo("Failed to initialize study/storage. Aborting.")
+        raise typer.Exit(code=init_proc.returncode)
+
+    # 2) Split total trials evenly across workers
+    base = n_trials // workers
+    rem = n_trials % workers
+    allocations = [base + (1 if i < rem else 0) for i in range(workers)]
+
+    # 3) Launch worker subprocesses
+    procs: list[subprocess.Popen] = []
+    for trials in allocations:
+        if trials <= 0:
+            continue
+        cmd = base_args(trials)
+        # do not pass save-final-model to workers
+        p = subprocess.Popen(cmd, cwd=str(pkg_root))
+        procs.append(p)
+
+    # 4) Wait for all workers
+    exit_code = 0
+    for p in procs:
+        p.wait()
+        if p.returncode != 0 and exit_code == 0:
+            exit_code = p.returncode
+
+    if exit_code != 0:
+        raise typer.Exit(code=exit_code)
+
+    # 5) Optionally train final model once using best params
+    if save_final_model:
+        final_cmd = base_args(0) + ["--save-final-model", "--seasons-back", str(seasons_back)]
+        final_proc = subprocess.Popen(final_cmd, cwd=str(pkg_root))
+        final_proc.wait()
+        raise typer.Exit(code=final_proc.returncode)
+
+    raise typer.Exit(code=0)
 
 
 if __name__ == "__main__":
