@@ -118,11 +118,12 @@ class MatchPredictor:
             self._log(f"Not enough training data. Need at least {self.config.model.min_training_matches} matches.")
             return
 
-        # Identify feature columns
+        # Identify feature columns by excluding non-feature and non-numeric types
         exclude_cols = ['match_id', 'home_team', 'away_team', 'home_score',
-                       'away_score', 'goal_difference', 'result', 'date']
-        self.feature_columns = [col for col in training_data.columns
-                               if col not in exclude_cols]
+                       'away_score', 'goal_difference', 'result']
+        potential_features = training_data.drop(columns=exclude_cols, errors='ignore')
+        # Keep only numeric and boolean dtypes (guards against datetime/object columns)
+        self.feature_columns = potential_features.select_dtypes(include=[np.number, bool]).columns.tolist()
 
         X = training_data[self.feature_columns].fillna(0)
         y_home = training_data['home_score']
