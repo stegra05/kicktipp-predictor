@@ -28,9 +28,9 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # Local imports
-from src.scraper.data_fetcher import DataFetcher
-from src.features.feature_engineering import FeatureEngineer
-from src.models.hybrid_predictor import HybridPredictor
+from kicktipp_predictor.core.scraper.data_fetcher import DataFetcher
+from kicktipp_predictor.core.features.feature_engineering import FeatureEngineer
+from kicktipp_predictor.models.hybrid_predictor import HybridPredictor
 
 try:
     import yaml  # type: ignore
