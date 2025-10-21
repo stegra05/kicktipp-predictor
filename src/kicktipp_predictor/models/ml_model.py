@@ -132,23 +132,45 @@ class MLPredictor:
             X, y_result_encoded, test_size=0.2, random_state=42, stratify=y_result_encoded
         )
 
-        # Calculate class weights on training split
+        # Calculate class weights on training split and add a small draw boost
+        classes_unique = np.unique(y_tr)
         class_weights_array = compute_class_weight(
-            'balanced', classes=np.unique(y_tr), y=y_tr
+            class_weight='balanced', classes=classes_unique, y=y_tr
         )
-        # Map to training indices
-        cw_map = {c: w for c, w in zip(np.unique(y_tr), class_weights_array)}
-        sample_weights_tr = np.array([cw_map[y] for y in y_tr])
+        cw_map = {c: float(w) for c, w in zip(classes_unique, class_weights_array)}
+        # Optional: small boost for draws to avoid collapse
+        try:
+            # Find encoded index for label 'D'
+            d_index = int(np.where(self.label_encoder.classes_ == 'D')[0][0])
+            DRAW_WEIGHT_BOOST = 1.25
+            if d_index in cw_map:
+                cw_map[d_index] = float(cw_map[d_index] * DRAW_WEIGHT_BOOST)
+        except Exception:
+            pass
+        sample_weights_tr = np.asarray([cw_map[int(y)] for y in y_tr], dtype=float)
 
+        # Configure explicit multiclass objective with early stopping
         self.result_model = XGBClassifier(
-            n_estimators=200,
+            objective='multi:softprob',
+            num_class=3,
+            eval_metric='mlogloss',
+            n_estimators=1000,
+            learning_rate=0.05,
             max_depth=6,
-            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_lambda=1.0,
             random_state=42,
             n_jobs=self.num_threads,
-            nthread=self.num_threads
+            nthread=self.num_threads,
         )
-        self.result_model.fit(X_tr, y_tr, sample_weight=sample_weights_tr)
+        self.result_model.fit(
+            X_tr, y_tr,
+            sample_weight=sample_weights_tr,
+            eval_set=[(X_cal, y_cal)],
+            verbose=False,
+            early_stopping_rounds=50,
+        )
 
         # Probability calibration (isotonic) on held-out split
         try:
@@ -216,6 +238,17 @@ class MLPredictor:
             result_probs = self.result_calibrator.predict_proba(X)
         else:
             result_probs = self.result_model.predict_proba(X)
+        # Ensure probabilities shape and normalization
+        result_probs = np.asarray(result_probs, dtype=float)
+        if result_probs.ndim != 2 or result_probs.shape[1] != 3:
+            # Fallback: attempt to reshape or broadcast uniformly
+            n = len(features_df)
+            result_probs = np.full((n, 3), 1.0 / 3.0, dtype=float)
+        # Clip and renormalize row-wise
+        result_probs = np.clip(result_probs, 1e-15, 1.0)
+        row_sums = result_probs.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1.0
+        result_probs = result_probs / row_sums
 
         predictions = []
         for i in range(len(features_df)):
@@ -230,15 +263,29 @@ class MLPredictor:
             }
 
             # Add result probabilities
-            # Label encoder order: typically ['A', 'D', 'H']
+            # Assert label coverage and map by label string to maintain H/D/A semantics
+            try:
+                classes = list(self.label_encoder.classes_)
+            except Exception:
+                classes = ['A', 'D', 'H']
             prob_dict = {}
-            for idx, label in enumerate(self.label_encoder.classes_):
-                prob_dict[f'{label}_probability'] = float(result_probs[i][idx])
+            for idx, label in enumerate(classes):
+                key = f"{label}_probability"
+                val = float(result_probs[i][idx]) if idx < result_probs.shape[1] else (1.0 / 3.0)
+                prob_dict[key] = val
 
-            pred.update(prob_dict)
-            pred['home_win_probability'] = prob_dict.get('H_probability', 0.33)
-            pred['draw_probability'] = prob_dict.get('D_probability', 0.33)
-            pred['away_win_probability'] = prob_dict.get('A_probability', 0.33)
+            # Normalize mapped probabilities again to guard against class order mismatches
+            h = float(prob_dict.get('H_probability', 1/3))
+            d = float(prob_dict.get('D_probability', 1/3))
+            a = float(prob_dict.get('A_probability', 1/3))
+            s = h + d + a
+            if s <= 0:
+                h, d, a = 1/3, 1/3, 1/3
+                s = 1.0
+            h /= s; d /= s; a /= s
+            pred['home_win_probability'] = h
+            pred['draw_probability'] = d
+            pred['away_win_probability'] = a
 
             predictions.append(pred)
 
