@@ -1,3 +1,3 @@
-"""Core domain modules: scraper and features."""
+"""Compatibility package for legacy imports (core)."""
 
 
