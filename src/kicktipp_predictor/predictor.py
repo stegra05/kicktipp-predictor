@@ -151,14 +151,19 @@ class MatchPredictor:
         self._log("Outcome distribution:", {k: f"{int(v)} ({v/total:.1%})" for k, v in counts.items()})
 
         # Train goal regressors
-        self._train_goal_models(X, y_home, y_away, sample_weights=time_weights_all)
+        dates_series = None
+        try:
+            dates_series = pd.to_datetime(training_data['date'])
+        except Exception:
+            pass
+        self._train_goal_models(X, y_home, y_away, sample_weights=time_weights_all, dates=dates_series)
 
         # Train outcome classifier
         self._train_outcome_model(X, y_result_encoded, time_weights_all)
 
         self._log("Training completed!")
 
-    def _train_goal_models(self, X: pd.DataFrame, y_home: pd.Series, y_away: pd.Series, sample_weights: np.ndarray | None = None):
+    def _train_goal_models(self, X: pd.DataFrame, y_home: pd.Series, y_away: pd.Series, sample_weights: np.ndarray | None = None, dates: pd.Series | None = None):
         """Train home and away goal regressors."""
         self._log("Training goal regressors...")
         start = time.perf_counter()
@@ -195,12 +200,41 @@ class MatchPredictor:
             n_jobs=self.config.model.n_jobs,
         )
 
-        if sample_weights is not None:
-            self.home_goals_model.fit(X, y_home, sample_weight=sample_weights)
-            self.away_goals_model.fit(X, y_away, sample_weight=sample_weights)
+        # Create validation split for early stopping
+        if dates is not None and len(dates) == len(X):
+            try:
+                dates = pd.to_datetime(dates)
+                cutoff = dates.quantile(0.9)
+                train_mask = dates < cutoff
+            except Exception:
+                idx_all = np.arange(len(X))
+                tr_idx, val_idx = train_test_split(idx_all, test_size=0.1, random_state=self.config.model.random_state)
+                train_mask = np.zeros(len(X), dtype=bool)
+                train_mask[tr_idx] = True
         else:
-            self.home_goals_model.fit(X, y_home)
-            self.away_goals_model.fit(X, y_away)
+            idx_all = np.arange(len(X))
+            tr_idx, val_idx = train_test_split(idx_all, test_size=0.1, random_state=self.config.model.random_state)
+            train_mask = np.zeros(len(X), dtype=bool)
+            train_mask[tr_idx] = True
+
+        X_tr, X_val = X[train_mask], X[~train_mask]
+        yh_tr, yh_val = y_home[train_mask], y_home[~train_mask]
+        ya_tr, ya_val = y_away[train_mask], y_away[~train_mask]
+        sw_tr = None
+        if sample_weights is not None:
+            sw_tr = sample_weights[train_mask]
+
+        # Fit with early stopping and appropriate eval metric
+        esr = int(getattr(self.config.model, 'goals_early_stopping_rounds', 25))
+        self.home_goals_model.set_params(eval_metric='poisson-nloglik')
+        self.away_goals_model.set_params(eval_metric='poisson-nloglik')
+
+        if sw_tr is not None:
+            self.home_goals_model.fit(X_tr, yh_tr, sample_weight=sw_tr, eval_set=[(X_val, yh_val)], early_stopping_rounds=esr, verbose=False)
+            self.away_goals_model.fit(X_tr, ya_tr, sample_weight=sw_tr, eval_set=[(X_val, ya_val)], early_stopping_rounds=esr, verbose=False)
+        else:
+            self.home_goals_model.fit(X_tr, yh_tr, eval_set=[(X_val, yh_val)], early_stopping_rounds=esr, verbose=False)
+            self.away_goals_model.fit(X_tr, ya_tr, eval_set=[(X_val, ya_val)], early_stopping_rounds=esr, verbose=False)
 
         elapsed = time.perf_counter() - start
         self._log(f"Goal regressors trained in {elapsed:.2f}s")

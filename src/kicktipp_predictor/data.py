@@ -213,7 +213,7 @@ class DataLoader:
     # =================================================================
 
     def create_features_from_matches(self, matches: List[Dict]) -> pd.DataFrame:
-        """Create feature dataset from match data.
+        """Create feature dataset from match data using vectorized pandas operations.
 
         Args:
             matches: List of match dictionaries.
@@ -221,36 +221,138 @@ class DataLoader:
         Returns:
             DataFrame with features and target variables.
         """
-        features_list = []
+        if not matches:
+            return pd.DataFrame()
 
-        # Sort matches by date
-        sorted_matches = sorted(matches, key=lambda x: x['date'])
+        # Base DataFrame (finished matches only for training)
+        base = pd.DataFrame(matches)
+        base = base.loc[
+            base['is_finished'] & base['home_score'].notna() & base['away_score'].notna()
+        ].copy()
+        if base.empty:
+            return pd.DataFrame()
+        base['date'] = pd.to_datetime(base['date'])
 
-        # Precompute EWMA recency features once across the dataset
+        # Precompute team-long frame and vectorized history features
+        long_df = self._build_team_long_df(matches)
+        if long_df.empty:
+            return pd.DataFrame()
+        long_df['date'] = pd.to_datetime(long_df['date'])
+        long_df = long_df.sort_values(['team', 'date', 'match_id']).reset_index(drop=True)
+
+        long_df = self._compute_team_history_features(long_df)
+
+        # Precompute EWMA recency features once across the dataset and merge
         try:
-            ewma_long_df = self._compute_ewma_recency_features(sorted_matches, span=5)
+            ewma_long_df = self._compute_ewma_recency_features(matches, span=5)
         except Exception:
             ewma_long_df = None
 
-        for i, match in enumerate(sorted_matches):
-            if (not match['is_finished'] or
-                match.get('home_score') is None or
-                match.get('away_score') is None):
-                continue
+        # Assemble match-level features by merging home/away history rows for the same match_id
+        # Select team history columns to attach
+        hist_cols = [
+            'avg_goals_for', 'avg_goals_against', 'avg_points',
+            'form_points', 'form_points_per_game', 'form_wins', 'form_draws', 'form_losses',
+            'form_goals_scored', 'form_goals_conceded', 'form_goal_diff',
+            'form_avg_goals_scored', 'form_avg_goals_conceded',
+            'momentum_points', 'momentum_goals', 'momentum_conceded', 'momentum_score',
+        ]
+        right_cols = ['match_id', 'team'] + hist_cols
+        home_merge = long_df[right_cols].rename(columns={'team': 'home_team'})
+        away_merge = long_df[right_cols].rename(columns={'team': 'away_team'})
 
-            # Get historical data up to this match (for training)
-            historical_matches = sorted_matches[:i]
+        features_df = base.copy()
+        # Merge home team features
+        features_df = features_df.merge(
+            home_merge.add_prefix('home_'),
+            left_on=['match_id', 'home_team'],
+            right_on=['home_match_id', 'home_home_team'],
+            how='left'
+        )
+        # Merge away team features
+        features_df = features_df.merge(
+            away_merge.add_prefix('away_'),
+            left_on=['match_id', 'away_team'],
+            right_on=['away_match_id', 'away_away_team'],
+            how='left'
+        )
 
-            features = self._create_match_features(match, historical_matches, is_prediction=False, ewma_long_df=ewma_long_df)
+        # Drop merge helper columns
+        drop_cols = [
+            'home_match_id', 'home_home_team', 'away_match_id', 'away_away_team'
+        ]
+        for c in drop_cols:
+            if c in features_df.columns:
+                features_df.drop(columns=[c], inplace=True)
 
-            if features is not None:
-                features_list.append(features)
+        # Attach EWMA recency features via vectorized merges
+        if ewma_long_df is not None and not ewma_long_df.empty:
+            # Home EWMA
+            home_ewm = ewma_long_df.rename(columns={'team': 'home_team', 'match_id': 'home_match_id'})
+            features_df = features_df.merge(
+                home_ewm.add_prefix('home_'),
+                left_on=['match_id', 'home_team'],
+                right_on=['home_home_match_id', 'home_home_team'],
+                how='left'
+            )
+            # Away EWMA
+            away_ewm = ewma_long_df.rename(columns={'team': 'away_team', 'match_id': 'away_match_id'})
+            features_df = features_df.merge(
+                away_ewm.add_prefix('away_'),
+                left_on=['match_id', 'away_team'],
+                right_on=['away_away_match_id', 'away_away_team'],
+                how='left'
+            )
+            # Clean helper columns
+            for c in [
+                'home_home_match_id','home_home_team','away_away_match_id','away_away_team'
+            ]:
+                if c in features_df.columns:
+                    features_df.drop(columns=[c], inplace=True)
 
-        return pd.DataFrame(features_list)
+            # Rename ewm columns to expected names (home_/away_ prefix placement)
+            ewm_map = {
+                'goals_for_ewm5': 'goals_for_ewm5',
+                'goals_against_ewm5': 'goals_against_ewm5',
+                'goal_diff_ewm5': 'goal_diff_ewm5',
+                'points_ewm5': 'points_ewm5',
+            }
+            for base_col in ewm_map.values():
+                hcol = f'home_{base_col}'
+                acol = f'away_{base_col}'
+                # Already prefixed by add_prefix; columns exist as home_<col>, away_<col>
+                # Ensure they exist
+                if hcol not in features_df.columns:
+                    features_df[hcol] = 0.0
+                if acol not in features_df.columns:
+                    features_df[acol] = 0.0
+
+        # Compute simple derived differences
+        features_df['abs_form_points_diff'] = (
+            (features_df.get('home_form_points', 0) - features_df.get('away_form_points', 0)).abs()
+        )
+        features_df['form_points_difference'] = (
+            features_df.get('home_form_points', 0) - features_df.get('away_form_points', 0)
+        )
+        features_df['abs_momentum_score_diff'] = (
+            (features_df.get('home_momentum_score', 0.0) - features_df.get('away_momentum_score', 0.0)).abs()
+        )
+        features_df['momentum_score_difference'] = (
+            features_df.get('home_momentum_score', 0.0) - features_df.get('away_momentum_score', 0.0)
+        )
+
+        # Targets
+        features_df['goal_difference'] = features_df['home_score'] - features_df['away_score']
+        features_df['result'] = np.where(
+            features_df['goal_difference'] > 0, 'H', np.where(features_df['goal_difference'] < 0, 'A', 'D')
+        )
+
+        # Ensure deterministic column order (optional)
+        return features_df
 
     def create_prediction_features(self, upcoming_matches: List[Dict],
                                    historical_matches: List[Dict]) -> pd.DataFrame:
-        """Create features for upcoming matches to predict.
+        """Create features for upcoming matches to predict using vectorized history merges.
 
         Args:
             upcoming_matches: List of upcoming match dictionaries.
@@ -259,23 +361,110 @@ class DataLoader:
         Returns:
             DataFrame with features (no target variables).
         """
-        features_list = []
+        if not upcoming_matches:
+            return pd.DataFrame()
 
-        # Precompute EWMA recency features once from historical matches
+        upcoming = pd.DataFrame(upcoming_matches).copy()
+        upcoming['date'] = pd.to_datetime(upcoming['date'])
+
+        # Build long_df and history features from historical (finished) matches only
+        long_hist = self._build_team_long_df(historical_matches)
+        if long_hist.empty:
+            return pd.DataFrame()
+        long_hist['date'] = pd.to_datetime(long_hist['date'])
+        long_hist = long_hist.sort_values(['team', 'date', 'match_id']).reset_index(drop=True)
+
+        long_hist = self._compute_team_history_features(long_hist)
+
+        # Columns to use for asof merge
+        hist_cols = [
+            'avg_goals_for', 'avg_goals_against', 'avg_points',
+            'form_points', 'form_points_per_game', 'form_wins', 'form_draws', 'form_losses',
+            'form_goals_scored', 'form_goals_conceded', 'form_goal_diff',
+            'form_avg_goals_scored', 'form_avg_goals_conceded',
+            'momentum_points', 'momentum_goals', 'momentum_conceded', 'momentum_score',
+        ]
+        hist_merge = long_hist[['team', 'date'] + hist_cols].copy()
+
+        # Prepare per-side frames for asof merge (requires sorting by date)
+        upcoming = upcoming.sort_values('date')
+
+        # Home side merge
+        home_hist = hist_merge.rename(columns={'team': 'home_team'})
+        home_hist = home_hist.sort_values(['home_team', 'date'])
+        features_df = pd.merge_asof(
+            upcoming.sort_values('date'),
+            home_hist,
+            left_on='date', right_on='date',
+            left_by='home_team', right_by='home_team',
+            direction='backward'
+        )
+        # Prefix home columns
+        for col in hist_cols:
+            if col in features_df.columns:
+                features_df.rename(columns={col: f'home_{col}'}, inplace=True)
+
+        # Away side merge
+        away_hist = hist_merge.rename(columns={'team': 'away_team'})
+        away_hist = away_hist.sort_values(['away_team', 'date'])
+        features_df = pd.merge_asof(
+            features_df.sort_values('date'),
+            away_hist,
+            left_on='date', right_on='date',
+            left_by='away_team', right_by='away_team',
+            direction='backward',
+            suffixes=('', '_away')
+        )
+        # Prefix away columns
+        for col in hist_cols:
+            away_src = f'{col}_away'
+            if away_src in features_df.columns:
+                features_df.rename(columns={away_src: f'away_{col}'}, inplace=True)
+
+        # Attach EWMA recency features from historical via asof
         try:
-            # Use only historical matches for leakage-safe EWMAs
-            hist_sorted = sorted(historical_matches, key=lambda x: x.get('date'))
-            ewma_long_df = self._compute_ewma_recency_features(hist_sorted, span=5)
+            ewma_long_df = self._compute_ewma_recency_features(historical_matches, span=5)
         except Exception:
             ewma_long_df = None
 
-        for match in upcoming_matches:
-            features = self._create_match_features(match, historical_matches, is_prediction=True, ewma_long_df=ewma_long_df)
+        if ewma_long_df is not None and not ewma_long_df.empty:
+            # Prepare EWMA frames
+            ewm_home = ewma_long_df.rename(columns={'team': 'home_team'})[['home_team', 'date', 'goals_for_ewm5', 'goals_against_ewm5', 'goal_diff_ewm5', 'points_ewm5']]
+            ewm_home = ewm_home.sort_values(['home_team', 'date'])
+            ewm_away = ewma_long_df.rename(columns={'team': 'away_team'})[['away_team', 'date', 'goals_for_ewm5', 'goals_against_ewm5', 'goal_diff_ewm5', 'points_ewm5']]
+            ewm_away = ewm_away.sort_values(['away_team', 'date'])
 
-            if features is not None:
-                features_list.append(features)
+            features_df = pd.merge_asof(
+                features_df.sort_values('date'), ewm_home,
+                left_on='date', right_on='date', left_by='home_team', right_by='home_team', direction='backward'
+            )
+            features_df = pd.merge_asof(
+                features_df.sort_values('date'), ewm_away,
+                left_on='date', right_on='date', left_by='away_team', right_by='away_team', direction='backward', suffixes=('', '_away')
+            )
+            # Rename to home_/away_ prefixed
+            for base in ['goals_for_ewm5', 'goals_against_ewm5', 'goal_diff_ewm5', 'points_ewm5']:
+                if base in features_df.columns:
+                    features_df.rename(columns={base: f'home_{base}'}, inplace=True)
+                away_col = f'{base}_away'
+                if away_col in features_df.columns:
+                    features_df.rename(columns={away_col: f'away_{base}'}, inplace=True)
 
-        return pd.DataFrame(features_list)
+        # Derived diffs
+        features_df['abs_form_points_diff'] = (
+            (features_df.get('home_form_points', 0) - features_df.get('away_form_points', 0)).abs()
+        )
+        features_df['form_points_difference'] = (
+            features_df.get('home_form_points', 0) - features_df.get('away_form_points', 0)
+        )
+        features_df['abs_momentum_score_diff'] = (
+            (features_df.get('home_momentum_score', 0.0) - features_df.get('away_momentum_score', 0.0)).abs()
+        )
+        features_df['momentum_score_difference'] = (
+            features_df.get('home_momentum_score', 0.0) - features_df.get('away_momentum_score', 0.0)
+        )
+
+        return features_df
 
     def _create_match_features(self, match: Dict, historical_matches: List[Dict],
                               is_prediction: bool = False,
@@ -445,6 +634,73 @@ class DataLoader:
             [long_df['goals_for'] > long_df['goals_against'], long_df['goals_for'] == long_df['goals_against']],
             [3, 1], default=0
         )
+        return long_df
+
+    def _compute_team_history_features(self, long_df: pd.DataFrame) -> pd.DataFrame:
+        """Compute leakage-safe per-team expanding/rolling and momentum features.
+
+        Assumes long_df has columns: ['match_id','date','team','goals_for','goals_against','goal_diff','points']
+        """
+        if long_df.empty:
+            return long_df
+
+        long_df = long_df.sort_values(['team', 'date', 'match_id']).reset_index(drop=True)
+        grp = long_df.groupby('team', group_keys=False)
+
+        # Shifted prior series to prevent leakage
+        gf_prior = grp['goals_for'].shift(1)
+        ga_prior = grp['goals_against'].shift(1)
+        pts_prior = grp['points'].shift(1)
+
+        long_df['avg_goals_for'] = gf_prior.expanding().mean().reset_index(level=0, drop=True)
+        long_df['avg_goals_against'] = ga_prior.expanding().mean().reset_index(level=0, drop=True)
+        long_df['avg_points'] = pts_prior.expanding().mean().reset_index(level=0, drop=True)
+
+        # Rolling last-N form stats (on prior rows)
+        try:
+            N = int(getattr(self.config.model, 'form_last_n', 5))
+        except Exception:
+            N = 5
+
+        win_prior = (grp['goals_for'].shift(1) > grp['goals_against'].shift(1)).astype(float)
+        draw_prior = (grp['goals_for'].shift(1) == grp['goals_against'].shift(1)).astype(float)
+        loss_prior = (grp['goals_for'].shift(1) < grp['goals_against'].shift(1)).astype(float)
+
+        long_df['form_points'] = pts_prior.rolling(window=N, min_periods=1).sum().reset_index(level=0, drop=True)
+        long_df['form_points_per_game'] = long_df['form_points'] / np.minimum(
+            N, grp.cumcount() + 1
+        )
+        long_df['form_wins'] = win_prior.rolling(window=N, min_periods=1).sum().reset_index(level=0, drop=True)
+        long_df['form_draws'] = draw_prior.rolling(window=N, min_periods=1).sum().reset_index(level=0, drop=True)
+        long_df['form_losses'] = loss_prior.rolling(window=N, min_periods=1).sum().reset_index(level=0, drop=True)
+
+        gf_roll = gf_prior.rolling(window=N, min_periods=1).sum().reset_index(level=0, drop=True)
+        ga_roll = ga_prior.rolling(window=N, min_periods=1).sum().reset_index(level=0, drop=True)
+        long_df['form_goals_scored'] = gf_roll
+        long_df['form_goals_conceded'] = ga_roll
+        long_df['form_goal_diff'] = gf_roll - ga_roll
+        long_df['form_avg_goals_scored'] = gf_roll / np.minimum(N, grp.cumcount() + 1)
+        long_df['form_avg_goals_conceded'] = ga_roll / np.minimum(N, grp.cumcount() + 1)
+
+        # Momentum features via EWMA on prior rows
+        try:
+            decay = float(getattr(self.config.model, 'momentum_decay', 0.9))
+        except Exception:
+            decay = 0.9
+        alpha = max(1e-6, 1.0 - min(max(decay, 0.0), 0.9999))
+
+        long_df['momentum_points'] = pts_prior.groupby(long_df['team']).transform(lambda s: s.ewm(alpha=alpha, adjust=False).mean())
+        long_df['momentum_goals'] = gf_prior.groupby(long_df['team']).transform(lambda s: s.ewm(alpha=alpha, adjust=False).mean())
+        long_df['momentum_conceded'] = ga_prior.groupby(long_df['team']).transform(lambda s: s.ewm(alpha=alpha, adjust=False).mean())
+        long_df['momentum_score'] = (
+            (long_df['momentum_points'].fillna(0)) +
+            (long_df['momentum_goals'].fillna(0)) * 0.5 -
+            (long_df['momentum_conceded'].fillna(0)) * 0.3
+        )
+
+        # Fill initial NaNs
+        long_df.fillna(0.0, inplace=True)
+
         return long_df
 
     def _compute_ewma_recency_features(self, matches: List[Dict], span: int = 5) -> pd.DataFrame:

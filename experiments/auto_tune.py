@@ -144,7 +144,7 @@ def _objective_builder(base_features_df, all_matches, n_splits: int, omp_threads
             'draw_boost': trial.suggest_float('draw_boost', 1.4, 2.2, step=0.1),
             # Outcome XGB
             'outcome_n_estimators': trial.suggest_int('outcome_n_estimators', 100, 600, step=25),
-            'outcome_max_depth': trial.suggest_int('outcome_max_depth', 3, 10),
+            'outcome_max_depth': trial.suggest_int('outcome_max_depth', 3, 7),
             'outcome_learning_rate': trial.suggest_float('outcome_learning_rate', 0.02, 0.30, step=0.01),
             'outcome_subsample': trial.suggest_float('outcome_subsample', 0.5, 1.0, step=0.05),
             'outcome_colsample_bytree': trial.suggest_float('outcome_colsample_bytree', 0.5, 1.0, step=0.05),

@@ -23,6 +23,10 @@ This clear hierarchy ensures **transparent, robust predictions** without the fra
 - **Automatic Data Fetching**: Fetches match data from OpenLigaDB API with intelligent caching
 - **Centralized Configuration**: All settings managed in one place via `config/best_params.yaml`
 
+### Performance
+
+The feature engineering pipeline is fully vectorized with Pandas (`groupby` + `expanding/rolling` + `merge_asof`), reducing complexity from quadratic to near-linear. Training feature construction typically completes in seconds instead of minutes.
+
 ## Getting Started
 
 Follow these steps to set up and run the predictor.

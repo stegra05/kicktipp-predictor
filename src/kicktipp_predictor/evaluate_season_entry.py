@@ -108,49 +108,49 @@ def run(dynamic: bool = False, retrain_every: int = 1) -> None:
 
             print(f"Generated and evaluated {len(predictions)} predictions for matchday {matchday}")
     else:
-        # Dynamic expanding-window: retrain and grow context each matchday
-        initial_training_matches = [m for m in historical_finished if m['matchday'] < first_matchday]
-        cumulative_training_matches = list(initial_training_matches)
+        # --- CORRECTED DYNAMIC LOGIC ---
+        print("\nRunning DYNAMIC expanding-window evaluation...")
+
+        # 1. Separate historical base from the season to be evaluated
+        all_historical_matches = data_loader.fetch_historical_seasons(current_season - 3, current_season - 1)
+
+        # The matches we will loop through and evaluate
+        evaluation_season_matches = [m for m in finished_matches if m['is_finished']]
+
+        # The training set starts with all prior seasons and will grow
+        cumulative_training_matches = list(all_historical_matches)
+        print(f"Initialized training set with {len(cumulative_training_matches)} matches from previous seasons.")
 
         for matchday in range(first_matchday, last_matchday + 1):
             print(f"\n--- Processing Matchday {matchday} ---")
 
-            # Retrain according to schedule
-            try:
-                every = max(1, int(retrain_every))
-            except Exception:
-                every = 1
-            if (matchday - first_matchday) % every == 0:
-                print(f"Retraining model with {len(cumulative_training_matches)} matches...")
+            # 2. Retrain on schedule using the full cumulative dataset
+            if (matchday - first_matchday) % max(1, int(retrain_every)) == 0:
+                print(f"Retraining model with {len(cumulative_training_matches)} total matches...")
                 train_df = data_loader.create_features_from_matches(cumulative_training_matches)
-                if not train_df.empty:
-                    predictor.train(train_df)
-                    print("Model retrained successfully.")
-                else:
-                    print("No training features available yet; skipping retrain.")
 
-            matchday_matches = [m for m in finished_matches if m['matchday'] == matchday]
-            if not matchday_matches:
-                print(f"No finished matches for matchday {matchday}.")
+                # The min_training_matches guard is inside predictor.train()
+                # It will now always be met
+                predictor.train(train_df)
+                print("Model retrained successfully.")
+
+            # 3. Predict on the current matchday's matches
+            matchday_matches_to_predict = [m for m in evaluation_season_matches if m['matchday'] == matchday]
+            if not matchday_matches_to_predict:
                 continue
 
-            features_df = data_loader.create_prediction_features(
-                matchday_matches, cumulative_training_matches
-            )
+            # Use the cumulative data as context for feature generation
+            features_df = data_loader.create_prediction_features(matchday_matches_to_predict, cumulative_training_matches)
 
-            if features_df.empty:
-                print(f"Could not generate features for matchday {matchday}.")
-                # still expand training window with these finished matches
-                cumulative_training_matches.extend(matchday_matches)
-                continue
-
+            # ... (rest of the prediction and point calculation logic remains the same)
             predictions = predictor.predict(features_df)
-
-            for pred, actual in zip(predictions, matchday_matches):
+            for pred, actual in zip(predictions, matchday_matches_to_predict):
+                # ... (append to all_predictions)
                 points = tracker._calculate_points(
                     pred['predicted_home_score'], pred['predicted_away_score'],
                     actual['home_score'], actual['away_score']
                 )
+                # ... (full pred object creation) ...
                 pred['actual_home_score'] = actual['home_score']
                 pred['actual_away_score'] = actual['away_score']
                 pred['points_earned'] = points
@@ -158,10 +158,9 @@ def run(dynamic: bool = False, retrain_every: int = 1) -> None:
                 pred['matchday'] = matchday
                 all_predictions.append(pred)
 
-            print(f"Evaluated {len(predictions)} predictions for matchday {matchday}")
 
-            # Expand training context with the latest finished matches
-            cumulative_training_matches.extend(matchday_matches)
+            # 4. Add the now-finished matchday to the training pool for the next iteration
+            cumulative_training_matches.extend(matchday_matches_to_predict)
 
     if not all_predictions:
         print("\nNo predictions could be generated for the season.")
@@ -280,6 +279,17 @@ def run(dynamic: bool = False, retrain_every: int = 1) -> None:
         # Scores and points
         ph, pa = _scores_from_preds(preds_all)
         pts = compute_points(ph, pa, ah, aa)
+
+    # Build a features-like dataframe for downstream debug and per-matchday analysis
+    if use_dynamic_preds:
+        features_like = pd.DataFrame({
+            'match_id': [p.get('match_id') for p in preds_all],
+            'matchday': [p.get('matchday') for p in preds_all],
+            'home_team': [p.get('home_team') for p in preds_all],
+            'away_team': [p.get('away_team') for p in preds_all],
+        })
+    else:
+        features_like = features_all.copy() if 'features_all' in locals() else pd.DataFrame()
 
     # Label distribution and sanity
     print("\n" + "-"*80)
@@ -404,15 +414,19 @@ def run(dynamic: bool = False, retrain_every: int = 1) -> None:
     # Include teams, matchday, predicted/actual labels, probabilities, points
     mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
     debug_rows = []
-    for i in range(len(features_all)):
+    for i in range(len(preds_all)):
         actual_lab = y_true[i]
         true_idx = mapping.get(actual_lab, -1)
         p_true = float(P[i, true_idx]) if true_idx >= 0 else float('nan')
+        mid_val = features_like.iloc[i]['match_id'] if 'match_id' in features_like.columns else None
+        md_val = features_like.iloc[i]['matchday'] if 'matchday' in features_like.columns else None
+        ht_val = features_like.iloc[i]['home_team'] if 'home_team' in features_like.columns else None
+        at_val = features_like.iloc[i]['away_team'] if 'away_team' in features_like.columns else None
         debug_rows.append({
-            'match_id': int(features_all.iloc[i]['match_id']) if 'match_id' in features_all.columns else None,
-            'matchday': int(features_all.iloc[i]['matchday']) if 'matchday' in features_all.columns else None,
-            'home_team': features_all.iloc[i]['home_team'] if 'home_team' in features_all.columns else None,
-            'away_team': features_all.iloc[i]['away_team'] if 'away_team' in features_all.columns else None,
+            'match_id': int(mid_val) if mid_val is not None and not pd.isna(mid_val) else None,
+            'matchday': int(md_val) if md_val is not None and not pd.isna(md_val) else None,
+            'home_team': ht_val,
+            'away_team': at_val,
             'actual': actual_lab,
             'pred': LABELS_ORDER[int(np.argmax(P[i]))],
             'pH': float(P[i, 0]),
@@ -434,14 +448,14 @@ def run(dynamic: bool = False, retrain_every: int = 1) -> None:
     except Exception:
         plt = None  # type: ignore
 
-    # Build matchday -> indices mapping (aligned with features_all / preds_all / P / pts)
-    if 'matchday' not in features_all.columns:
+    # Build matchday -> indices mapping (aligned with features_like / preds_all / P / pts)
+    if 'matchday' not in features_like.columns:
         print("\nWARNING: No 'matchday' column in features; skipping per-matchday breakdown.")
         return
 
     matchdays = []
     md_to_idx: dict[int, list[int]] = {}
-    for i, md_val in enumerate(features_all['matchday'].tolist()):
+    for i, md_val in enumerate(features_like['matchday'].tolist()):
         try:
             md = int(md_val)
         except Exception:

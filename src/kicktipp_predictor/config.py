@@ -91,6 +91,9 @@ class ModelConfig:
     goals_gamma: float = 0.0
     goals_min_child_weight: float = 1.0
 
+    # Early stopping
+    goals_early_stopping_rounds: int = 25
+
     # Poisson grid for scoreline selection
     max_goals: int = 8
     min_lambda: float = 0.2  # Minimum expected goals to avoid degenerate predictions
@@ -216,6 +219,8 @@ class Config:
                         config.model.goals_gamma = float(params["goals_gamma"])
                     if "goals_min_child_weight" in params:
                         config.model.goals_min_child_weight = float(params["goals_min_child_weight"])
+                    if "goals_early_stopping_rounds" in params:
+                        config.model.goals_early_stopping_rounds = int(params["goals_early_stopping_rounds"])
 
                     if os.getenv("KTP_VERBOSE") == "1":
                         print(f"[Config] Loaded from {config_file}")
