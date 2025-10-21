@@ -256,6 +256,9 @@ class DataLoader:
             'form_goals_scored', 'form_goals_conceded', 'form_goal_diff',
             'form_avg_goals_scored', 'form_avg_goals_conceded',
             'momentum_points', 'momentum_goals', 'momentum_conceded', 'momentum_score',
+            # venue-specific history metrics
+            'points_pg_at_home', 'goals_pg_at_home', 'goals_conceded_pg_at_home',
+            'points_pg_away', 'goals_pg_away', 'goals_conceded_pg_away',
         ]
         right_cols = ['match_id', 'team'] + hist_cols
         home_merge = long_df[right_cols].rename(columns={'team': 'home_team'})
@@ -341,6 +344,34 @@ class DataLoader:
             features_df.get('home_momentum_score', 0.0) - features_df.get('away_momentum_score', 0.0)
         )
 
+        # Venue deltas
+        if all(c in features_df.columns for c in ['home_points_pg_at_home', 'away_points_pg_away']):
+            features_df['venue_points_delta'] = features_df['home_points_pg_at_home'] - features_df['away_points_pg_away']
+        if all(c in features_df.columns for c in ['home_goals_pg_at_home', 'away_goals_pg_away']):
+            features_df['venue_goals_delta'] = features_df['home_goals_pg_at_home'] - features_df['away_goals_pg_away']
+        if all(c in features_df.columns for c in ['home_goals_conceded_pg_at_home', 'away_goals_conceded_pg_away']):
+            features_df['venue_conceded_delta'] = features_df['home_goals_conceded_pg_at_home'] - features_df['away_goals_conceded_pg_away']
+
+        # Interaction ratios (safe divisions)
+        eps = 1e-6
+        def _safe_div(a: pd.Series, b: pd.Series) -> pd.Series:
+            return a.astype(float) / (b.astype(float) + eps)
+
+        if all(c in features_df.columns for c in ['home_form_avg_goals_scored', 'away_form_avg_goals_conceded']):
+            features_df['attack_defense_form_ratio_home'] = _safe_div(features_df['home_form_avg_goals_scored'], features_df['away_form_avg_goals_conceded'])
+        if all(c in features_df.columns for c in ['away_form_avg_goals_scored', 'home_form_avg_goals_conceded']):
+            features_df['attack_defense_form_ratio_away'] = _safe_div(features_df['away_form_avg_goals_scored'], features_df['home_form_avg_goals_conceded'])
+        if all(c in features_df.columns for c in ['home_avg_goals_for', 'away_avg_goals_against']):
+            features_df['attack_defense_long_ratio_home'] = _safe_div(features_df['home_avg_goals_for'], features_df['away_avg_goals_against'])
+        if all(c in features_df.columns for c in ['away_avg_goals_for', 'home_avg_goals_against']):
+            features_df['attack_defense_long_ratio_away'] = _safe_div(features_df['away_avg_goals_for'], features_df['home_avg_goals_against'])
+        if all(c in features_df.columns for c in ['home_form_points_per_game', 'away_form_points_per_game']):
+            features_df['form_points_pg_ratio'] = _safe_div(features_df['home_form_points_per_game'], features_df['away_form_points_per_game'])
+        if all(c in features_df.columns for c in ['home_momentum_score', 'away_momentum_score']):
+            features_df['momentum_score_ratio'] = _safe_div(features_df['home_momentum_score'], features_df['away_momentum_score'])
+        if all(c in features_df.columns for c in ['home_points_ewm5', 'away_points_ewm5']):
+            features_df['ewm_points_ratio'] = _safe_div(features_df['home_points_ewm5'], features_df['away_points_ewm5'])
+
         # Targets
         features_df['goal_difference'] = features_df['home_score'] - features_df['away_score']
         features_df['result'] = np.where(
@@ -383,6 +414,9 @@ class DataLoader:
             'form_goals_scored', 'form_goals_conceded', 'form_goal_diff',
             'form_avg_goals_scored', 'form_avg_goals_conceded',
             'momentum_points', 'momentum_goals', 'momentum_conceded', 'momentum_score',
+            # venue-specific history metrics
+            'points_pg_at_home', 'goals_pg_at_home', 'goals_conceded_pg_at_home',
+            'points_pg_away', 'goals_pg_away', 'goals_conceded_pg_away',
         ]
         hist_merge = long_hist[['team', 'date'] + hist_cols].copy()
 
@@ -473,6 +507,34 @@ class DataLoader:
         features_df['momentum_score_difference'] = (
             features_df.get('home_momentum_score', 0.0) - features_df.get('away_momentum_score', 0.0)
         )
+
+        # Venue deltas
+        if all(c in features_df.columns for c in ['home_points_pg_at_home', 'away_points_pg_away']):
+            features_df['venue_points_delta'] = features_df['home_points_pg_at_home'] - features_df['away_points_pg_away']
+        if all(c in features_df.columns for c in ['home_goals_pg_at_home', 'away_goals_pg_away']):
+            features_df['venue_goals_delta'] = features_df['home_goals_pg_at_home'] - features_df['away_goals_pg_away']
+        if all(c in features_df.columns for c in ['home_goals_conceded_pg_at_home', 'away_goals_conceded_pg_away']):
+            features_df['venue_conceded_delta'] = features_df['home_goals_conceded_pg_at_home'] - features_df['away_goals_conceded_pg_away']
+
+        # Interaction ratios (safe divisions)
+        eps = 1e-6
+        def _safe_div(a: pd.Series, b: pd.Series) -> pd.Series:
+            return a.astype(float) / (b.astype(float) + eps)
+
+        if all(c in features_df.columns for c in ['home_form_avg_goals_scored', 'away_form_avg_goals_conceded']):
+            features_df['attack_defense_form_ratio_home'] = _safe_div(features_df['home_form_avg_goals_scored'], features_df['away_form_avg_goals_conceded'])
+        if all(c in features_df.columns for c in ['away_form_avg_goals_scored', 'home_form_avg_goals_conceded']):
+            features_df['attack_defense_form_ratio_away'] = _safe_div(features_df['away_form_avg_goals_scored'], features_df['home_form_avg_goals_conceded'])
+        if all(c in features_df.columns for c in ['home_avg_goals_for', 'away_avg_goals_against']):
+            features_df['attack_defense_long_ratio_home'] = _safe_div(features_df['home_avg_goals_for'], features_df['away_avg_goals_against'])
+        if all(c in features_df.columns for c in ['away_avg_goals_for', 'home_avg_goals_against']):
+            features_df['attack_defense_long_ratio_away'] = _safe_div(features_df['away_avg_goals_for'], features_df['home_avg_goals_against'])
+        if all(c in features_df.columns for c in ['home_form_points_per_game', 'away_form_points_per_game']):
+            features_df['form_points_pg_ratio'] = _safe_div(features_df['home_form_points_per_game'], features_df['away_form_points_per_game'])
+        if all(c in features_df.columns for c in ['home_momentum_score', 'away_momentum_score']):
+            features_df['momentum_score_ratio'] = _safe_div(features_df['home_momentum_score'], features_df['away_momentum_score'])
+        if all(c in features_df.columns for c in ['home_points_ewm5', 'away_points_ewm5']):
+            features_df['ewm_points_ratio'] = _safe_div(features_df['home_points_ewm5'], features_df['away_points_ewm5'])
 
         return features_df
 
@@ -622,6 +684,7 @@ class DataLoader:
                     'team': m.get('home_team'),
                     'goals_for': hs,
                     'goals_against': as_,
+                    'at_home': True,
                 })
                 # Away row
                 rows.append({
@@ -630,6 +693,7 @@ class DataLoader:
                     'team': m.get('away_team'),
                     'goals_for': as_,
                     'goals_against': hs,
+                    'at_home': False,
                 })
             except Exception:
                 continue
@@ -710,6 +774,50 @@ class DataLoader:
 
         # Fill initial NaNs
         long_df.fillna(0.0, inplace=True)
+
+        # Venue-specific last-N metrics (home vs away), leakage-safe via shift(1)
+        try:
+            home_mask = long_df['at_home'] == True
+            away_mask = long_df['at_home'] == False
+
+            # Group within venue subsets
+            grp_home = long_df[home_mask].groupby('team', group_keys=False)
+            grp_away = long_df[away_mask].groupby('team', group_keys=False)
+
+            # Points per game (mean of prior points over last N at that venue)
+            long_df.loc[home_mask, 'points_pg_at_home'] = (
+                grp_home['points'].shift(1).rolling(window=N, min_periods=1).mean().values
+            )
+            long_df.loc[away_mask, 'points_pg_away'] = (
+                grp_away['points'].shift(1).rolling(window=N, min_periods=1).mean().values
+            )
+
+            # Goals for per game at venue
+            long_df.loc[home_mask, 'goals_pg_at_home'] = (
+                grp_home['goals_for'].shift(1).rolling(window=N, min_periods=1).mean().values
+            )
+            long_df.loc[away_mask, 'goals_pg_away'] = (
+                grp_away['goals_for'].shift(1).rolling(window=N, min_periods=1).mean().values
+            )
+
+            # Goals conceded per game at venue
+            long_df.loc[home_mask, 'goals_conceded_pg_at_home'] = (
+                grp_home['goals_against'].shift(1).rolling(window=N, min_periods=1).mean().values
+            )
+            long_df.loc[away_mask, 'goals_conceded_pg_away'] = (
+                grp_away['goals_against'].shift(1).rolling(window=N, min_periods=1).mean().values
+            )
+
+            # Fill remaining NaNs with zeros
+            for c in [
+                'points_pg_at_home', 'goals_pg_at_home', 'goals_conceded_pg_at_home',
+                'points_pg_away', 'goals_pg_away', 'goals_conceded_pg_away'
+            ]:
+                if c in long_df.columns:
+                    long_df[c] = long_df[c].fillna(0.0)
+        except Exception:
+            # If venue columns are missing for any reason, proceed without them
+            pass
 
         return long_df
 

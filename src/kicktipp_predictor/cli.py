@@ -303,6 +303,61 @@ def tune(
     raise typer.Exit(code=0)
 
 
+@app.command()
+def shap(
+    seasons_back: int = typer.Option(3, help="Number of seasons back to sample training-like data"),
+    sample: int = typer.Option(2000, help="Max samples for SHAP computation"),
+):
+    """Run SHAP analysis on the trained models and save summary plots."""
+    from kicktipp_predictor.data import DataLoader
+    from kicktipp_predictor.predictor import MatchPredictor
+    from kicktipp_predictor.models.shap_analysis import run_shap_for_predictor
+
+    print("=" * 80)
+    print("SHAP ANALYSIS")
+    print("=" * 80)
+    print()
+
+    loader = DataLoader()
+    predictor = MatchPredictor()
+
+    try:
+        predictor.load_models()
+    except FileNotFoundError:
+        print("ERROR: No trained models found. Run 'train' first.")
+        raise typer.Exit(code=1)
+
+    current = loader.get_current_season()
+    start = current - max(1, seasons_back - 1)
+    print(f"Loading seasons {start} to {current} for SHAP background...")
+    matches = loader.fetch_historical_seasons(start, current)
+    df = loader.create_features_from_matches(matches)
+    if df is None or len(df) == 0:
+        print("No data available for SHAP background.")
+        raise typer.Exit(code=1)
+
+    # Build X aligned to trained schema
+    import pandas as pd
+    X = pd.DataFrame(df, copy=True)
+    # drop labels if present
+    for col in ['home_score', 'away_score', 'goal_difference', 'result']:
+        if col in X.columns:
+            X.drop(columns=[col], inplace=True)
+    # Ensure columns present and ordered
+    for col in predictor.feature_columns:
+        if col not in X.columns:
+            X[col] = 0.0
+    X = X[predictor.feature_columns].fillna(0)
+    if len(X) > sample:
+        X = X.sample(sample, random_state=42)
+
+    out_dir = run_shap_for_predictor(predictor, X)
+    if out_dir is None:
+        print("SHAP/matplotlib not installed; install extras to enable this command.")
+        raise typer.Exit(code=2)
+    print(f"SHAP plots saved to: {out_dir}")
+
+
 if __name__ == "__main__":
     app()
 

@@ -120,7 +120,7 @@ class MatchPredictor:
 
         # Identify feature columns by excluding non-feature and non-numeric types
         exclude_cols = ['match_id', 'home_team', 'away_team', 'home_score',
-                       'away_score', 'goal_difference', 'result']
+                       'away_score', 'goal_difference', 'result', 'is_finished']
         potential_features = training_data.drop(columns=exclude_cols, errors='ignore')
         # Keep only numeric and boolean dtypes (guards against datetime/object columns)
         self.feature_columns = potential_features.select_dtypes(include=[np.number, bool]).columns.tolist()
@@ -283,7 +283,7 @@ class MatchPredictor:
             min_child_weight=self.config.model.outcome_min_child_weight,
             random_state=self.config.model.random_state,
             n_jobs=self.config.model.n_jobs,
-            early_stopping_rounds=50,
+            early_stopping_rounds=100,
         )
 
         self.outcome_model.fit(

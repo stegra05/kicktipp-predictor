@@ -68,7 +68,7 @@ class ModelConfig:
     """Model hyperparameters and training configuration."""
 
     # XGBoost Outcome Classifier (H/D/A)
-    outcome_n_estimators: int = 200
+    outcome_n_estimators: int = 800
     outcome_max_depth: int = 6
     outcome_learning_rate: float = 0.1
     outcome_subsample: float = 0.8
@@ -80,7 +80,7 @@ class ModelConfig:
     outcome_min_child_weight: float = 1.0
 
     # XGBoost Goal Regressors
-    goals_n_estimators: int = 200
+    goals_n_estimators: int = 800
     goals_max_depth: int = 6
     goals_learning_rate: float = 0.1
     goals_subsample: float = 0.8

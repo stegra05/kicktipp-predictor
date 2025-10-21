@@ -5,7 +5,7 @@ from typing import Optional
 
 import numpy as np
 
-from .metrics import ensure_dir
+from ..metrics import ensure_dir
 
 try:  # pragma: no cover - optional dependency
     import shap  # type: ignore
@@ -15,10 +15,10 @@ except Exception:  # pragma: no cover - optional dependency
     plt = None  # type: ignore
 
 
-def run_shap_for_mlpredictor(ml_predictor, sample_X, out_dir: str = os.path.join('data', 'predictions', 'shap')) -> Optional[str]:
+def run_shap_for_predictor(predictor, sample_X, out_dir: str = os.path.join('data', 'predictions', 'shap')) -> Optional[str]:
     """
-    Compute SHAP summary plots for ML models if dependencies are available.
-    Saves summary plots for result classifier and goal regressors.
+    Compute SHAP summary plots for the trained XGBoost models if dependencies are available.
+    Saves summary plots for outcome classifier and goal regressors.
     """
     if shap is None or plt is None:
         return None
@@ -29,23 +29,40 @@ def run_shap_for_mlpredictor(ml_predictor, sample_X, out_dir: str = os.path.join
     if len(X) > 2000:
         X = X.sample(2000, random_state=42)
 
-    # Result classifier
+    # Outcome classifier (multiclass): generate per-class summary plots if values is a list
     try:
-        if getattr(ml_predictor, 'result_model', None) is not None:
-            explainer = shap.TreeExplainer(ml_predictor.result_model)
+        model = getattr(predictor, 'outcome_model', None)
+        if model is not None:
+            explainer = shap.TreeExplainer(model)
             values = explainer.shap_values(X)
-            # Multiclass: values is list
-            shap.summary_plot(values, X, show=False)
-            plt.tight_layout()
-            plt.savefig(os.path.join(out_dir, 'shap_result_summary.png'))
-            plt.close()
+            # If multiclass, values is a list of arrays (one per class)
+            if isinstance(values, list):
+                class_names = getattr(getattr(predictor, 'label_encoder', None), 'classes_', None)
+                for i, val in enumerate(values):
+                    shap.summary_plot(val, X, show=False)
+                    plt.tight_layout()
+                    name = None
+                    try:
+                        if class_names is not None and i < len(class_names):
+                            name = str(class_names[i])
+                    except Exception:
+                        name = None
+                    fname = f"shap_result_summary_class_{name or i}.png"
+                    plt.savefig(os.path.join(out_dir, fname))
+                    plt.close()
+            else:
+                shap.summary_plot(values, X, show=False)
+                plt.tight_layout()
+                plt.savefig(os.path.join(out_dir, 'shap_result_summary.png'))
+                plt.close()
     except Exception:
         pass
 
     # Home goals regressor
     try:
-        if getattr(ml_predictor, 'score_model_home', None) is not None:
-            explainer = shap.TreeExplainer(ml_predictor.score_model_home)
+        model = getattr(predictor, 'home_goals_model', None)
+        if model is not None:
+            explainer = shap.TreeExplainer(model)
             values = explainer.shap_values(X)
             shap.summary_plot(values, X, show=False)
             plt.tight_layout()
@@ -56,8 +73,9 @@ def run_shap_for_mlpredictor(ml_predictor, sample_X, out_dir: str = os.path.join
 
     # Away goals regressor
     try:
-        if getattr(ml_predictor, 'score_model_away', None) is not None:
-            explainer = shap.TreeExplainer(ml_predictor.score_model_away)
+        model = getattr(predictor, 'away_goals_model', None)
+        if model is not None:
+            explainer = shap.TreeExplainer(model)
             values = explainer.shap_values(X)
             shap.summary_plot(values, X, show=False)
             plt.tight_layout()
@@ -67,5 +85,9 @@ def run_shap_for_mlpredictor(ml_predictor, sample_X, out_dir: str = os.path.join
         pass
 
     return out_dir
+
+# Backward-compatible alias
+def run_shap_for_mlpredictor(ml_predictor, sample_X, out_dir: str = os.path.join('data', 'predictions', 'shap')) -> Optional[str]:
+    return run_shap_for_predictor(ml_predictor, sample_X, out_dir)
 
 
