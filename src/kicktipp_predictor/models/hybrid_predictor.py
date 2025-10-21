@@ -30,7 +30,7 @@ class HybridPredictor:
 
         # Probability blending weight (grid vs ML classifier)
         # Slightly increase grid influence to recover realism
-        self.prob_blend_alpha = 0.55
+        self.prob_blend_alpha = 0.65
 
         # Minimum lambda to avoid degenerate predictions (slightly higher for realistic low scores)
         self.min_lambda = 0.12
@@ -197,10 +197,10 @@ class HybridPredictor:
                 probs_temp = np.array([home_win_prob, draw_prob, away_win_prob], dtype=float)
                 top_two_margin = float(np.sort(probs_temp)[-1] - np.sort(probs_temp)[-2])
                 # Conditions: very small margin and grid_draw within small epsilon of max grid side
-                if top_two_margin < 0.03:
+                if top_two_margin < 0.06:
                     grid_max_side = max(grid_home_win, grid_away_win)
-                    if grid_draw >= grid_max_side - 0.02:
-                        draw_prob = float(min(1.0, draw_prob + 0.02))
+                    if grid_draw >= grid_max_side - 0.04:
+                        draw_prob = float(min(1.0, draw_prob + 0.04))
             except Exception:
                 pass
 
