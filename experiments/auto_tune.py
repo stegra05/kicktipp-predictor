@@ -150,10 +150,6 @@ def _objective_builder(features_df, n_splits: int, omp_threads: int, verbose: bo
 
 
 def main():
-    print("="*80)
-    print("OPTUNA HYPERPARAMETER TUNING (PPG)")
-    print("="*80)
-
     parser = argparse.ArgumentParser()
     parser.add_argument('--n-trials', type=int, default=100, help='Optuna trials')
     parser.add_argument('--n-splits', type=int, default=3, help='TimeSeriesSplit folds')
@@ -180,16 +176,20 @@ def main():
         os.environ.setdefault('NUMEXPR_NUM_THREADS', str(args.omp_threads))
 
     # Load data
-    print("Loading data...")
+    if args.verbose:
+        print("Loading data...")
     data_loader = DataLoader()
     current_season = data_loader.get_current_season()
     start_season = current_season - 2
     all_matches = data_loader.fetch_historical_seasons(start_season, current_season)
-    print(f"Loaded {len(all_matches)} matches")
+    if args.verbose:
+        print(f"Loaded {len(all_matches)} matches")
 
-    print("Creating features...")
+    if args.verbose:
+        print("Creating features...")
     features_df = data_loader.create_features_from_matches(all_matches)
-    print(f"Created {len(features_df)} samples")
+    if args.verbose:
+        print(f"Created {len(features_df)} samples")
 
     # Build and run study
     def _fmt_dur(sec: float) -> str:
@@ -201,7 +201,8 @@ def main():
 
     total_trials = int(max(0, args.n_trials))
     total_cv_trainings = total_trials * int(max(1, args.n_splits))
-    print(f"Planned: trials={total_trials} | cv-trainings={total_cv_trainings} | workers={args.n_jobs or 1} x threads={args.omp_threads or 1}")
+    if args.verbose:
+        print(f"Planned: trials={total_trials} | cv-trainings={total_cv_trainings} | workers={args.n_jobs or 1} x threads={args.omp_threads or 1}")
 
     # Avoid stdout redirection when using parallel workers (not thread-safe)
     effective_verbose = bool(args.verbose or (args.n_jobs and args.n_jobs > 1))
@@ -273,7 +274,8 @@ def main():
             print(line.replace('\r', ''), flush=True, file=sys.stderr)
         progress['last_print_len'] = len(line)
 
-    print(f"Running Optuna study for {args.n_trials} trials with n_jobs={args.n_jobs}...")
+    if args.verbose:
+        print(f"Running Optuna study for {args.n_trials} trials with n_jobs={args.n_jobs}...")
     start = time.time()
     study.optimize(
         objective,
@@ -285,7 +287,8 @@ def main():
     # Ensure newline after progress line
     print(file=sys.stderr)
     duration = time.time() - start
-    print(f"Study complete in {duration:.1f}s. Best PPG={study.best_value:.4f}")
+    if args.verbose:
+        print(f"Study complete in {duration:.1f}s. Best PPG={study.best_value:.4f}")
 
     # Persist best params
     best_params = dict(study.best_params)
@@ -299,12 +302,14 @@ def main():
         import json
         with open(os.path.join(cfg_dir, 'best_params.json'), 'w', encoding='utf-8') as f:
             json.dump(best_params, f, indent=2)
-    print("Best params saved to config/best_params.yaml (or .json)")
+    if args.verbose:
+        print("Best params saved to config/best_params.yaml (or .json)")
 
     # Optional: Train final model on full dataset and save
     if args.save_final_model:
         try:
-            print("\n[FINAL] Training final MatchPredictor on full dataset with best params...")
+            if args.verbose:
+                print("\n[FINAL] Training final MatchPredictor on full dataset with best params...")
             reset_config()
             _apply_params_to_config(best_params)
 
@@ -317,9 +322,11 @@ def main():
 
             predictor.train(features_full)
             predictor.save_models()
-            print("[FINAL] Saved trained models.")
+            if args.verbose:
+                print("[FINAL] Saved trained models.")
         except Exception as e:  # pragma: no cover
-            print(f"[FINAL] WARNING: Failed to train/save final model: {e}")
+            if args.verbose:
+                print(f"[FINAL] WARNING: Failed to train/save final model: {e}")
 
 
 if __name__ == "__main__":
