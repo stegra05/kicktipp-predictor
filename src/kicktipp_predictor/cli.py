@@ -192,6 +192,10 @@ def tune(
     save_final_model: bool = typer.Option(False, help="Train final model on full data and save"),
     seasons_back: int = typer.Option(3, help="Past seasons to include for final training"),
     verbose: bool = typer.Option(False, help="Enable verbose inner logs during tuning"),
+    storage: str | None = typer.Option(None, help="Optuna storage URL for multi-process tuning (e.g., sqlite:///study.db)"),
+    study_name: str | None = typer.Option(None, help="Optuna study name when using storage"),
+    pruner: str = typer.Option("median", help="Pruner: none|median|hyperband"),
+    pruner_startup_trials: int = typer.Option(20, help="Trials before enabling pruning (median)"),
 ):
     """Run Optuna hyperparameter tuning optimizing PPG (wrapper around experiments/auto_tune.py)."""
     import sys
@@ -218,6 +222,14 @@ def tune(
     cmd += ["--seasons-back", str(seasons_back)]
     if verbose:
         cmd.append("--verbose")
+    if storage:
+        cmd += ["--storage", storage]
+    if study_name:
+        cmd += ["--study-name", study_name]
+    if pruner:
+        cmd += ["--pruner", pruner]
+    if pruner_startup_trials is not None:
+        cmd += ["--pruner-startup-trials", str(pruner_startup_trials)]
 
     # Stream output
     proc = subprocess.Popen(cmd, cwd=str(pkg_root))

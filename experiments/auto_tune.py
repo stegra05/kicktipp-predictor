@@ -161,6 +161,10 @@ def main():
     parser.add_argument('--save-final-model', action='store_true', help='Train on full dataset with best params and save models')
     parser.add_argument('--seasons-back', type=int, default=3, help='Number of past seasons to include for final training')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logs from inner training loop')
+    parser.add_argument('--storage', type=str, default=None, help='Optuna storage URL (e.g., sqlite:///study.db) for multi-process tuning')
+    parser.add_argument('--study-name', type=str, default=None, help='Optuna study name (used with --storage)')
+    parser.add_argument('--pruner', type=str, choices=['none','median','hyperband'], default='median', help='Enable trial pruning strategy')
+    parser.add_argument('--pruner-startup-trials', type=int, default=20, help='Trials before enabling pruning (median pruner)')
     args = parser.parse_args()
 
     if optuna is None:
@@ -198,8 +202,28 @@ def main():
     total_cv_trainings = total_trials * int(max(1, args.n_splits))
     print(f"Planned: trials={total_trials} | cv-trainings={total_cv_trainings} | workers={args.n_jobs or 1} x threads={args.omp_threads or 1}")
 
-    objective = _objective_builder(features_df, args.n_splits, args.omp_threads, args.verbose)
-    study = optuna.create_study(direction='maximize')
+    # Avoid stdout redirection when using parallel workers (not thread-safe)
+    effective_verbose = bool(args.verbose or (args.n_jobs and args.n_jobs > 1))
+    objective = _objective_builder(features_df, args.n_splits, args.omp_threads, effective_verbose)
+
+    # Configure pruner
+    pruner = None
+    if args.pruner == 'median':
+        pruner = optuna.pruners.MedianPruner(n_startup_trials=int(max(0, args.pruner_startup_trials)))
+    elif args.pruner == 'hyperband':
+        pruner = optuna.pruners.HyperbandPruner()
+
+    # Create study, optionally with storage for multi-process scaling
+    if args.storage:
+        study = optuna.create_study(
+            direction='maximize',
+            storage=args.storage,
+            study_name=(args.study_name or 'kicktipp-tune'),
+            load_if_exists=True,
+            pruner=pruner,
+        )
+    else:
+        study = optuna.create_study(direction='maximize', pruner=pruner)
 
     progress = {
         'start': time.time(),
