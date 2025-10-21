@@ -117,7 +117,10 @@ def predict(
 
 
 @app.command()
-def evaluate():
+def evaluate(
+    detailed: bool = typer.Option(False, help="Run detailed evaluation with calibration and plots"),
+    season: bool = typer.Option(False, help="Evaluate performance across the current season (finished matches)"),
+):
     """Evaluate predictor performance on test data."""
     from kicktipp_predictor.data import DataLoader
     from kicktipp_predictor.predictor import MatchPredictor
@@ -138,6 +141,16 @@ def evaluate():
     except FileNotFoundError:
         print("ERROR: No trained models found. Run 'train' command first.")
         raise typer.Exit(code=1)
+
+    if season:
+        from kicktipp_predictor.models.evaluate import run_evaluation
+        run_evaluation(season=True)
+        return
+
+    if detailed:
+        from kicktipp_predictor.models.evaluate import run_evaluation
+        run_evaluation(season=False)
+        return
 
     # Get data
     current_season = loader.get_current_season()
