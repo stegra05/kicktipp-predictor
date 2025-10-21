@@ -422,6 +422,12 @@ class DataLoader:
             away_src = f'{col}_away'
             if away_src in features_df.columns:
                 features_df.rename(columns={away_src: f'away_{col}'}, inplace=True)
+        # If no name collision occurred during merge_asof, pandas will not add the
+        # '_away' suffix and the right-hand columns keep their base names. Ensure
+        # those get prefixed as away_* so they match the trained feature schema.
+        for col in hist_cols:
+            if f'away_{col}' not in features_df.columns and col in features_df.columns:
+                features_df.rename(columns={col: f'away_{col}'}, inplace=True)
 
         # Attach EWMA recency features from historical via asof
         try:
