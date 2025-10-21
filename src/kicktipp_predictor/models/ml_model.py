@@ -9,6 +9,9 @@ from sklearn.calibration import CalibratedClassifierCV
 from typing import Dict, List, Tuple
 import joblib
 import os
+from concurrent.futures import ThreadPoolExecutor
+import time
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 
 class MLPredictor:
@@ -82,34 +85,59 @@ class MLPredictor:
 
         print(f"Training on {len(training_data)} matches with {len(self.feature_columns)} features")
 
-        # Train home goals model
-        print("Training home goals model...")
-        self.score_model_home = XGBRegressor(
-            n_estimators=200,
-            max_depth=6,
-            learning_rate=0.1,
-            objective='count:poisson',
-            random_state=42,
-            n_jobs=self.num_threads,
-            nthread=self.num_threads
-        )
-        self.score_model_home.fit(X, y_home)
+        # Train home/away goals models (parallel when threads available)
+        def _make_xgb_regressor(threads: int) -> XGBRegressor:
+            return XGBRegressor(
+                n_estimators=200,
+                max_depth=6,
+                learning_rate=0.1,
+                objective='count:poisson',
+                tree_method='hist',
+                subsample=0.8,
+                colsample_bytree=0.8,
+                random_state=42,
+                n_jobs=threads,
+                nthread=threads,
+            )
 
-        # Train away goals model
-        print("Training away goals model...")
-        self.score_model_away = XGBRegressor(
-            n_estimators=200,
-            max_depth=6,
-            learning_rate=0.1,
-            objective='count:poisson',
-            random_state=42,
-            n_jobs=self.num_threads,
-            nthread=self.num_threads
-        )
-        self.score_model_away.fit(X, y_away)
+        inter_workers = 2 if self.num_threads >= 2 else 1
+        threads_per_model = max(1, self.num_threads // inter_workers)
+        print(f"Training home/away goals models... (workers={inter_workers}, threads/model={threads_per_model})")
+
+        start_fit = time.perf_counter()
+        if inter_workers == 2:
+            try:
+                def _fit_home() -> XGBRegressor:
+                    m = _make_xgb_regressor(threads_per_model)
+                    m.fit(X, y_home)
+                    return m
+
+                def _fit_away() -> XGBRegressor:
+                    m = _make_xgb_regressor(threads_per_model)
+                    m.fit(X, y_away)
+                    return m
+
+                with ThreadPoolExecutor(max_workers=2) as ex:
+                    fH = ex.submit(_fit_home)
+                    fA = ex.submit(_fit_away)
+                    self.score_model_home = fH.result()
+                    self.score_model_away = fA.result()
+            except Exception:
+                print("Parallel fit failed; falling back to sequential.")
+                self.score_model_home = _make_xgb_regressor(self.num_threads)
+                self.score_model_home.fit(X, y_home)
+                self.score_model_away = _make_xgb_regressor(self.num_threads)
+                self.score_model_away.fit(X, y_away)
+        else:
+            self.score_model_home = _make_xgb_regressor(self.num_threads)
+            self.score_model_home.fit(X, y_home)
+            self.score_model_away = _make_xgb_regressor(self.num_threads)
+            self.score_model_away.fit(X, y_away)
+        print(f"Goal fits completed in {time.perf_counter() - start_fit:.2f}s")
 
         # Fit isotonic calibrators to better align raw regressions with observed goals
         print("Fitting expected-goals calibrators...")
+        cal_start = time.perf_counter()
         home_raw_in_sample = self.score_model_home.predict(X)
         away_raw_in_sample = self.score_model_away.predict(X)
 
@@ -122,6 +150,28 @@ class MLPredictor:
         # Map raw -> actual goals
         self.home_goal_calibrator.fit(home_raw_in_sample, y_home)
         self.away_goal_calibrator.fit(away_raw_in_sample, y_away)
+        print(f"Calibrators fit in {time.perf_counter() - cal_start:.2f}s")
+
+        # Optional lightweight validation metrics (off by default; enable with env KP_TRAIN_REG_METRICS=1)
+        try:
+            show_metrics = os.getenv("KP_TRAIN_REG_METRICS", "0") == "1"
+            if show_metrics:
+                # evaluate on a small random 10% subset to keep overhead low
+                idx = np.arange(len(X))
+                _, idx_val = train_test_split(idx, test_size=0.1, random_state=42)
+                X_val = X.iloc[idx_val]
+                yH_val = y_home.iloc[idx_val]
+                yA_val = y_away.iloc[idx_val]
+                predH = self.score_model_home.predict(X_val)
+                predA = self.score_model_away.predict(X_val)
+                mae_h = mean_absolute_error(yH_val, predH)
+                rmse_h = mean_squared_error(yH_val, predH, squared=False)
+                mae_a = mean_absolute_error(yA_val, predA)
+                rmse_a = mean_squared_error(yA_val, predA, squared=False)
+                print(f"Validation (10%) Home: MAE={mae_h:.3f} RMSE={rmse_h:.3f}")
+                print(f"Validation (10%) Away: MAE={mae_a:.3f} RMSE={rmse_a:.3f}")
+        except Exception:
+            pass
 
         # Train result classifier with class weights to address outcome bias
         print("Training result classifier...")
