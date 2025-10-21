@@ -233,9 +233,12 @@ def main():
 
     def _progress_cb(study: "optuna.study.Study", trial: "optuna.trial.FrozenTrial") -> None:  # type: ignore[name-defined]
         progress['completed'] += 1
-        if study.best_trial is not None:
+        # Accessing best_* raises when there are no completed trials yet; guard it.
+        try:
             progress['best_value'] = float(study.best_value)
             progress['best_trial'] = int(study.best_trial.number)
+        except Exception:
+            pass
         elapsed = time.time() - progress['start']
         done = progress['completed']
         total = max(1, total_trials)
@@ -283,12 +286,19 @@ def main():
     print(file=sys.stderr)
     duration = time.time() - start
     if args.verbose:
-        print(f"Study complete in {duration:.1f}s. Best PPG={study.best_value:.4f}")
+        try:
+            print(f"Study complete in {duration:.1f}s. Best PPG={study.best_value:.4f}")
+        except Exception:
+            print(f"Study complete in {duration:.1f}s. No completed trials.")
 
-    # Persist best params if any trials executed
-    if study.best_trial is None:
+    # Persist best params only if there is at least one completed trial
+    try:
+        completed_trials = study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))  # type: ignore[attr-defined]
+    except Exception:
+        completed_trials = []
+    if not completed_trials:
         if args.verbose:
-            print("No trials executed; skipping best-params save and final model training.")
+            print("No completed trials; skipping best-params save and final model training.")
         return
 
     best_params = dict(study.best_params)

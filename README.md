@@ -237,7 +237,7 @@ python3 -m kicktipp_predictor tune \
   --n-trials 200 \
   --n-splits 3 \
   --workers 8 \
-  --storage "sqlite:////absolute/path/kicktipp_study.db?timeout=60" \
+  --storage "sqlite:///data/kicktipp_study.db?timeout=60" \
   --save-final-model --seasons-back 5
 ```
 
