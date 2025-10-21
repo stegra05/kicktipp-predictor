@@ -53,16 +53,47 @@ def run_evaluation(season: bool = False) -> None:
 
     all_matches = data_fetcher.fetch_historical_seasons(start_season, current_season)
     finished = [m for m in all_matches if m['is_finished']]
-    print(f"Loaded {len(finished)} finished matches")
+    print("\n" + "-"*80)
+    print("DATASET")
+    print("-"*80)
+    print(f"Seasons range       : {start_season} - {current_season}")
+    print(f"Total matches       : {len(all_matches)} (finished: {len(finished)})")
+    uniq_teams = sorted({m.get('home_team') for m in all_matches} | {m.get('away_team') for m in all_matches} - {None})
+    print(f"Unique teams        : {len(uniq_teams)}")
 
     # Create features
     print("Creating features...")
     features_df = feature_engineer.create_features_from_matches(all_matches)
-    print(f"Created {len(features_df)} samples")
+    print("\n" + "-"*80)
+    print("FEATURES")
+    print("-"*80)
+    print(f"Samples             : {len(features_df)}")
+    try:
+        print(f"Feature columns     : {len(features_df.columns)}")
+        example_cols = [c for c in list(features_df.columns) if c not in ['home_score','away_score','goal_difference','result']][:10]
+        if example_cols:
+            print(f"Example columns     : {', '.join(example_cols)}")
+    except Exception:
+        pass
 
     # Use last 30% as test set
     split_idx = int(len(features_df) * 0.7)
     test_df = features_df[split_idx:]
+    train_len = split_idx
+    print("\n" + "-"*80)
+    print("SPLIT")
+    print("-"*80)
+    print(f"Train/Test sizes    : {train_len} / {len(test_df)} (70/30 split)")
+    if 'date' in features_df.columns:
+        try:
+            tr_start = str(features_df.iloc[0]['date'])
+            tr_end = str(features_df.iloc[max(0, split_idx-1)]['date'])
+            te_start = str(test_df.iloc[0]['date']) if len(test_df) else "-"
+            te_end = str(test_df.iloc[-1]['date']) if len(test_df) else "-"
+            print(f"Train dates         : {tr_start} -> {tr_end}")
+            print(f"Test dates          : {te_start} -> {te_end}")
+        except Exception:
+            pass
     print(f"Using {len(test_df)} matches for evaluation")
 
     # Prepare test features (without targets)
@@ -154,6 +185,17 @@ def run_evaluation(season: bool = False) -> None:
     P_m = _proba_from_preds(ml_preds)
     P_p = _proba_from_preds(poisson_preds)
 
+    # Label distribution and quick sanity checks
+    print("\n" + "-"*80)
+    print("LABEL DISTRIBUTIONS (Test)")
+    print("-"*80)
+    lab_counts = {lab: y_true.count(lab) for lab in LABELS_ORDER}
+    total_labels = sum(lab_counts.values()) or 1
+    print("Actual              : " + "  ".join([f"{lab}={lab_counts.get(lab,0)} ({lab_counts.get(lab,0)/total_labels:.2%})" for lab in LABELS_ORDER]))
+    pred_h_labels = [LABELS_ORDER[i] for i in np.argmax(P_h, axis=1)]
+    pred_counts_h = {lab: pred_h_labels.count(lab) for lab in LABELS_ORDER}
+    print("Hybrid predicted    : " + "  ".join([f"{lab}={pred_counts_h.get(lab,0)} ({pred_counts_h.get(lab,0)/max(1,len(pred_h_labels)):.2%})" for lab in LABELS_ORDER]))
+
     # Predicted scores
     ph_h, pa_h = _scores_from_preds(hybrid_preds)
     ph_m, pa_m = _scores_from_preds(ml_preds)
@@ -179,6 +221,24 @@ def run_evaluation(season: bool = False) -> None:
     metrics_h = _all_metrics(P_h, pts_h)
     metrics_m = _all_metrics(P_m, pts_m)
     metrics_p = _all_metrics(P_p, pts_p)
+
+    # Metrics table in console
+    print("\n" + "-"*80)
+    print("VARIANT METRICS")
+    print("-"*80)
+    def _print_metrics_row(name: str, md: Dict[str, object]) -> None:
+        print(f"{name:13s} avg_pts={md['avg_points']:.3f}  acc={md['accuracy']:.3f}  "
+              f"brier={md['brier']:.4f}  logloss={md['log_loss']:.4f}  rps={md['rps']:.4f}")
+    _print_metrics_row('Hybrid', metrics_h)
+    _print_metrics_row('ML-only', metrics_m)
+    _print_metrics_row('Poisson-only', metrics_p)
+
+    # Points distribution (hybrid)
+    print("\nPOINTS DISTRIBUTION (Hybrid)")
+    unique_pts = [0, 2, 3, 4]
+    pt_counts = {p: int(np.sum(pts_h == p)) for p in unique_pts}
+    print("Counts by points    : " + ", ".join([f"{p}p={pt_counts[p]}" for p in unique_pts]))
+    print(f"Avg points          : {np.mean(pts_h) if len(pts_h) else 0.0:.3f}  Total: {int(np.sum(pts_h))}")
 
     # Save artifacts
     out_dir = os.path.join('data', 'predictions')
@@ -226,12 +286,33 @@ def run_evaluation(season: bool = False) -> None:
     cm_stats = confusion_matrix_stats(y_true, P_h)
     cm = np.array(cm_stats['matrix'], dtype=int)
     plot_confusion_matrix(cm, os.path.join(out_dir, 'confusion_matrix.png'))
+    # Console view of confusion matrix and per-class metrics
+    print("\nCONFUSION MATRIX (Hybrid)")
+    header = "         Pred ->   H     D     A"
+    print(header)
+    for i, lab in enumerate(LABELS_ORDER):
+        row = cm[i]
+        print(f"Actual {lab}       : {row[0]:5d} {row[1]:5d} {row[2]:5d}")
+    print(f"Overall accuracy   : {cm_stats.get('accuracy', float('nan')):.3f}")
+    per_class = cm_stats.get('per_class', {})
+    if isinstance(per_class, dict):
+        for lab in LABELS_ORDER:
+            stats = per_class.get(lab, {})
+            pr = float(stats.get('precision', float('nan')))
+            rc = float(stats.get('recall', float('nan')))
+            print(f"Class {lab}         : precision={pr:.3f} recall={rc:.3f}")
 
     # Confidence bucket analysis (hybrid)
     _, _, _, combined_all = _confidence_bundle(P_h)
     conf_df = bin_by_confidence(combined_all, y_true, P_h, pts_h, n_bins=5)
     conf_df.to_csv(os.path.join(out_dir, 'confidence_buckets.csv'), index=False)
     plot_confidence_buckets(conf_df, os.path.join(out_dir, 'confidence_buckets.png'))
+    # Console: confidence buckets
+    if len(conf_df) > 0:
+        print("\nCONFIDENCE BUCKETS (Hybrid)")
+        for _, r in conf_df.iterrows():
+            print(f"bin={r['bin']:<14} count={int(r['count']):4d}  avg_pts={float(r['avg_points']):.3f}  "
+                  f"acc={float(r['accuracy']):.3f}  avg_conf={float(r['avg_confidence']):.3f}")
 
     # SHAP analysis (optional; safe no-op if deps missing)
     try:
@@ -241,11 +322,76 @@ def run_evaluation(season: bool = False) -> None:
     except Exception:
         pass
 
-    # Print concise summary
-    print("\n=== Evaluation Summary ===")
-    for name, md in [('Hybrid', metrics_h), ('ML-only', metrics_m), ('Poisson-only', metrics_p)]:
-        print(f"{name:13s} avg_pts={md['avg_points']:.3f} acc={md['accuracy']:.3f} "
-              f"brier={md['brier']:.4f} logloss={md['log_loss']:.4f} rps={md['rps']:.4f}")
+    # Build detailed rows for examples
+    max_prob_h, margin_h, entropy_h, combined_h = _confidence_bundle(P_h)
+    mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
+    # Extend debug rows to include teams and p_true
+    debug_rows: List[Dict] = []
+    for i in range(len(test_df)):
+        actual_lab = y_true[i]
+        true_idx = mapping.get(actual_lab, -1)
+        p_true = float(P_h[i, true_idx]) if true_idx >= 0 else float('nan')
+        debug_rows.append({
+            'match_id': int(test_df.iloc[i]['match_id']) if 'match_id' in test_df.columns else None,
+            'home_team': test_features.iloc[i]['home_team'] if 'home_team' in test_features.columns else None,
+            'away_team': test_features.iloc[i]['away_team'] if 'away_team' in test_features.columns else None,
+            'actual': actual_lab,
+            'pred': LABELS_ORDER[int(np.argmax(P_h[i]))],
+            'pH': float(P_h[i, 0]),
+            'pD': float(P_h[i, 1]),
+            'pA': float(P_h[i, 2]),
+            'p_true': p_true,
+            'points': int(pts_h[i]),
+            'confidence': float(combined_h[i]),
+            'margin': float(margin_h[i]),
+            'entropy_conf': float(entropy_h[i]),
+        })
+    # Save enriched debug
+    pd.DataFrame(debug_rows).to_csv(os.path.join(out_dir, 'debug_eval.csv'), index=False)
+
+    # Top/bottom cases
+    def _safe_key(v: float) -> float:
+        try:
+            return float(v)
+        except Exception:
+            return float('nan')
+    correct = [r for r in debug_rows if r['actual'] == r['pred']]
+    wrong = [r for r in debug_rows if r['actual'] != r['pred']]
+    correct_sorted = sorted(correct, key=lambda r: _safe_key(r['confidence']), reverse=True)[:5]
+    wrong_sorted = sorted(wrong, key=lambda r: _safe_key(r['confidence']), reverse=True)[:5]
+    worst_ptrue = sorted(debug_rows, key=lambda r: _safe_key(r['p_true']))[:5]
+
+    print("\n" + "-"*80)
+    print("EXAMPLES (Hybrid)")
+    print("-"*80)
+    if correct_sorted:
+        print("Top 5 confident CORRECT predictions:")
+        for r in correct_sorted:
+            teams = f"{r.get('home_team','?')} - {r.get('away_team','?')}"
+            print(f"  {teams:30s}  pred={r['pred']} act={r['actual']}  conf={r['confidence']:.3f}  points={r['points']}")
+    if wrong_sorted:
+        print("\nTop 5 confident WRONG predictions:")
+        for r in wrong_sorted:
+            teams = f"{r.get('home_team','?')} - {r.get('away_team','?')}"
+            print(f"  {teams:30s}  pred={r['pred']} act={r['actual']}  conf={r['confidence']:.3f}  p_true={r['p_true']:.3f}")
+    if worst_ptrue:
+        print("\nLowest probability assigned to TRUE outcome (worst log-loss cases):")
+        for r in worst_ptrue:
+            teams = f"{r.get('home_team','?')} - {r.get('away_team','?')}"
+            print(f"  {teams:30s}  act={r['actual']}  p_true={r['p_true']:.3f}  pred={r['pred']}  conf={r['confidence']:.3f}")
+
+    # Calibration (ECE) snapshot for hybrid
+    ece_h = metrics_h.get('ece')
+    if isinstance(ece_h, dict):
+        print("\nECE by class (Hybrid): " + ", ".join([f"{lab}={float(ece_h.get(lab, float('nan'))):.4f}" for lab in LABELS_ORDER]))
+
+    # Final summary
+    print("\n" + "="*80)
+    print("EVALUATION SUMMARY")
+    print("="*80)
+    _print_metrics_row('Hybrid', metrics_h)
+    _print_metrics_row('ML-only', metrics_m)
+    _print_metrics_row('Poisson-only', metrics_p)
     print(f"Artifacts written to {out_dir}")
 
 
