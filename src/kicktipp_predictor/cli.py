@@ -200,6 +200,7 @@ def tune(
     import sys
     import subprocess
     from pathlib import Path
+    import os
 
     # Locate experiments/auto_tune.py relative to this file
     pkg_root = Path(__file__).resolve().parents[2]  # repo root
@@ -224,6 +225,16 @@ def tune(
             "--n-splits", str(n_splits),
             # Worker script enforces single-thread internally; no n-jobs or omp-threads here
         ]
+        # Propagate strict thread caps to subprocesses
+        env_caps = {
+            'OMP_NUM_THREADS': '1',
+            'OPENBLAS_NUM_THREADS': '1',
+            'MKL_NUM_THREADS': '1',
+            'NUMEXPR_NUM_THREADS': '1',
+            'XGBOOST_NUM_THREADS': '1',
+        }
+        for k, v in env_caps.items():
+            os.environ.setdefault(k, v)
         if verbose:
             args.append("--verbose")
         if storage:

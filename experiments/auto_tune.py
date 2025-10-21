@@ -10,6 +10,13 @@ import argparse
 from typing import Dict, List
 import time
 
+# Hard-cap BLAS/OpenMP threads before importing numpy/xgboost to avoid fork/thread storms
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+os.environ.setdefault('NUMEXPR_NUM_THREADS', '1')
+os.environ.setdefault('XGBOOST_NUM_THREADS', '1')
+
 import numpy as np
 import sys
 from sklearn.model_selection import TimeSeriesSplit
