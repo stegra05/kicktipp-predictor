@@ -187,9 +187,9 @@ def run() -> None:
         pa = np.asarray([int(p.get('predicted_away_score', 0)) for p in preds], dtype=int)
         return ph, pa
 
-    # Generate predictions per variant (hybrid from collected; ml and poisson from features)
+    # Generate predictions per variant based on the same match set/order
     print("\nGenerating season-wide predictions (hybrid, ml-only, poisson-only)...")
-    hybrid_preds_all = list(all_predictions)  # already include probabilities and scorelines
+    hybrid_preds_all = predictor.predict(features_all)
     ml_preds_all = predictor.ml_predictor.predict(features_all)
     matches_all = [(row['home_team'], row['away_team']) for _, row in features_all.iterrows()]
     poisson_preds_all = predictor.poisson_predictor.predict_batch(matches_all)
@@ -199,10 +199,30 @@ def run() -> None:
         p['home_team'] = features_all.iloc[i]['home_team']
         p['away_team'] = features_all.iloc[i]['away_team']
 
-    # Ground truth
-    y_true = _actual_labels(season_df)
-    ah = np.asarray(season_df['home_score'], dtype=int)
-    aa = np.asarray(season_df['away_score'], dtype=int)
+    # Ground truth aligned to features_all order
+    id_to_actual = {m['match_id']: (m['home_score'], m['away_score']) for m in finished_matches if m.get('match_id') is not None}
+    actual_home_list = []
+    actual_away_list = []
+    y_true = []
+    for _, row in features_all.iterrows():
+        mid = int(row['match_id']) if 'match_id' in features_all.columns else None
+        if mid is None or mid not in id_to_actual:
+            # Skip if actual not found (shouldn't happen); keep arrays aligned by adding NaNs placeholder
+            actual_home_list.append(np.nan)
+            actual_away_list.append(np.nan)
+            y_true.append('D')
+        else:
+            ah_i, aa_i = id_to_actual[mid]
+            actual_home_list.append(int(ah_i))
+            actual_away_list.append(int(aa_i))
+            if ah_i > aa_i:
+                y_true.append('H')
+            elif aa_i > ah_i:
+                y_true.append('A')
+            else:
+                y_true.append('D')
+    ah = np.asarray(actual_home_list, dtype=int)
+    aa = np.asarray(actual_away_list, dtype=int)
 
     # Probability matrices
     P_h = _proba_from_preds(hybrid_preds_all)
@@ -409,13 +429,13 @@ def run() -> None:
     # Include teams, matchday, predicted/actual labels, probabilities, points
     mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
     debug_rows = []
-    for i in range(len(season_df)):
+    for i in range(len(features_all)):
         actual_lab = y_true[i]
         true_idx = mapping.get(actual_lab, -1)
         p_true = float(P_h[i, true_idx]) if true_idx >= 0 else float('nan')
         debug_rows.append({
             'match_id': int(features_all.iloc[i]['match_id']) if 'match_id' in features_all.columns else None,
-            'matchday': int(season_df.iloc[i]['matchday']) if 'matchday' in season_df.columns else None,
+            'matchday': int(features_all.iloc[i]['matchday']) if 'matchday' in features_all.columns else None,
             'home_team': features_all.iloc[i]['home_team'] if 'home_team' in features_all.columns else None,
             'away_team': features_all.iloc[i]['away_team'] if 'away_team' in features_all.columns else None,
             'actual': actual_lab,
