@@ -131,11 +131,11 @@ def _objective_builder(features_df, n_splits: int, omp_threads: int, verbose: bo
                 # Suppress noisy prints from the inner training/prediction loop
                 with open(os.devnull, 'w') as devnull:
                     with redirect_stdout(devnull), redirect_stderr(devnull):
-                        predictor = MatchPredictor()
+                        predictor = MatchPredictor(quiet=not verbose)
                         predictor.train(train_df)
                         preds = predictor.predict(test_feats)
             else:
-                predictor = MatchPredictor()
+                predictor = MatchPredictor(quiet=not verbose)
                 predictor.train(train_df)
                 preds = predictor.predict(test_feats)
 
@@ -324,11 +324,11 @@ def main():
             if not args.verbose:
                 with open(os.devnull, 'w') as devnull:
                     with redirect_stdout(devnull), redirect_stderr(devnull):
-                        predictor = MatchPredictor()
+                        predictor = MatchPredictor(quiet=not args.verbose)
                         predictor.train(features_full)
                         predictor.save_models()
             else:
-                predictor = MatchPredictor()
+                predictor = MatchPredictor(quiet=not args.verbose)
                 predictor.train(features_full)
                 predictor.save_models()
             if args.verbose:

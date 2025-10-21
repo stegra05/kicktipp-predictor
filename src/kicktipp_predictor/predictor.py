@@ -22,9 +22,10 @@ from .config import get_config
 class MatchPredictor:
     """Two-step predictor: outcome classifier + goal regressors + Poisson scoreline selection."""
 
-    def __init__(self):
+    def __init__(self, quiet: bool = False):
         """Initialize with configuration."""
         self.config = get_config()
+        self.quiet = quiet
 
         # Models
         self.outcome_model: XGBClassifier | None = None  # Predicts H/D/A
@@ -35,7 +36,11 @@ class MatchPredictor:
         self.feature_columns: List[str] = []
         self.label_encoder = LabelEncoder()
 
-        print(f"[MatchPredictor] Initialized with config: {self.config}")
+        self._log(f"[MatchPredictor] Initialized with config: {self.config}")
+
+    def _log(self, *args, **kwargs) -> None:
+        if not getattr(self, 'quiet', False):
+            print(*args, **kwargs)
 
     def train(self, matches_df: pd.DataFrame):
         """Train both outcome classifier and goal regressors.
@@ -47,7 +52,7 @@ class MatchPredictor:
         training_data = matches_df[matches_df['home_score'].notna()].copy()
 
         if len(training_data) < self.config.model.min_training_matches:
-            print(f"Not enough training data. Need at least {self.config.model.min_training_matches} matches.")
+            self._log(f"Not enough training data. Need at least {self.config.model.min_training_matches} matches.")
             return
 
         # Identify feature columns
@@ -67,8 +72,8 @@ class MatchPredictor:
         # Log training distribution
         counts = y_result.value_counts()
         total = len(y_result)
-        print(f"Training on {len(training_data)} matches with {len(self.feature_columns)} features")
-        print("Outcome distribution:", {k: f"{int(v)} ({v/total:.1%})" for k, v in counts.items()})
+        self._log(f"Training on {len(training_data)} matches with {len(self.feature_columns)} features")
+        self._log("Outcome distribution:", {k: f"{int(v)} ({v/total:.1%})" for k, v in counts.items()})
 
         # Train goal regressors
         self._train_goal_models(X, y_home, y_away)
@@ -76,11 +81,11 @@ class MatchPredictor:
         # Train outcome classifier
         self._train_outcome_model(X, y_result_encoded)
 
-        print("Training completed!")
+        self._log("Training completed!")
 
     def _train_goal_models(self, X: pd.DataFrame, y_home: pd.Series, y_away: pd.Series):
         """Train home and away goal regressors."""
-        print("Training goal regressors...")
+        self._log("Training goal regressors...")
         start = time.perf_counter()
 
         self.home_goals_model = XGBRegressor(
@@ -111,11 +116,11 @@ class MatchPredictor:
         self.away_goals_model.fit(X, y_away)
 
         elapsed = time.perf_counter() - start
-        print(f"Goal regressors trained in {elapsed:.2f}s")
+        self._log(f"Goal regressors trained in {elapsed:.2f}s")
 
     def _train_outcome_model(self, X: pd.DataFrame, y_result_encoded: np.ndarray):
         """Train outcome classifier with class weights."""
-        print("Training outcome classifier...")
+        self._log("Training outcome classifier...")
         start = time.perf_counter()
 
         # Split for proper evaluation
@@ -140,7 +145,7 @@ class MatchPredictor:
             draw_idx = int(np.where(self.label_encoder.classes_ == 'D')[0][0])
             if draw_idx in weight_map:
                 weight_map[draw_idx] *= self.config.model.draw_boost
-                print(f"Applied draw boost: {self.config.model.draw_boost}x")
+                self._log(f"Applied draw boost: {self.config.model.draw_boost}x")
         except Exception:
             pass
 
@@ -169,8 +174,8 @@ class MatchPredictor:
         )
 
         elapsed = time.perf_counter() - start
-        print(f"Outcome classifier trained in {elapsed:.2f}s")
-        print(f"Class weights: {dict(zip(self.label_encoder.classes_, class_weights))}")
+        self._log(f"Outcome classifier trained in {elapsed:.2f}s")
+        self._log(f"Class weights: {dict(zip(self.label_encoder.classes_, class_weights))}")
 
     def predict(self, features_df: pd.DataFrame) -> List[Dict]:
         """Predict match outcomes and scorelines.
@@ -316,7 +321,7 @@ class MatchPredictor:
         if self.outcome_model is None:
             raise ValueError("No models to save. Train first.")
 
-        print("Saving models...")
+        self._log("Saving models...")
 
         joblib.dump(self.outcome_model, self.config.paths.outcome_model_path)
         joblib.dump(self.home_goals_model, self.config.paths.home_goals_model_path)
@@ -330,11 +335,11 @@ class MatchPredictor:
         metadata_path = self.config.paths.models_dir / 'metadata.joblib'
         joblib.dump(metadata, metadata_path)
 
-        print(f"Models saved to {self.config.paths.models_dir}")
+        self._log(f"Models saved to {self.config.paths.models_dir}")
 
     def load_models(self):
         """Load trained models from disk."""
-        print("Loading models...")
+        self._log("Loading models...")
 
         if not self.config.paths.outcome_model_path.exists():
             raise FileNotFoundError(f"Model not found: {self.config.paths.outcome_model_path}")
@@ -349,7 +354,7 @@ class MatchPredictor:
         self.feature_columns = metadata['feature_columns']
         self.label_encoder = metadata['label_encoder']
 
-        print(f"Models loaded from {self.config.paths.models_dir}")
+        self._log(f"Models loaded from {self.config.paths.models_dir}")
 
     def evaluate(self, test_df: pd.DataFrame) -> Dict:
         """Evaluate predictor on test data.
