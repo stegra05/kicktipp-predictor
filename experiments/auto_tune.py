@@ -28,9 +28,12 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # Local imports
-from kicktipp_predictor.core.scraper.data_fetcher import DataFetcher
-from kicktipp_predictor.core.features.feature_engineering import FeatureEngineer
-from kicktipp_predictor.models.hybrid_predictor import HybridPredictor
+from kicktipp_predictor.data import DataLoader
+from kicktipp_predictor.predictor import MatchPredictor
+
+# NOTE: This tuning script was designed for the legacy HybridPredictor architecture.
+# The v2 MatchPredictor uses a config-based approach instead of direct parameter setting.
+# This script needs to be redesigned to work with the config system in config.py
 
 try:
     import yaml  # type: ignore
@@ -141,17 +144,20 @@ def evaluate_params(params: Dict[str, float],
         test_df = features_df.iloc[test_idx]
         test_feats = test_df.drop(columns=['home_score','away_score','goal_difference','result'], errors='ignore')
 
-        predictor = HybridPredictor()
-        predictor.ml_weight = float(params['ml_weight'])
-        predictor.poisson_weight = 1.0 - predictor.ml_weight
-        predictor.prob_blend_alpha = float(params['prob_blend_alpha'])
-        predictor.min_lambda = float(params['min_lambda'])
-        predictor.goal_temperature = float(params['goal_temperature'])
-        predictor.confidence_threshold = float(confidence_threshold)
+        # NOTE: v2 MatchPredictor doesn't support direct parameter tuning like this.
+        # Parameters are now managed through the config system.
+        # This code needs to be redesigned to modify config values.
+        predictor = MatchPredictor()
+        # TODO: Set config parameters here once config tuning is implemented
+        # predictor.ml_weight = float(params['ml_weight'])
+        # predictor.poisson_weight = 1.0 - predictor.ml_weight
+        # predictor.prob_blend_alpha = float(params['prob_blend_alpha'])
+        # predictor.min_lambda = float(params['min_lambda'])
+        # predictor.goal_temperature = float(params['goal_temperature'])
+        # predictor.confidence_threshold = float(confidence_threshold)
 
         predictor.train(train_df)
-        # Always use maximize-points predictor for points objective
-        preds = predictor.predict_optimized(test_feats)
+        preds = predictor.predict(test_feats)
 
         acts = test_df.to_dict('records')
 
@@ -243,8 +249,7 @@ def successive_halving(
         save_final_model: bool = False,
         seasons_back: int = 3,
     ) -> Dict[str, float]:
-    data_fetcher = DataFetcher()
-    feature_engineer = FeatureEngineer()
+    data_loader = DataLoader()
 
     # TimeSeries CV (modest folds for stability vs. runtime)
     tscv = TimeSeriesSplit(n_splits=n_splits)
@@ -447,24 +452,24 @@ def successive_halving(
     # Optional: Train final model on full dataset and save
     if save_final_model:
         try:
-            print("\n[FINAL] Training final HybridPredictor on full dataset...")
-            predictor = HybridPredictor()
-            predictor.ml_weight = float(best_trial.params['ml_weight'])
-            predictor.poisson_weight = 1.0 - predictor.ml_weight
-            predictor.prob_blend_alpha = float(best_trial.params['prob_blend_alpha'])
-            predictor.min_lambda = float(best_trial.params['min_lambda'])
-            predictor.goal_temperature = float(best_trial.params['goal_temperature'])
-            predictor.confidence_threshold = float(best_thr)
-            predictor.strategy = 'optimized'
+            print("\n[FINAL] Training final MatchPredictor on full dataset...")
+            predictor = MatchPredictor()
+            # TODO: Apply best parameters through config system
+            # predictor.ml_weight = float(best_trial.params['ml_weight'])
+            # predictor.poisson_weight = 1.0 - predictor.ml_weight
+            # predictor.prob_blend_alpha = float(best_trial.params['prob_blend_alpha'])
+            # predictor.min_lambda = float(best_trial.params['min_lambda'])
+            # predictor.goal_temperature = float(best_trial.params['goal_temperature'])
+            # predictor.confidence_threshold = float(best_thr)
 
             # Rebuild dataset with configurable horizon
-            current_season = data_fetcher.get_current_season()
+            current_season = data_loader.get_current_season()
             start_season = current_season - int(max(1, seasons_back))
-            all_matches_full = data_fetcher.fetch_historical_seasons(start_season, current_season)
-            features_full = feature_engineer.create_features_from_matches(all_matches_full)
+            all_matches_full = data_loader.fetch_historical_seasons(start_season, current_season)
+            features_full = data_loader.create_features_from_matches(all_matches_full)
 
             predictor.train(features_full)
-            predictor.save_models("hybrid")
+            predictor.save_models()
 
             # Persist run meta
             out_dir = os.path.join(project_root, 'data', 'predictions')
@@ -526,15 +531,14 @@ def main():
 
     # Load data
     print("Loading data...")
-    data_fetcher = DataFetcher()
-    feature_engineer = FeatureEngineer()
-    current_season = data_fetcher.get_current_season()
+    data_loader = DataLoader()
+    current_season = data_loader.get_current_season()
     start_season = current_season - 2
-    all_matches = data_fetcher.fetch_historical_seasons(start_season, current_season)
+    all_matches = data_loader.fetch_historical_seasons(start_season, current_season)
     print(f"Loaded {len(all_matches)} matches")
 
     print("Creating features...")
-    features_df = feature_engineer.create_features_from_matches(all_matches)
+    features_df = data_loader.create_features_from_matches(all_matches)
     print(f"Created {len(features_df)} samples")
 
     # Optional Optuna branch (scaffold)

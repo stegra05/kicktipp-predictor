@@ -1,13 +1,11 @@
 def test_imports():
     import kicktipp_predictor
-    from kicktipp_predictor.core.scraper.data_fetcher import DataFetcher
-    from kicktipp_predictor.core.features.feature_engineering import FeatureEngineer
-    from kicktipp_predictor.models.hybrid_predictor import HybridPredictor
+    from kicktipp_predictor.data import DataLoader
+    from kicktipp_predictor.predictor import MatchPredictor
     from kicktipp_predictor.web.app import app
 
-    assert DataFetcher is not None
-    assert FeatureEngineer is not None
-    assert HybridPredictor is not None
+    assert DataLoader is not None
+    assert MatchPredictor is not None
     assert app is not None
 
 
