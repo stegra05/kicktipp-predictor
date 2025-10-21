@@ -113,25 +113,25 @@ def _objective_builder(features_df, n_splits: int, omp_threads: int):
             'min_lambda': trial.suggest_float('min_lambda', 0.05, 0.40, step=0.01),
         }
 
-        fold_points: List[float] = []
+    fold_points: List[float] = []
 
-        for train_idx, test_idx in tscv.split(features_df):
+    for train_idx, test_idx in tscv.split(features_df):
             # Reset and apply params
             reset_config()
             _apply_params_to_config(params)
 
             # Prepare data
-            train_df = features_df.iloc[train_idx]
-            test_df = features_df.iloc[test_idx]
-            test_feats = test_df.drop(columns=['home_score','away_score','goal_difference','result'], errors='ignore')
+        train_df = features_df.iloc[train_idx]
+        test_df = features_df.iloc[test_idx]
+        test_feats = test_df.drop(columns=['home_score','away_score','goal_difference','result'], errors='ignore')
 
-            predictor = MatchPredictor()
-            predictor.train(train_df)
-            preds = predictor.predict(test_feats)
+        predictor = MatchPredictor()
+        predictor.train(train_df)
+        preds = predictor.predict(test_feats)
 
-            acts = test_df.to_dict('records')
-            pts = calculate_points(preds, acts) / max(len(acts), 1)
-            fold_points.append(pts)
+        acts = test_df.to_dict('records')
+        pts = calculate_points(preds, acts) / max(len(acts), 1)
+        fold_points.append(pts)
 
         # Objective: average points per game (maximize)
         return float(np.mean(fold_points)) if fold_points else 0.0
@@ -177,25 +177,70 @@ def main():
     print(f"Created {len(features_df)} samples")
 
     # Build and run study
+    def _fmt_dur(sec: float) -> str:
+        sec = int(max(0, sec))
+        h = sec // 3600
+        m = (sec % 3600) // 60
+        s = sec % 60
+        return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"
+
+    total_trials = int(max(0, args.n_trials))
+    total_cv_trainings = total_trials * int(max(1, args.n_splits))
+    print(f"Planned: trials={total_trials} | cv-trainings={total_cv_trainings} | workers={args.n_jobs or 1} x threads={args.omp_threads or 1}")
+
     objective = _objective_builder(features_df, args.n_splits, args.omp_threads)
     study = optuna.create_study(direction='maximize')
+
+    progress = {
+        'start': time.time(),
+        'completed': 0,
+        'best_value': float('-inf'),
+        'best_trial': None,
+    }
+
+    def _progress_cb(study: "optuna.study.Study", trial: "optuna.trial.FrozenTrial") -> None:  # type: ignore[name-defined]
+        progress['completed'] += 1
+        if study.best_trial is not None:
+            progress['best_value'] = float(study.best_value)
+            progress['best_trial'] = int(study.best_trial.number)
+        elapsed = time.time() - progress['start']
+        done = progress['completed']
+        total = max(1, total_trials)
+        rate = done / elapsed if elapsed > 0 else 0.0
+        remaining = max(0.0, (total - done) / rate) if rate > 0 else float('inf')
+        line = (
+            f"\r[TUNE] trials {done}/{total} | elapsed {_fmt_dur(elapsed)} | "
+            f"eta {_fmt_dur(remaining)} | best={progress['best_value']:.3f}"
+        )
+        if progress['best_trial'] is not None:
+            line += f" (#{progress['best_trial']})"
+        print(line, end='', flush=True)
+
     print(f"Running Optuna study for {args.n_trials} trials with n_jobs={args.n_jobs}...")
     start = time.time()
-    study.optimize(objective, n_trials=args.n_trials, n_jobs=args.n_jobs if args.n_jobs and args.n_jobs > 0 else 1, show_progress_bar=True)
+    study.optimize(
+        objective,
+        n_trials=args.n_trials,
+        n_jobs=args.n_jobs if args.n_jobs and args.n_jobs > 0 else 1,
+        callbacks=[_progress_cb],
+        show_progress_bar=False,
+    )
+    # Ensure newline after progress line
+    print()
     duration = time.time() - start
     print(f"Study complete in {duration:.1f}s. Best PPG={study.best_value:.4f}")
 
     # Persist best params
-    best_params = dict(study.best_params)
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    cfg_dir = os.path.join(project_root, 'config')
-    os.makedirs(cfg_dir, exist_ok=True)
-    if yaml is not None:
-        with open(os.path.join(cfg_dir, 'best_params.yaml'), 'w', encoding='utf-8') as f:
+        best_params = dict(study.best_params)
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        cfg_dir = os.path.join(project_root, 'config')
+        os.makedirs(cfg_dir, exist_ok=True)
+        if yaml is not None:
+            with open(os.path.join(cfg_dir, 'best_params.yaml'), 'w', encoding='utf-8') as f:
             yaml.safe_dump(best_params, f, sort_keys=True)
-    else:
-        import json
-        with open(os.path.join(cfg_dir, 'best_params.json'), 'w', encoding='utf-8') as f:
+        else:
+            import json
+            with open(os.path.join(cfg_dir, 'best_params.json'), 'w', encoding='utf-8') as f:
             json.dump(best_params, f, indent=2)
     print("Best params saved to config/best_params.yaml (or .json)")
 
