@@ -191,6 +191,7 @@ def tune(
     omp_threads: int = typer.Option(1, help="Threads per worker for BLAS/OMP"),
     save_final_model: bool = typer.Option(False, help="Train final model on full data and save"),
     seasons_back: int = typer.Option(3, help="Past seasons to include for final training"),
+    verbose: bool = typer.Option(False, help="Enable verbose inner logs during tuning"),
 ):
     """Run Optuna hyperparameter tuning optimizing PPG (wrapper around experiments/auto_tune.py)."""
     import sys
@@ -215,6 +216,8 @@ def tune(
     if save_final_model:
         cmd.append("--save-final-model")
     cmd += ["--seasons-back", str(seasons_back)]
+    if verbose:
+        cmd.append("--verbose")
 
     # Stream output
     proc = subprocess.Popen(cmd, cwd=str(pkg_root))
