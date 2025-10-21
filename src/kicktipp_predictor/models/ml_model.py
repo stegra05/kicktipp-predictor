@@ -163,13 +163,13 @@ class MLPredictor:
             random_state=42,
             n_jobs=self.num_threads,
             nthread=self.num_threads,
+            early_stopping_rounds=50,
         )
         self.result_model.fit(
             X_tr, y_tr,
             sample_weight=sample_weights_tr,
             eval_set=[(X_cal, y_cal)],
             verbose=False,
-            early_stopping_rounds=50,
         )
 
         # Probability calibration (isotonic) on held-out split
