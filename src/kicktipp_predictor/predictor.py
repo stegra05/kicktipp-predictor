@@ -314,6 +314,29 @@ class MatchPredictor:
         if self.outcome_model is None or self.home_goals_model is None:
             raise ValueError("Models not trained. Call train() first.")
 
+        # Align incoming features with the trained feature schema.
+        # Some generation paths may leave history columns un-prefixed (e.g. 'avg_points')
+        # when merging the away side; map those to the expected 'away_*' (or 'home_*') names.
+        available_columns = set(features_df.columns)
+        missing_columns = [c for c in self.feature_columns if c not in available_columns]
+
+        if missing_columns:
+            # Attempt to backfill prefixed columns from their unprefixed counterparts
+            for col in list(missing_columns):
+                if col.startswith('away_'):
+                    base = col[len('away_'):]
+                    if base in features_df.columns:
+                        features_df[col] = features_df[base]
+                elif col.startswith('home_'):
+                    base = col[len('home_'):]
+                    if base in features_df.columns:
+                        features_df[col] = features_df[base]
+
+            # Add any still-missing columns as zeros to satisfy the model input shape
+            for col in self.feature_columns:
+                if col not in features_df.columns:
+                    features_df[col] = 0.0
+
         X = features_df[self.feature_columns].fillna(0)
 
         # Step 1: Predict outcome (H/D/A) - The Selector
