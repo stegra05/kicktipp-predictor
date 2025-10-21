@@ -1,0 +1,6 @@
+confidence_threshold: 0.4
+goal_temperature: 1.8
+min_lambda: 0.2
+ml_weight: 0.55
+prob_blend_alpha: 0.55
+strategy: optimized
