@@ -241,6 +241,83 @@ def run_evaluation(season: bool = False) -> None:
     _print_metrics_row('ML-only', metrics_m)
     _print_metrics_row('Poisson-only', metrics_p)
 
+    # ------------------------------------------------------------
+    # Strategy comparison (scoreline selection strategies)
+    # ------------------------------------------------------------
+    print("\n" + "-"*80)
+    print("STRATEGY METRICS (Scoreline selection)")
+    print("-"*80)
+
+    # Base: raw hybrid scorelines from predictor.predict (already computed: ph_h, pa_h)
+    base_points = compute_points(ph_h, pa_h, ah, aa)
+
+    # Optimized strategy: choose scoreline maximizing expected points from Poisson grid
+    preds_opt_balanced = predictor.predict_optimized(test_features, strategy='balanced')
+    ph_opt = np.asarray([int(p.get('predicted_home_score', 0)) for p in preds_opt_balanced], dtype=int)
+    pa_opt = np.asarray([int(p.get('predicted_away_score', 0)) for p in preds_opt_balanced], dtype=int)
+    pts_opt = compute_points(ph_opt, pa_opt, ah, aa)
+
+    # Aggressive: push wins by +1 goal for favored side
+    def _aggressive_from_probs(base_preds: List[Dict]) -> Tuple[np.ndarray, np.ndarray]:
+        agg_h: List[int] = []
+        agg_a: List[int] = []
+        for p in base_preds:
+            h = int(p.get('predicted_home_score', 0))
+            a = int(p.get('predicted_away_score', 0))
+            ph = float(p.get('home_win_probability', 1/3))
+            pd = float(p.get('draw_probability', 1/3))
+            pa = float(p.get('away_win_probability', 1/3))
+            if ph > pa and ph > pd:
+                h = max(0, h + 1)
+            elif pa > ph and pa > pd:
+                a = max(0, a + 1)
+            else:
+                # draw favored, nudge to 2-2 if already draw, else to keep difference
+                if h == a:
+                    h, a = 2, 2
+            agg_h.append(h)
+            agg_a.append(a)
+        return np.asarray(agg_h, dtype=int), np.asarray(agg_a, dtype=int)
+
+    ph_agg, pa_agg = _aggressive_from_probs(hybrid_preds)
+    pts_agg = compute_points(ph_agg, pa_agg, ah, aa)
+
+    # Safe: if low confidence, fall back to 1-1 draw or 2-1/1-2 by favored side
+    def _safe_from_confidence(base_preds: List[Dict], thr: float = float(predictor.confidence_threshold)) -> Tuple[np.ndarray, np.ndarray]:
+        sh: List[int] = []
+        sa: List[int] = []
+        for p in base_preds:
+            h = int(p.get('predicted_home_score', 0))
+            a = int(p.get('predicted_away_score', 0))
+            conf = float(extract_display_confidence(p))
+            if conf < thr:
+                ph = float(p.get('home_win_probability', 1/3))
+                pd = float(p.get('draw_probability', 1/3))
+                pa = float(p.get('away_win_probability', 1/3))
+                if ph > pa and ph > pd:
+                    h, a = 2, 1
+                elif pa > ph and pa > pd:
+                    h, a = 1, 2
+                else:
+                    h, a = 1, 1
+            sh.append(h)
+            sa.append(a)
+        return np.asarray(sh, dtype=int), np.asarray(sa, dtype=int)
+
+    ph_safe, pa_safe = _safe_from_confidence(hybrid_preds)
+    pts_safe = compute_points(ph_safe, pa_safe, ah, aa)
+
+    # Print concise table
+    def _print_strategy(name: str, ph: np.ndarray, pa: np.ndarray, pts: np.ndarray) -> None:
+        print(f"{name:13s} avg_pts={float(np.mean(pts)) if len(pts) else 0.0:.3f}  total={int(np.sum(pts)):4d}  "
+              f"scores={int(np.sum((ph==ah) & (pa==aa))):3d}  diffs={int(np.sum((ph-pa)==(ah-aa))):3d}  "
+              f"results={int(np.sum((ph>pa)&(ah>aa) | (ph==pa)&(ah==aa) | (ph<pa)&(ah<aa))):3d}")
+
+    _print_strategy('Base', ph_h, pa_h, base_points)
+    _print_strategy('Optimized', ph_opt, pa_opt, pts_opt)
+    _print_strategy('Aggressive', ph_agg, pa_agg, pts_agg)
+    _print_strategy('Safe', ph_safe, pa_safe, pts_safe)
+
     # Points distribution (hybrid)
     print("\nPOINTS DISTRIBUTION (Hybrid)")
     unique_pts = [0, 2, 3, 4]
