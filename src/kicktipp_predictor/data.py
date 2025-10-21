@@ -323,6 +323,14 @@ class DataLoader:
             features.get('home_momentum_score', 0.0) - features.get('away_momentum_score', 0.0)
         )
 
+        # Signed separation features (explicit relative strength)
+        features['form_points_difference'] = (
+            features.get('home_form_points', 0) - features.get('away_form_points', 0)
+        )
+        features['momentum_score_difference'] = (
+            features.get('home_momentum_score', 0.0) - features.get('away_momentum_score', 0.0)
+        )
+
         # Head-to-head features
         features.update(self._get_h2h_features(home_team, away_team, ref_hist))
 

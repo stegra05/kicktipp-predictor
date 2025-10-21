@@ -223,28 +223,28 @@ These parameters can be tuned using the `tune` command (see Advanced Usage below
 
 ## Advanced Usage
 
-### Hyperparameter Tuning
-Use the CLI `tune` command to optimize hyperparameters via time-series CV. Best params are written to `config/best_params.yaml` (or `.json`).
+### Hyperparameter Tuning (Optuna-only, PPG objective)
+Use the CLI `tune` command to optimize hyperparameters via time-series CV using Optuna. The objective is average Kicktipp points per game (PPG). Best params are written to `config/best_params.yaml`.
 
-To run the tuner, for grid-based search:
+Run the tuner:
 ```bash
-python3 -m kicktipp_predictor tune --max-trials 100 --n-splits 3 --objective points --refine
+python3 -m kicktipp_predictor tune --n-trials 200 --n-splits 3 --n-jobs 4 --omp-threads 2
 ```
 
 **Arguments:**
-- `--max-trials <number>`: The maximum number of parameter combinations to evaluate. A higher number will take longer but may yield better results.
-- `--n-splits <number>`: The number of time-series cross-validation folds to use.
-- `--objective <name>`: The optimization objective. Can be `points` (default) or `composite` (balances points with realism).
-- `--refine`: Enable a second refinement step to zoom in on the best-performing parameter configurations.
-- `--save-final-model`: Train and save a new model using the best-found parameters.
- - `--optuna <N>`: Run Optuna with N trials instead of grid (requires `optuna`).
+- `--n-trials <number>`: Number of Optuna trials.
+- `--n-splits <number>`: Time-series CV folds.
+- `--n-jobs <number>`: Parallel Optuna workers (set >0 for multi-processing).
+- `--omp-threads <number>`: Threads per worker for BLAS/OMP/XGBoost.
+- `--save-final-model`: Train and save a model with the best parameters after tuning.
+- `--seasons-back <number>`: Historical seasons for final training when saving the model.
 
 Advanced users can still call the underlying script directly:
 ```bash
-python experiments/auto_tune.py --max-trials 100 --n-splits 3
+python experiments/auto_tune.py --n-trials 200 --n-splits 3 --n-jobs 4 --omp-threads 2
 ```
 
-The tuner will output the best-performing parameters to `config/best_params.yaml` (or `.json`), which are automatically used by the `HybridPredictor`.
+The tuner outputs the best-performing parameters to `config/best_params.yaml`, which are automatically used by `MatchPredictor`.
 
 ### Optional Dependencies
 

@@ -95,7 +95,7 @@ class ModelConfig:
 
     # Class weights for outcome classifier
     # Boost draw class since it's underrepresented
-    draw_boost: float = 1.5
+    draw_boost: float = 1.1
 
 
 @dataclass
@@ -119,7 +119,12 @@ class Config:
         config = cls()
 
         if config_file is None:
-            config_file = config.paths.config_dir / "best_params.yaml"
+            # Allow override via environment variable for tuning processes
+            env_cfg = os.getenv("KTP_CONFIG_FILE")
+            if env_cfg and Path(env_cfg).exists():
+                config_file = Path(env_cfg)
+            else:
+                config_file = config.paths.config_dir / "best_params.yaml"
 
         # Try to load from YAML if available
         if yaml is not None and config_file.exists():
@@ -135,6 +140,30 @@ class Config:
                         config.model.min_lambda = float(params["min_lambda"])
                     if "draw_boost" in params:
                         config.model.draw_boost = float(params["draw_boost"])
+
+                    # Outcome classifier hyperparameters
+                    if "outcome_n_estimators" in params:
+                        config.model.outcome_n_estimators = int(params["outcome_n_estimators"])
+                    if "outcome_max_depth" in params:
+                        config.model.outcome_max_depth = int(params["outcome_max_depth"])
+                    if "outcome_learning_rate" in params:
+                        config.model.outcome_learning_rate = float(params["outcome_learning_rate"])
+                    if "outcome_subsample" in params:
+                        config.model.outcome_subsample = float(params["outcome_subsample"])
+                    if "outcome_colsample_bytree" in params:
+                        config.model.outcome_colsample_bytree = float(params["outcome_colsample_bytree"])
+
+                    # Goal regressors hyperparameters
+                    if "goals_n_estimators" in params:
+                        config.model.goals_n_estimators = int(params["goals_n_estimators"])
+                    if "goals_max_depth" in params:
+                        config.model.goals_max_depth = int(params["goals_max_depth"])
+                    if "goals_learning_rate" in params:
+                        config.model.goals_learning_rate = float(params["goals_learning_rate"])
+                    if "goals_subsample" in params:
+                        config.model.goals_subsample = float(params["goals_subsample"])
+                    if "goals_colsample_bytree" in params:
+                        config.model.goals_colsample_bytree = float(params["goals_colsample_bytree"])
 
                     print(f"[Config] Loaded from {config_file}")
             except Exception as e:
