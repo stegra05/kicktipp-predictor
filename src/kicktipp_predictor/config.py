@@ -165,10 +165,12 @@ class Config:
                     if "goals_colsample_bytree" in params:
                         config.model.goals_colsample_bytree = float(params["goals_colsample_bytree"])
 
-                    print(f"[Config] Loaded from {config_file}")
+                    if os.getenv("KTP_VERBOSE") == "1":
+                        print(f"[Config] Loaded from {config_file}")
             except Exception as e:
-                print(f"[Config] Warning: Could not load {config_file}: {e}")
-                print("[Config] Using default configuration")
+                if os.getenv("KTP_VERBOSE") == "1":
+                    print(f"[Config] Warning: Could not load {config_file}: {e}")
+                    print("[Config] Using default configuration")
 
         return config
 

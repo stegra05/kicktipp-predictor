@@ -164,6 +164,9 @@ def main():
     parser.add_argument('--pruner-startup-trials', type=int, default=20, help='Trials before enabling pruning (median pruner)')
     args = parser.parse_args()
 
+    # Propagate verbosity to submodules via environment variable
+    os.environ['KTP_VERBOSE'] = '1' if args.verbose else '0'
+
     if optuna is None:
         print("Optuna is not installed. Please install optuna to run tuning.")
         sys.exit(1)
@@ -313,15 +316,21 @@ def main():
             reset_config()
             _apply_params_to_config(best_params)
 
-            predictor = MatchPredictor()
-
             current_season = data_loader.get_current_season()
             start_season = current_season - int(max(1, args.seasons_back))
             all_matches_full = data_loader.fetch_historical_seasons(start_season, current_season)
             features_full = data_loader.create_features_from_matches(all_matches_full)
 
-            predictor.train(features_full)
-            predictor.save_models()
+            if not args.verbose:
+                with open(os.devnull, 'w') as devnull:
+                    with redirect_stdout(devnull), redirect_stderr(devnull):
+                        predictor = MatchPredictor()
+                        predictor.train(features_full)
+                        predictor.save_models()
+            else:
+                predictor = MatchPredictor()
+                predictor.train(features_full)
+                predictor.save_models()
             if args.verbose:
                 print("[FINAL] Saved trained models.")
         except Exception as e:  # pragma: no cover
