@@ -226,6 +226,12 @@ class DataLoader:
         # Sort matches by date
         sorted_matches = sorted(matches, key=lambda x: x['date'])
 
+        # Precompute EWMA recency features once across the dataset
+        try:
+            ewma_long_df = self._compute_ewma_recency_features(sorted_matches, span=5)
+        except Exception:
+            ewma_long_df = None
+
         for i, match in enumerate(sorted_matches):
             if (not match['is_finished'] or
                 match.get('home_score') is None or
@@ -235,7 +241,7 @@ class DataLoader:
             # Get historical data up to this match (for training)
             historical_matches = sorted_matches[:i]
 
-            features = self._create_match_features(match, historical_matches)
+            features = self._create_match_features(match, historical_matches, is_prediction=False, ewma_long_df=ewma_long_df)
 
             if features is not None:
                 features_list.append(features)
@@ -255,8 +261,16 @@ class DataLoader:
         """
         features_list = []
 
+        # Precompute EWMA recency features once from historical matches
+        try:
+            # Use only historical matches for leakage-safe EWMAs
+            hist_sorted = sorted(historical_matches, key=lambda x: x.get('date'))
+            ewma_long_df = self._compute_ewma_recency_features(hist_sorted, span=5)
+        except Exception:
+            ewma_long_df = None
+
         for match in upcoming_matches:
-            features = self._create_match_features(match, historical_matches, is_prediction=True)
+            features = self._create_match_features(match, historical_matches, is_prediction=True, ewma_long_df=ewma_long_df)
 
             if features is not None:
                 features_list.append(features)
@@ -264,7 +278,8 @@ class DataLoader:
         return pd.DataFrame(features_list)
 
     def _create_match_features(self, match: Dict, historical_matches: List[Dict],
-                              is_prediction: bool = False) -> Optional[Dict]:
+                              is_prediction: bool = False,
+                              ewma_long_df: Optional[pd.DataFrame] = None) -> Optional[Dict]:
         """Create features for a single match."""
 
         home_team = match['home_team']
@@ -307,6 +322,13 @@ class DataLoader:
             'home_team': home_team,
             'away_team': away_team,
         }
+
+        # Precomputed EWMA recency features (leakage-safe)
+        if ewma_long_df is not None:
+            try:
+                self._attach_ewma_features(features, match, ewma_long_df, span=5, is_prediction=is_prediction)
+            except Exception:
+                pass
 
         # Recent form features
         features.update(self._get_form_features(home_team, home_history, prefix='home'))
@@ -376,6 +398,141 @@ class DataLoader:
                 features['result'] = 'D'
 
         return features
+
+    def _build_team_long_df(self, matches: List[Dict]) -> pd.DataFrame:
+        """Build a long-format team-match DataFrame from match dicts.
+
+        Each finished match contributes two rows (home and away) with goals_for/against.
+        """
+        rows = []
+        for m in matches:
+            try:
+                if not m.get('is_finished'):
+                    continue
+                date = m.get('date')
+                if date is None:
+                    continue
+                hs = m.get('home_score')
+                as_ = m.get('away_score')
+                if hs is None or as_ is None:
+                    continue
+                # Home row
+                rows.append({
+                    'match_id': m.get('match_id'),
+                    'date': date,
+                    'team': m.get('home_team'),
+                    'goals_for': hs,
+                    'goals_against': as_,
+                })
+                # Away row
+                rows.append({
+                    'match_id': m.get('match_id'),
+                    'date': date,
+                    'team': m.get('away_team'),
+                    'goals_for': as_,
+                    'goals_against': hs,
+                })
+            except Exception:
+                continue
+
+        if not rows:
+            return pd.DataFrame(columns=['match_id', 'date', 'team'])
+
+        long_df = pd.DataFrame(rows)
+        long_df['goal_diff'] = long_df['goals_for'] - long_df['goals_against']
+        # Points per match: 3 win, 1 draw, 0 loss (from perspective of team)
+        long_df['points'] = np.select(
+            [long_df['goals_for'] > long_df['goals_against'], long_df['goals_for'] == long_df['goals_against']],
+            [3, 1], default=0
+        )
+        return long_df
+
+    def _compute_ewma_recency_features(self, matches: List[Dict], span: int = 5) -> pd.DataFrame:
+        """Compute leakage-safe EWMA recency features on a long-format team-match frame.
+
+        Returns a DataFrame with columns: ['match_id','date','team', '<metric>_ewm{span}', ...]
+        where each EWMA is computed on prior values only (via groupby.shift(1)).
+        """
+        long_df = self._build_team_long_df(matches)
+        if long_df.empty:
+            return long_df
+
+        long_df = long_df.sort_values(['team', 'date']).reset_index(drop=True)
+
+        metrics = ['goals_for', 'goals_against', 'goal_diff', 'points']
+        for col in metrics:
+            prior_col = f'{col}_prior'
+            ewm_col = f'{col}_ewm{span}'
+            long_df[prior_col] = long_df.groupby('team')[col].shift(1)
+            # EWMA on prior values to avoid leakage
+            long_df[ewm_col] = (
+                long_df.groupby('team')[prior_col]
+                       .transform(lambda s: s.ewm(span=span, adjust=False).mean())
+            )
+            # Drop helper
+            long_df.drop(columns=[prior_col], inplace=True)
+
+        # Fill early NaNs with global means (season not tracked explicitly)
+        for col in [f'{m}_ewm{span}' for m in metrics]:
+            if col in long_df.columns:
+                long_df[col] = long_df[col].fillna(long_df[col].mean())
+
+        # Keep only lookup-relevant columns
+        keep_cols = ['match_id', 'date', 'team'] + [f'{m}_ewm{span}' for m in metrics]
+        return long_df[keep_cols]
+
+    def _attach_ewma_features(self, features: Dict, match: Dict, ewma_long_df: pd.DataFrame,
+                               span: int = 5, is_prediction: bool = False) -> None:
+        """Attach precomputed EWMA features for home/away teams to the features dict.
+
+        For finished matches, uses the EWMA row corresponding to the match_id.
+        For upcoming matches, uses the last available EWMA before the match date.
+        Falls back to global means if a team has no history.
+        """
+        if ewma_long_df is None or ewma_long_df.empty:
+            return
+
+        match_id = match.get('match_id')
+        match_date = match.get('date')
+        home_team = match.get('home_team')
+        away_team = match.get('away_team')
+
+        ewm_cols = [c for c in ewma_long_df.columns if c.endswith(f'_ewm{span}')]
+        global_means = {c: float(ewma_long_df[c].mean()) for c in ewm_cols}
+
+        def lookup(team: str) -> Dict[str, float]:
+            if team is None:
+                return {c: global_means[c] for c in ewm_cols}
+            df_team = ewma_long_df[ewma_long_df['team'] == team]
+            if df_team.empty:
+                return {c: global_means[c] for c in ewm_cols}
+            row = None
+            if not is_prediction and match_id is not None:
+                df_mid = df_team[df_team['match_id'] == match_id]
+                if not df_mid.empty:
+                    row = df_mid.iloc[0]
+            if row is None and match_date is not None:
+                df_before = df_team[df_team['date'] < match_date]
+                if not df_before.empty:
+                    row = df_before.sort_values('date').iloc[-1]
+            if row is None:
+                return {c: global_means[c] for c in ewm_cols}
+            return {c: float(row[c]) for c in ewm_cols}
+
+        home_vals = lookup(home_team)
+        away_vals = lookup(away_team)
+
+        # Map to prefixed feature names
+        mapping = {
+            f'goals_for_ewm{span}': 'goals_for',
+            f'goals_against_ewm{span}': 'goals_against',
+            f'goal_diff_ewm{span}': 'goal_diff',
+            f'points_ewm{span}': 'points',
+        }
+
+        for ewm_col, base in mapping.items():
+            features[f'home_{base}_ewm{span}'] = home_vals.get(ewm_col, global_means.get(ewm_col, 0.0))
+            features[f'away_{base}_ewm{span}'] = away_vals.get(ewm_col, global_means.get(ewm_col, 0.0))
 
     def _get_form_features(self, team: str, history: List[Dict], prefix: str,
                           last_n: int = 5) -> Dict:

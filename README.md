@@ -16,6 +16,7 @@ This clear hierarchy ensures **transparent, robust predictions** without the fra
 ## Features
 - **Clear Two-Step Architecture**: Outcome first, then scoreline - easy to understand and debug
 - **Advanced Feature Engineering**: 80+ features including momentum, strength of schedule, rest days, and goal patterns
+- **EWMA Recency Features (new)**: Leakage-safe exponentially weighted moving averages for recent form (goals for/against, goal diff, and points per match) precomputed once and merged into match features
 - **Comprehensive Evaluation**: Brier score, log loss, RPS, accuracy, and Kicktipp points
 - **Performance Tracking**: Automatic tracking of prediction accuracy and points earned
 - **Web Interface**: Clean, responsive web UI to view predictions, league table, and statistics
@@ -142,6 +143,17 @@ python3 -m kicktipp_predictor predict --matchday 20 --workers 4
    ↓
 7. Performance Tracking (points calculation)
 ```
+
+### EWMA Recency Features
+
+To capture short-term momentum without leakage, the feature pipeline precomputes exponentially weighted moving averages (span=5, adjust=False) on prior match values per team and merges them into match-level features. Added columns include:
+
+- `home_goals_for_ewm5`, `away_goals_for_ewm5`
+- `home_goals_against_ewm5`, `away_goals_against_ewm5`
+- `home_goal_diff_ewm5`, `away_goal_diff_ewm5`
+- `home_points_ewm5`, `away_points_ewm5`
+
+Early-season gaps are filled with global means to handle cold starts. These features are computed once across the dataset and reused for both training and prediction paths.
 
 ### Why This Architecture Works
 
