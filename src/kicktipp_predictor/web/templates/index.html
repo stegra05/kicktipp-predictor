@@ -6,20 +6,15 @@
 <div class="header-section">
     <h2>Upcoming Match Predictions</h2>
     <div class="controls">
-        <label for="strategy">Strategy:</label>
-        <select id="strategy" onchange="loadPredictions()">
-            <option value="balanced">Balanced</option>
-            <option value="conservative">Conservative</option>
-            <option value="aggressive">Aggressive</option>
-            <option value="safe">Safe (Winner Focus)</option>
-        </select>
-
         <label for="days">Days ahead:</label>
-        <select id="days" onchange="loadPredictions()">
+        <select id="days" onchange="loadPredictions('days')">
             <option value="7" selected>7 days</option>
             <option value="14">14 days</option>
             <option value="30">30 days</option>
         </select>
+
+        <label for="matchday">or Matchday:</label>
+        <input type="number" id="matchday" min="1" max="38" onchange="loadPredictions('matchday')" placeholder="e.g. 5">
 
         <button onclick="loadCurrentMatchday()" class="btn">Current Matchday</button>
     </div>
@@ -33,19 +28,36 @@
 </div>
 
 <script>
-    async function loadPredictions() {
-        const strategy = document.getElementById('strategy').value;
-        const days = document.getElementById('days').value;
+    async function loadPredictions(source) {
+        const daysInput = document.getElementById('days');
+        const matchdayInput = document.getElementById('matchday');
         const loading = document.getElementById('loading');
         const error = document.getElementById('error');
         const container = document.getElementById('predictions-container');
+
+        // Clear the other input to avoid confusion
+        if (source === 'days') {
+            matchdayInput.value = '';
+        } else if (source === 'matchday') {
+            daysInput.value = '7'; // Reset to default
+        }
+
+        const days = daysInput.value;
+        const matchday = matchdayInput.value;
 
         loading.style.display = 'block';
         error.style.display = 'none';
         container.innerHTML = '';
 
         try {
-            const response = await fetch(`/api/upcoming_predictions?strategy=${strategy}&days=${days}`);
+            let apiUrl = '/api/upcoming_predictions';
+            if (matchday) {
+                apiUrl += `?matchday=${matchday}`;
+            } else {
+                apiUrl += `?days=${days}`;
+            }
+
+            const response = await fetch(apiUrl);
             const data = await response.json();
 
             loading.style.display = 'none';
@@ -108,6 +120,10 @@
         const container = document.getElementById('predictions-container');
 
         predictions.forEach(pred => {
+            const matchLink = document.createElement('a');
+            matchLink.href = `/match/${pred.match_id}`;
+            matchLink.className = 'match-card-link';
+
             const matchCard = document.createElement('div');
             matchCard.className = 'match-card';
 
@@ -127,6 +143,7 @@
                     <div class="match-score">
                         <span class="predicted-score">${pred.predicted_score}</span>
                         <span class="confidence">Confidence: ${pred.confidence}%</span>
+                        <span class="expected-goals">Expected Goals: ${pred.home_expected_goals.toFixed(2)} - ${pred.away_expected_goals.toFixed(2)}</span>
                     </div>
                     <div class="team away-team">
                         <span class="team-name">${pred.away_team}</span>
@@ -150,12 +167,13 @@
                 </div>
             `;
 
-            container.appendChild(matchCard);
+            matchLink.appendChild(matchCard);
+            container.appendChild(matchLink);
         });
     }
 
     // Load predictions on page load
-    window.onload = loadPredictions;
+    window.onload = () => loadPredictions('days');
 </script>
 {% endblock %}
 

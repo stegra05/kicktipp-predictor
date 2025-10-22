@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}Match Detail - 3. Liga Predictor{% endblock %}
+
+{% block content %}
+<div class="header-section">
+    <h2>Match Detail</h2>
+</div>
+
+<div id="loading" class="loading">Loading match details...</div>
+<div id="error" class="error" style="display: none;"></div>
+
+<div id="match-detail-container">
+    <!-- Match details will be loaded here -->
+</div>
+
+<script>
+    async function loadMatchDetails() {
+        const matchId = {{ match_id }};
+        const loading = document.getElementById('loading');
+        const error = document.getElementById('error');
+        const container = document.getElementById('match-detail-container');
+
+        loading.style.display = 'block';
+        error.style.display = 'none';
+
+        try {
+            const response = await fetch(`/api/match/${matchId}`);
+            const data = await response.json();
+
+            loading.style.display = 'none';
+
+            if (!data.success) {
+                error.textContent = data.error || 'Failed to load match details';
+                error.style.display = 'block';
+                return;
+            }
+
+            displayMatchDetails(data.prediction);
+        } catch (err) {
+            loading.style.display = 'none';
+            error.textContent = 'Error loading details: ' + err.message;
+            error.style.display = 'block';
+        }
+    }
+
+    function displayMatchDetails(pred) {
+        const container = document.getElementById('match-detail-container');
+
+        const homeWinWidth = pred.home_win_probability;
+        const drawWidth = pred.draw_probability;
+        const awayWinWidth = pred.away_win_probability;
+
+        let featuresHtml = '<ul>';
+        for (const [key, value] of Object.entries(pred.features)) {
+            featuresHtml += `<li><strong>${key}:</strong> ${value.toFixed(4)}</li>`;
+        }
+        featuresHtml += '</ul>';
+
+        container.innerHTML = `
+            <div class="match-card-detail">
+                <div class="match-header">
+                    <span class="match-date">${pred.date}</span>
+                    <span class="match-matchday">Matchday ${pred.matchday}</span>
+                </div>
+                <div class="match-teams">
+                    <div class="team home-team">
+                        <span class="team-name">${pred.home_team}</span>
+                    </div>
+                    <div class="match-score">
+                        <span class="predicted-score">${pred.predicted_score}</span>
+                        <span class="confidence">Confidence: ${pred.confidence}%</span>
+                        <span class="expected-goals">Expected Goals: ${pred.home_expected_goals} - ${pred.away_expected_goals}</span>
+                    </div>
+                    <div class="team away-team">
+                        <span class="team-name">${pred.away_team}</span>
+                    </div>
+                </div>
+                <div class="probability-bar">
+                    <div class="prob-segment home-win" style="width: ${homeWinWidth}%"><span>${homeWinWidth}%</span></div>
+                    <div class="prob-segment draw" style="width: ${drawWidth}%"><span>${drawWidth}%</span></div>
+                    <div class="prob-segment away-win" style="width: ${awayWinWidth}%"><span>${awayWinWidth}%</span></div>
+                </div>
+                 <div class="probability-labels">
+                    <span>Home Win</span>
+                    <span>Draw</span>
+                    <span>Away Win</span>
+                </div>
+            </div>
+
+            <div class="features-section">
+                <h3>Key Prediction Features</h3>
+                ${featuresHtml}
+            </div>
+        `;
+    }
+
+    window.onload = loadMatchDetails;
+</script>
+{% endblock %}

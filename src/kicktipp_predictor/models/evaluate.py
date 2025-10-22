@@ -197,6 +197,9 @@ def run_evaluation(season: bool = False, dynamic: bool = False, retrain_every: i
     out_dir = os.path.join('data', 'predictions')
     ensure_dir(out_dir)
 
+    plot_dir = os.path.join('src', 'kicktipp_predictor', 'web', 'static', 'plots')
+    ensure_dir(plot_dir)
+
     # metrics.json
     from kicktipp_predictor.metrics import save_json
     save_json({'main': metrics_main}, os.path.join(out_dir, 'metrics.json'))
@@ -229,14 +232,14 @@ def run_evaluation(season: bool = False, dynamic: bool = False, retrain_every: i
     curve_H = reliability_diagram(y_true, P, 'H', n_bins=10)
     curve_D = reliability_diagram(y_true, P, 'D', n_bins=10)
     curve_A = reliability_diagram(y_true, P, 'A', n_bins=10)
-    plot_reliability_curve(curve_H, 'H', os.path.join(out_dir, 'calibration_home.png'))
-    plot_reliability_curve(curve_D, 'D', os.path.join(out_dir, 'calibration_draw.png'))
-    plot_reliability_curve(curve_A, 'A', os.path.join(out_dir, 'calibration_away.png'))
+    plot_reliability_curve(curve_H, 'H', os.path.join(plot_dir, 'calibration_curve_home.png'))
+    plot_reliability_curve(curve_D, 'D', os.path.join(plot_dir, 'calibration_curve_draw.png'))
+    plot_reliability_curve(curve_A, 'A', os.path.join(plot_dir, 'calibration_curve_away.png'))
 
     # Confusion matrix
     cm_stats = confusion_matrix_stats(y_true, P)
     cm = np.array(cm_stats['matrix'], dtype=int)
-    plot_confusion_matrix(cm, os.path.join(out_dir, 'confusion_matrix.png'))
+    plot_confusion_matrix(cm, os.path.join(plot_dir, 'confusion_matrix.png'))
     print("\nCONFUSION MATRIX")
     header = "         Pred ->   H     D     A"
     print(header)
