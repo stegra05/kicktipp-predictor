@@ -151,17 +151,8 @@ def predict(
 
 @app.command()
 def evaluate(
-    detailed: bool = typer.Option(
-        False, help="Run detailed evaluation with calibration and plots"
-    ),
-    season: bool = typer.Option(
-        False, help="Evaluate performance across the current season (finished matches)"
-    ),
-    dynamic: bool = typer.Option(
-        False, help="Enable expanding-window retraining during season evaluation"
-    ),
     retrain_every: int = typer.Option(
-        1, help="Retrain every N matchdays when --dynamic is set"
+        1, help="Retrain every N matchdays during dynamic season evaluation"
     ),
     prob_source: str = typer.Option(
         "classifier", help="Outcome prob source: classifier|poisson|hybrid"
@@ -176,17 +167,11 @@ def evaluate(
         0.0, help="Diagonal bump for draws in Poisson probs: multiply diag by exp(rho)"
     ),
 ):
-    """Evaluate predictor performance on test data."""
-    from kicktipp_predictor.data import DataLoader
-    from kicktipp_predictor.evaluate import (
-        print_evaluation_report,
-        run_evaluation,
-        simple_benchmark,
-    )
-    from kicktipp_predictor.predictor import MatchPredictor
+    """Evaluate performance across the current season using expanding-window retraining."""
+    from kicktipp_predictor.evaluate import run_season_dynamic_evaluation
 
     print("=" * 80)
-    print("MODEL EVALUATION")
+    print("MODEL EVALUATION (Dynamic Season)")
     print("=" * 80)
     print()
 
@@ -198,50 +183,9 @@ def evaluate(
     cfg.model.hybrid_poisson_weight = float(hybrid_poisson_weight)
     cfg.model.proba_grid_max_goals = int(proba_grid_max_goals)
     cfg.model.poisson_draw_rho = float(poisson_draw_rho)
-    # prior_blend_alpha applies only when prob_source=classifier
 
-    # Load data
-    loader = DataLoader()
-    predictor = MatchPredictor()
-
-    # Load trained models
-    try:
-        predictor.load_models()
-    except FileNotFoundError:
-        print("ERROR: No trained models found. Run 'train' command first.")
-        raise typer.Exit(code=1)
-
-    if season:
-        run_evaluation(season=True, dynamic=dynamic, retrain_every=retrain_every)
-        return
-
-    if detailed:
-        run_evaluation(season=False)
-        return
-
-    # Get data
-    current_season = loader.get_current_season()
-    start_season = current_season - 2
-
-    print(f"Loading data from seasons {start_season} to {current_season}...")
-    all_matches = loader.fetch_historical_seasons(start_season, current_season)
-    features_df = loader.create_features_from_matches(all_matches)
-
-    # Use last 30% as test set
-    split_idx = int(len(features_df) * 0.7)
-    test_df = features_df[split_idx:]
-
-    print(f"Evaluating on {len(test_df)} test samples...")
-    print()
-
-    # Evaluate
-    metrics = predictor.evaluate(test_df)
-
-    # Compute benchmark
-    benchmark = simple_benchmark(test_df, strategy="home_win")
-
-    # Print report
-    print_evaluation_report(metrics, benchmark)
+    # Run dynamic season evaluation
+    run_season_dynamic_evaluation(retrain_every=retrain_every)
 
 
 @app.command()
