@@ -65,8 +65,8 @@ except Exception as _e:  # pragma: no cover
     optuna = None
 
 
-def _retry_on_database_lock(max_retries: int = 3, delay: float = 1.0):
-    """Decorator to retry database operations on SQLite lock errors."""
+def _retry_on_database_lock(max_retries: int = 5, delay: float = 0.5):
+    """Decorator to retry database operations on SQLite lock errors with improved backoff."""
 
     def decorator(func):
         @functools.wraps(func)
@@ -82,9 +82,12 @@ def _retry_on_database_lock(max_retries: int = 3, delay: float = 1.0):
                         "database is locked" in str(e).lower()
                         or "sqlite3.OperationalError" in str(type(e))
                         or "StorageInternalError" in str(type(e))
+                        or "OperationalError" in str(type(e))
                     ):
                         if attempt < max_retries - 1:
-                            time.sleep(delay * (2**attempt))  # Exponential backoff
+                            # Improved backoff: start with shorter delay, then exponential
+                            backoff_delay = delay * (1.5**attempt) + (0.1 * attempt)
+                            time.sleep(min(backoff_delay, 10.0))  # Cap at 10 seconds
                             continue
                     # If it's not a database lock error, re-raise immediately
                     raise
@@ -121,6 +124,71 @@ def _sqlite_fs_path(storage: str | None) -> str | None:
     if not os.path.isabs(path):
         path = os.path.abspath(path)
     return path
+
+
+def _configure_sqlite_for_concurrency(storage: str) -> str:
+    """Configure SQLite storage URL for better concurrency with multiple workers."""
+    if not storage or not storage.startswith("sqlite:"):
+        return storage
+
+    # Parse the URL to add/update parameters
+    parsed = urlparse(storage)
+    query_params = {}
+
+    # Parse existing query parameters
+    if parsed.query:
+        for param in parsed.query.split("&"):
+            if "=" in param:
+                key, value = param.split("=", 1)
+                query_params[key] = value
+
+    # Set optimal parameters for high concurrency
+    query_params.update(
+        {
+            "timeout": "300",  # 5 minutes timeout
+            "check_same_thread": "false",  # Allow different threads
+            "isolation_level": "IMMEDIATE",  # Better for concurrent writes
+        }
+    )
+
+    # Rebuild the URL
+    new_query = "&".join(f"{k}={v}" for k, v in query_params.items())
+    new_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{new_query}"
+
+    return new_url
+
+
+def _enable_sqlite_wal_mode(storage: str) -> None:
+    """Enable WAL mode for SQLite database to improve concurrency."""
+    if not storage or not storage.startswith("sqlite:"):
+        return
+
+    try:
+        import sqlite3
+        from urllib.parse import unquote, urlparse
+
+        # Extract database path
+        parsed = urlparse(storage)
+        db_path = unquote(parsed.path or "")
+        if not db_path:
+            return
+
+        # Handle Windows drive letter like /C:/path.db
+        if len(db_path) >= 3 and db_path[0] == "/" and db_path[2] == ":":
+            db_path = db_path[1:]
+        if not os.path.isabs(db_path):
+            db_path = os.path.abspath(db_path)
+
+        # Enable WAL mode for better concurrency
+        with sqlite3.connect(db_path, timeout=30) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA cache_size=10000")
+            conn.execute("PRAGMA temp_store=MEMORY")
+            conn.commit()
+    except Exception:
+        # If WAL mode setup fails, continue without it
+        pass
 
 
 # Deprecated: use compute_points from metrics for vectorized points
@@ -783,9 +851,13 @@ def main():
             @_retry_on_database_lock(max_retries=5, delay=2.0)
             def create_study():
                 if args.storage:
+                    # Configure SQLite for better concurrency
+                    storage_url = _configure_sqlite_for_concurrency(args.storage)
+                    # Enable WAL mode for better concurrency
+                    _enable_sqlite_wal_mode(storage_url)
                     return optuna.create_study(
                         direction=study_direction,
-                        storage=args.storage,
+                        storage=storage_url,
                         study_name=((args.study_name or "kicktipp-tune") + f"-{obj}"),
                         load_if_exists=True,
                         pruner=pruner,

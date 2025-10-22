@@ -281,13 +281,17 @@ def tune(
         base, *q = storage.split("?", 1)
         query = ("?" + q[0]) if q else ""
 
-        # Ensure timeout parameter is set for SQLite URLs to handle database locks
+        # Ensure optimal parameters are set for SQLite URLs to handle database locks
         if query:
             # Check if timeout is already specified
             if "timeout=" not in query:
-                query += "&timeout=60"
+                query += "&timeout=300"  # 5 minutes timeout
+            if "check_same_thread=" not in query:
+                query += "&check_same_thread=false"
+            if "isolation_level=" not in query:
+                query += "&isolation_level=IMMEDIATE"
         else:
-            query = "?timeout=60"
+            query = "?timeout=300&check_same_thread=false&isolation_level=IMMEDIATE"
 
         # derive filename suffix
         if base.endswith(".db"):
