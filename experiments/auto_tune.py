@@ -347,53 +347,53 @@ def _objective_builder(
                     "outcome_max_depth", 3, 8
                 ),  # Default 6
                 "outcome_learning_rate": trial.suggest_float(
-                    "outcome_learning_rate", 0.01, 0.20, step=0.01
+                    "outcome_learning_rate", 0.01, 0.2, log=True
                 ),  # Default 0.1
                 "outcome_subsample": trial.suggest_float(
-                    "outcome_subsample", 0.6, 1.0, step=0.05
+                    "outcome_subsample", 0.5, 1.0, step=0.1
                 ),  # Default 0.8
                 "outcome_colsample_bytree": trial.suggest_float(
-                    "outcome_colsample_bytree", 0.6, 1.0, step=0.05
+                    "outcome_colsample_bytree", 0.5, 1.0, step=0.1
                 ),  # Default 0.8
                 "outcome_reg_alpha": trial.suggest_float(
-                    "outcome_reg_alpha", 0.0, 0.5, step=0.05
+                    "outcome_reg_alpha", 1e-5, 0.5, log=True
                 ),  # Was 0-1, Default 0.0
                 "outcome_reg_lambda": trial.suggest_float(
-                    "outcome_reg_lambda", 0.5, 2.0, step=0.05
+                    "outcome_reg_lambda", 0.5, 5.0, log=True
                 ),  # Was 0.5-3, Default 1.0
                 "outcome_gamma": trial.suggest_float(
-                    "outcome_gamma", 0.0, 2.0, step=0.1
+                    "outcome_gamma", 1e-5, 2.0, log=True
                 ),  # Was 0-5, Default 0.0
                 "outcome_min_child_weight": trial.suggest_float(
-                    "outcome_min_child_weight", 1.0, 7.0, step=0.5
+                    "outcome_min_child_weight", 1.0, 7.0, log=True
                 ),  # Was 1-10, Default 1.0
-                # Goals XGB - Keep similar, maybe slightly less regularization too
+                # Goals XGB - Make these DIFFERENT
                 "goals_n_estimators": trial.suggest_int(
-                    "goals_n_estimators", 100, 800, step=50
+                    "goals_n_estimators", 50, 500, step=25
                 ),  # Default 800
                 "goals_max_depth": trial.suggest_int(
-                    "goals_max_depth", 3, 9
+                    "goals_max_depth", 2, 7
                 ),  # Default 6
                 "goals_learning_rate": trial.suggest_float(
-                    "goals_learning_rate", 0.01, 0.20, step=0.01
+                    "goals_learning_rate", 0.01, 0.3, log=True
                 ),  # Default 0.1
                 "goals_subsample": trial.suggest_float(
-                    "goals_subsample", 0.6, 1.0, step=0.05
+                    "goals_subsample", 0.5, 1.0, step=0.1
                 ),  # Default 0.8
                 "goals_colsample_bytree": trial.suggest_float(
-                    "goals_colsample_bytree", 0.6, 1.0, step=0.05
+                    "goals_colsample_bytree", 0.5, 1.0, step=0.1
                 ),  # Default 0.8
                 "goals_reg_alpha": trial.suggest_float(
-                    "goals_reg_alpha", 0.0, 0.5, step=0.05
+                    "goals_reg_alpha", 1e-5, 0.5, log=True
                 ),  # Was 0-1, Default 0.0
                 "goals_reg_lambda": trial.suggest_float(
-                    "goals_reg_lambda", 0.5, 2.0, step=0.05
+                    "goals_reg_lambda", 0.1, 10.0, log=True
                 ),  # Was 0.5-3, Default 1.0
                 "goals_gamma": trial.suggest_float(
-                    "goals_gamma", 0.0, 2.0, step=0.1
+                    "goals_gamma", 1e-5, 2.0, log=True
                 ),  # Was 0-5, Default 0.0
                 "goals_min_child_weight": trial.suggest_float(
-                    "goals_min_child_weight", 1.0, 7.0, step=0.5
+                    "goals_min_child_weight", 1.0, 20.0, log=True
                 ),  # Was 1-10, Default 1.0
                 # Scoreline selection floor
                 "min_lambda": trial.suggest_float(
@@ -442,9 +442,7 @@ def _objective_builder(
                     "poisson_draw_rho", 0.0, 0.20, step=0.01
                 ),
                 # Feature-engineering knobs (optional) - Keep as is
-                "form_last_n": trial.suggest_int(
-                    "form_last_n", 3, 10, step=1
-                ),  # Default 5
+                "form_last_n": trial.suggest_int("form_last_n", 3, 12),  # Default 5
                 "momentum_decay": trial.suggest_float(
                     "momentum_decay", 0.70, 0.99, step=0.01
                 ),  # Default 0.9
