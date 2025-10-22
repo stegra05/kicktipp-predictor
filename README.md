@@ -16,13 +16,14 @@ Outcome probabilities used for evaluation can be sourced from the classifier, de
 ## Features
 - **Clear Two-Step Architecture**: Outcome first, then scoreline - easy to understand and debug
 - **Selectable Outcome Probabilities**: Use classifier probabilities, Poisson-derived probabilities, or a hybrid blend
-- **Advanced Feature Engineering**: 80+ features including momentum, strength of schedule, rest days, and goal patterns
-- **EWMA Recency Features (new)**: Leakage-safe exponentially weighted moving averages for recent form (goals for/against, goal diff, and points per match) precomputed once and merged into match features
-- **Comprehensive Evaluation**: Brier score, log loss, RPS, accuracy, and Kicktipp points
-- **Performance Tracking**: Automatic tracking of prediction accuracy and points earned
-- **Web Interface**: Clean, responsive web UI to view predictions, league table, and statistics
-- **Automatic Data Fetching**: Fetches match data from OpenLigaDB API with intelligent caching
-- **Centralized Configuration**: All settings managed in one place via `config/best_params.yaml`
+- **Dynamic Feature Management**: Comes with 80+ features, but you can use the built-in **Feature Ablation Study** to find the optimal subset for performance and simplicity.
+- **Advanced Feature Engineering**: Includes momentum, strength of schedule, rest days, goal patterns, and more.
+- **EWMA Recency Features**: Leakage-safe exponentially weighted moving averages capture recent form.
+- **Comprehensive Evaluation**: Brier score, log loss, RPS, accuracy, and Kicktipp points.
+- **Performance Tracking**: Automatic tracking of prediction accuracy and points earned.
+- **Web Interface**: Clean, responsive web UI to view predictions, league table, and statistics.
+- **Automatic Data Fetching**: Fetches match data from OpenLigaDB API with intelligent caching.
+- **Centralized Configuration**: All settings managed in one place via `config/best_params.yaml`.
 
 ### Performance
 
@@ -37,7 +38,7 @@ Clone the repository and install the package in editable mode (includes CLI):
 ```bash
 git clone https://github.com/your-username/kicktipp-predictor.git
 cd kicktipp-predictor
-python3 -m pip install -e .
+pip install -e .
 ```
 
 If you prefer without install, set `PYTHONPATH` to include `src`:
@@ -48,31 +49,31 @@ export PYTHONPATH="$PWD/src:$PYTHONPATH"
 ### 2. CLI Quickstart
 ```bash
 # Show help
-python3 -m kicktipp_predictor --help
+kicktipp_predictor --help
 
 # Train models (uses last 3 seasons by default)
-python3 -m kicktipp_predictor train
+kicktipp_predictor train
 
 # Train with more historical data
-python3 -m kicktipp_predictor train --seasons-back 5
+kicktipp_predictor train --seasons-back 5
 
 # Predict upcoming matches (next 7 days)
-python3 -m kicktipp_predictor predict --days 7
+kicktipp_predictor predict --days 7
 
 # Predict with process-parallel scoreline selection (e.g., 8 workers)
-python3 -m kicktipp_predictor predict --days 7 --workers 8
+kicktipp_predictor predict --days 7 --workers 8
 
 # Predict specific matchday
-python3 -m kicktipp_predictor predict --matchday 15
+kicktipp_predictor predict --matchday 15
 
 # Evaluate model performance (default probability source)
-python3 -m kicktipp_predictor evaluate
+kicktipp_predictor evaluate
 
 # Evaluate with Poisson-derived probabilities and detailed plots
-python3 -m kicktipp_predictor evaluate --prob-source poisson --detailed
+kicktipp_predictor evaluate --prob-source poisson --detailed
 
 # Run web UI (defaults to 127.0.0.1:8000)
-python3 -m kicktipp_predictor web --host 0.0.0.0 --port 8000
+kicktipp_predictor web --host 0.0.0.0 --port 8000
 ```
 
 ## Usage
@@ -82,29 +83,30 @@ This is the recommended weekly routine for generating predictions:
 
 1.  **Generate Predictions:** Generate predictions for the next matchday.
     ```bash
-    python3 -m kicktipp_predictor predict
+    kicktipp_predictor predict
     ```
 
 2.  **View Predictions:** Use the web interface to view predictions with probabilities and confidence.
     ```bash
-    python3 -m kicktipp_predictor web
+    kicktipp_predictor web
     ```
 
 ### Monthly Maintenance
 To keep the models accurate, retrain them monthly with the latest match data:
 ```bash
-python3 -m kicktipp_predictor train
+kicktipp_predictor train
 ```
 
 ## CLI Commands
 
 All functionality is available through the CLI:
 
-- **`train [--seasons-back N]`**: Train models on historical data (default: 3 seasons)
-- **`predict [--days N | --matchday N]`**: Generate predictions for upcoming matches
-- **`evaluate [--season] [--dynamic] [--retrain-every N]`**: Evaluate on a test split or across the current season; with `--dynamic`, retrain every N matchdays (default: 1)
-- **`web [--host HOST] [--port PORT]`**: Run the Flask web UI
-- **`tune [options]`**: Hyperparameter tuning (wrapper around `experiments/auto_tune.py`)
+- **`train [--seasons-back N]`**: Train models on historical data (default: 3 seasons).
+- **`predict [--days N | --matchday N]`**: Generate predictions for upcoming matches.
+- **`evaluate [--season] [--dynamic] [--retrain-every N]`**: Evaluate on a test split or across the current season; with `--dynamic`, retrain every N matchdays (default: 1).
+- **`web [--host HOST] [--port PORT]`**: Run the Flask web UI.
+- **`tune [options]`**: Hyperparameter tuning (wrapper around `experiments/auto_tune.py`).
+- **`shap`**: Run SHAP analysis to understand feature importance.
 
 ### Training Examples
 ```bash
@@ -211,7 +213,7 @@ Early-season gaps are filled with global means to handle cold starts. These feat
 
 ## Project Structure
 
-Version 2.0 features a **clean, flat hierarchy** with all core logic in top-level modules:
+The project features a clean hierarchy with all core logic organized into modules:
 
 ```
 kicktipp-predictor/
@@ -220,13 +222,12 @@ kicktipp-predictor/
 │       ├── __init__.py           # Package exports
 │       ├── __main__.py           # CLI entry point
 │       ├── cli.py                # Typer-based CLI commands
-│       ├── config.py             # ✨ NEW: Centralized configuration
-│       ├── data.py               # ✨ NEW: Unified data & features
-│       ├── predictor.py          # ✨ NEW: Predictor-Selector model
-│       ├── evaluate.py           # ✨ NEW: Simplified evaluation
-│       ├── models/
-│       │   ├── performance_tracker.py  # Points tracking
-│       │   └── shap_analysis.py       # Model interpretability
+│       ├── config.py             # Centralized configuration
+│       ├── data.py               # Data loading & feature engineering
+│       ├── predictor.py          # Predictor-Selector model
+│       ├── evaluate.py           # Evaluation logic
+│       ├── analysis/
+│       │   └── shap_analysis.py  # SHAP analysis
 │       └── web/
 │           ├── app.py            # Flask web application
 │           ├── templates/        # HTML templates
@@ -234,10 +235,11 @@ kicktipp-predictor/
 ├── data/
 │   ├── cache/                    # API response cache
 │   ├── models/                   # Trained model files
-│   └── predictions/              # Evaluation artifacts
+│   ├── feature_selection/        # (Optional) Kept features list
+│   └── feature_ablation/         # Study artifacts
 ├── config/
 │   └── best_params.yaml          # Model hyperparameters
-├── experiments/                  # Tuning scripts
+├── experiments/                  # Tuning & ablation scripts
 ├── tests/                        # Unit tests
 ├── pyproject.toml               # Package configuration
 └── README.md                    # This file
@@ -321,6 +323,36 @@ python experiments/auto_tune.py --n-trials 200 --n-splits 3 --storage "sqlite://
 ```
 
 The tuner outputs the best-performing parameters to `config/best_params.yaml`, which are automatically used by `MatchPredictor`.
+
+### Feature Ablation Study
+To find the optimal balance between model complexity and performance, run the feature ablation study. This script systematically tests different feature subsets by removing categories one by one and analyzing the impact.
+
+**Usage:**
+```bash
+./run_feature_study.sh
+```
+
+The study will:
+1.  **Run Experiments**: Test various scenarios, including a baseline with all features, removing feature categories (e.g., `ewma_recency`, `venue_specific`), and testing a minimal core set.
+2.  **Generate Report**: Output a summary report with performance metrics (accuracy, avg points, Brier score) for each experiment.
+3.  **Provide Recommendations**: Suggest optimal feature sets for both **best performance** and **best simplification** (i.e., the smallest feature set with minimal performance loss).
+
+**Interpreting the Results:**
+
+The script will print a detailed report to the console and save the results to `data/feature_ablation/`. The most important section is the **"RECOMMENDED CONFIGURATIONS"**, which provides copy-pasteable YAML output for `kept_features.yaml`.
+
+-   **Best Performance**: The feature set that achieved the highest average points.
+-   **Best Simplification**: A smaller, more efficient feature set that performs almost as well as the baseline.
+
+**Workflow:**
+
+1.  **Run the study:** `./run_feature_study.sh`
+2.  **Review the report:** Analyze the results in your terminal.
+3.  **Update feature set:** Copy the recommended feature list from the report into a new file at `data/feature_selection/kept_features.yaml`.
+4.  **Retrain the model:** `python3 -m kicktipp_predictor train`
+5.  **Evaluate:** `python3 -m kicktipp_predictor evaluate --season`
+
+This workflow allows you to maintain a lean, high-performing feature set without manual trial and error.
 
 ### Optional Dependencies
 
