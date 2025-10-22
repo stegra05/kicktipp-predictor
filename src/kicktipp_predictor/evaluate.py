@@ -8,147 +8,13 @@ import pandas as pd
 from typing import Dict, List, Iterable
 from pathlib import Path
 
-# Label order for consistency
-LABELS_ORDER = ('H', 'D', 'A')
-
-
-def compute_points(pred_home: Iterable[int], pred_away: Iterable[int],
-                   act_home: Iterable[int], act_away: Iterable[int]) -> np.ndarray:
-    """Compute Kicktipp points for predictions.
-
-    Points system:
-    - 4 points: Exact score
-    - 3 points: Correct goal difference
-    - 2 points: Correct outcome (H/D/A)
-    - 0 points: Wrong outcome
-
-    Args:
-        pred_home: Predicted home scores.
-        pred_away: Predicted away scores.
-        act_home: Actual home scores.
-        act_away: Actual away scores.
-
-    Returns:
-        Array of points for each prediction.
-    """
-    ph = np.asarray(list(pred_home), dtype=int)
-    pa = np.asarray(list(pred_away), dtype=int)
-    ah = np.asarray(list(act_home), dtype=int)
-    aa = np.asarray(list(act_away), dtype=int)
-
-    points = np.zeros_like(ph, dtype=int)
-
-    # 4 points: exact score
-    exact = (ph == ah) & (pa == aa)
-    points[exact] = 4
-
-    # 3 points: correct goal difference (but not exact)
-    not_exact = ~exact
-    gd_ok = ((ph - pa) == (ah - aa)) & not_exact
-    points[gd_ok] = 3
-
-    # 2 points: correct outcome (but not goal difference)
-    rem = ~(exact | gd_ok)
-    pred_outcome = np.where(ph > pa, "H", np.where(pa > ph, "A", "D"))
-    act_outcome = np.where(ah > aa, "H", np.where(aa > ah, "A", "D"))
-    points[(pred_outcome == act_outcome) & rem] = 2
-
-    return points
-
-
-def brier_score_multiclass(y_true: List[str], proba: np.ndarray) -> float:
-    """Compute Brier score for multiclass predictions.
-
-    Args:
-        y_true: True labels (H/D/A).
-        proba: Probability matrix (n_samples, 3) for [H, D, A].
-
-    Returns:
-        Brier score (lower is better).
-    """
-    mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
-    y = np.array([mapping.get(label, -1) for label in y_true], dtype=int)
-
-    # Ensure proba is valid
-    P = np.clip(proba, 1e-15, 1.0)
-    P = P / P.sum(axis=1, keepdims=True)
-
-    # One-hot encode true labels
-    n = len(y)
-    Y = np.zeros_like(P)
-    valid = (y >= 0)
-    Y[np.arange(n)[valid], y[valid]] = 1.0
-
-    # Compute Brier score
-    diffs = (P - Y)[valid]
-    if len(diffs) == 0:
-        return float('nan')
-
-    return float(np.mean(np.sum(diffs * diffs, axis=1)))
-
-
-def log_loss_multiclass(y_true: List[str], proba: np.ndarray) -> float:
-    """Compute log loss for multiclass predictions.
-
-    Args:
-        y_true: True labels (H/D/A).
-        proba: Probability matrix (n_samples, 3) for [H, D, A].
-
-    Returns:
-        Log loss (lower is better).
-    """
-    mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
-    y = np.array([mapping.get(label, -1) for label in y_true], dtype=int)
-
-    # Ensure proba is valid
-    P = np.clip(proba, 1e-15, 1.0)
-    P = P / P.sum(axis=1, keepdims=True)
-
-    valid = (y >= 0)
-    idx = np.arange(len(y))[valid]
-    if len(idx) == 0:
-        return float('nan')
-
-    p_true = P[idx, y[valid]]
-    return float(-np.mean(np.log(np.clip(p_true, 1e-15, 1.0))))
-
-
-def ranked_probability_score(y_true: List[str], proba: np.ndarray) -> float:
-    """Compute Ranked Probability Score (RPS) for ordered outcomes.
-
-    RPS measures the quality of probabilistic predictions for ordered categories.
-
-    Args:
-        y_true: True labels (H/D/A).
-        proba: Probability matrix (n_samples, 3) for [H, D, A].
-
-    Returns:
-        RPS (lower is better).
-    """
-    mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
-    y = np.array([mapping.get(label, -1) for label in y_true], dtype=int)
-
-    # Ensure proba is valid
-    P = np.clip(proba, 1e-15, 1.0)
-    P = P / P.sum(axis=1, keepdims=True)
-
-    valid = (y >= 0)
-    if not np.any(valid):
-        return float('nan')
-
-    rps_scores = []
-    for i in np.where(valid)[0]:
-        true_idx = y[i]
-        # Cumulative distributions
-        cdf_pred = np.cumsum(P[i, :])
-        cdf_true = np.zeros(3)
-        cdf_true[true_idx:] = 1.0
-
-        # RPS for this sample
-        rps = np.sum((cdf_pred - cdf_true) ** 2) / 2.0  # Normalize by K-1 = 2
-        rps_scores.append(rps)
-
-    return float(np.mean(rps_scores))
+from kicktipp_predictor.metrics import (
+    LABELS_ORDER,
+    brier_score_multiclass,
+    log_loss_multiclass,
+    ranked_probability_score_3c,
+    compute_points,
+)
 
 
 def evaluate_predictor(predictor, test_df: pd.DataFrame) -> Dict:
@@ -197,7 +63,7 @@ def evaluate_predictor(predictor, test_df: pd.DataFrame) -> Dict:
     # Probabilistic metrics
     brier = brier_score_multiclass(y_true, proba)
     logloss = log_loss_multiclass(y_true, proba)
-    rps = ranked_probability_score(y_true, proba)
+    rps = ranked_probability_score_3c(y_true, proba)
 
     # Points statistics
     avg_points = float(np.mean(points))

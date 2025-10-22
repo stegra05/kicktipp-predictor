@@ -50,6 +50,10 @@ def predict(
     days: int = typer.Option(7, help="Days ahead to predict"),
     matchday: int | None = typer.Option(None, help="Specific matchday to predict"),
     workers: int = typer.Option(1, help="Process workers for scoreline selection ( >1 enables parallelism)"),
+    prob_source: str = typer.Option("classifier", help="Outcome prob source: classifier|poisson|hybrid"),
+    hybrid_poisson_weight: float = typer.Option(0.5, help="When prob_source=hybrid: weight of Poisson probabilities [0,1]"),
+    proba_grid_max_goals: int = typer.Option(12, help="Grid cap for Poisson-derived probabilities (not scoreline grid)"),
+    poisson_draw_rho: float = typer.Option(0.0, help="Diagonal bump for draws in Poisson probs: multiply diag by exp(rho)"),
 ):
     """Make predictions for upcoming matches."""
     from kicktipp_predictor.data import DataLoader
@@ -59,6 +63,15 @@ def predict(
     print("MATCH PREDICTIONS")
     print("=" * 80)
     print()
+
+    # Apply probability-source options to config
+    from kicktipp_predictor.config import get_config
+    cfg = get_config()
+    cfg.model.prob_source = str(prob_source).strip().lower()
+    cfg.model.hybrid_poisson_weight = float(hybrid_poisson_weight)
+    cfg.model.proba_grid_max_goals = int(proba_grid_max_goals)
+    cfg.model.poisson_draw_rho = float(poisson_draw_rho)
+    # prior_blend_alpha applies only when prob_source=classifier
 
     # Load data
     loader = DataLoader()
@@ -123,6 +136,10 @@ def evaluate(
     season: bool = typer.Option(False, help="Evaluate performance across the current season (finished matches)"),
     dynamic: bool = typer.Option(False, help="Enable expanding-window retraining during season evaluation"),
     retrain_every: int = typer.Option(1, help="Retrain every N matchdays when --dynamic is set"),
+    prob_source: str = typer.Option("classifier", help="Outcome prob source: classifier|poisson|hybrid"),
+    hybrid_poisson_weight: float = typer.Option(0.5, help="When prob_source=hybrid: weight of Poisson probabilities [0,1]"),
+    proba_grid_max_goals: int = typer.Option(12, help="Grid cap for Poisson-derived probabilities (not scoreline grid)"),
+    poisson_draw_rho: float = typer.Option(0.0, help="Diagonal bump for draws in Poisson probs: multiply diag by exp(rho)"),
 ):
     """Evaluate predictor performance on test data."""
     from kicktipp_predictor.data import DataLoader
@@ -133,6 +150,15 @@ def evaluate(
     print("MODEL EVALUATION")
     print("=" * 80)
     print()
+
+    # Apply probability-source options to config
+    from kicktipp_predictor.config import get_config
+    cfg = get_config()
+    cfg.model.prob_source = str(prob_source).strip().lower()
+    cfg.model.hybrid_poisson_weight = float(hybrid_poisson_weight)
+    cfg.model.proba_grid_max_goals = int(proba_grid_max_goals)
+    cfg.model.poisson_draw_rho = float(poisson_draw_rho)
+    # prior_blend_alpha applies only when prob_source=classifier
 
     # Load data
     loader = DataLoader()
@@ -191,9 +217,9 @@ def tune(
     n_trials: int = typer.Option(100, help="Total Optuna trials across all workers"),
     n_splits: int = typer.Option(3, help="TimeSeriesSplit folds"),
     workers: int = typer.Option(1, help="Number of parallel worker processes"),
-    objective: str = typer.Option("ppg", help="Objective: ppg|ppg_unweighted|logloss|brier|balanced_accuracy|accuracy|rps"),
+    objective: str = typer.Option("ppg", help="Objective (PPG recommended): ppg|ppg_unweighted|logloss|brier|balanced_accuracy|accuracy|rps"),
     direction: str = typer.Option("auto", help="Direction: auto|maximize|minimize"),
-    compare: str | None = typer.Option(None, help="Comma-separated objectives to compare; overrides --objective"),
+    compare: str | None = typer.Option(None, help="Comma-separated objectives to compare; overrides --objective (not recommended with balanced trainer)"),
     verbose: bool = typer.Option(False, help="Enable verbose inner logs during tuning"),
     storage: str | None = typer.Option(None, help="Optuna storage URL for multi-process tuning (e.g., sqlite:////abs/path/study.db?timeout=60)"),
     study_name: str | None = typer.Option(None, help="Optuna study name when using storage"),

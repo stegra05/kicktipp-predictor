@@ -10,6 +10,7 @@ import numpy as np
 from xgboost import XGBClassifier, XGBRegressor
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_sample_weight
 from scipy.stats import poisson
 from typing import Dict, List, Tuple
 import joblib
@@ -252,15 +253,17 @@ class MatchPredictor:
             stratify=y_result_encoded
         )
 
-        # Use draw_boost: upweight draws in the training fold (safe if no draws in split)
+        # Balanced class weights × optional draw boost × time-decay on training fold
+        balanced_weights = compute_sample_weight('balanced', y=y_train)
+
         classes_arr = self.label_encoder.classes_
-        sample_weights = np.ones(len(y_train), dtype=float)
+        boost_weights = np.ones(len(y_train), dtype=float)
         draw_boost = float(getattr(self.config.model, 'draw_boost', 1.0))
         if 'D' in classes_arr and draw_boost != 1.0:
             draw_class_label = np.where(classes_arr == 'D')[0][0]
-            sample_weights[y_train == draw_class_label] = draw_boost
-        # Combine with time-decay weights on the training fold
-        sample_weights = sample_weights * tw_train
+            boost_weights[y_train == draw_class_label] = draw_boost
+
+        sample_weights = balanced_weights * tw_train * boost_weights
 
         # Train with early stopping
         self.outcome_model = XGBClassifier(
@@ -291,7 +294,7 @@ class MatchPredictor:
 
         elapsed = time.perf_counter() - start
         self._log(f"Outcome classifier trained in {elapsed:.2f}s")
-        self._log(f"Applied draw_boost={draw_boost} with time-decay weighting")
+        self._log(f"Applied balanced class weights, draw_boost={draw_boost}, and time-decay weighting")
 
     def predict(self, features_df: pd.DataFrame, workers: int | None = None) -> List[Dict]:
         """Predict match outcomes and scorelines.
@@ -335,41 +338,37 @@ class MatchPredictor:
         X = features_df[self.feature_columns].fillna(0)
 
         # Step 1: Predict outcome (H/D/A) - The Selector
-        outcome_probs = self.outcome_model.predict_proba(X)
+        classifier_probs = self.outcome_model.predict_proba(X)
 
-        # Optional: temperature scaling and prior blending
+        # Optional: temperature scaling on classifier probabilities
         temp = float(getattr(self.config.model, 'proba_temperature', 1.0))
-        alpha = float(getattr(self.config.model, 'prior_blend_alpha', 0.0))
         if temp != 1.0:
-            # Apply temperature scaling per row
             with np.errstate(over='ignore'):
-                logits = np.log(np.clip(outcome_probs, 1e-15, 1.0))
+                logits = np.log(np.clip(classifier_probs, 1e-15, 1.0))
                 logits = logits / max(1e-6, temp)
-                outcome_probs = np.exp(logits)
-                outcome_probs = outcome_probs / outcome_probs.sum(axis=1, keepdims=True)
+                classifier_probs = np.exp(logits)
+                classifier_probs = classifier_probs / classifier_probs.sum(axis=1, keepdims=True)
 
+        # Prior blending only when using classifier source (avoid double blending)
+        prob_source = str(getattr(self.config.model, 'prob_source', 'classifier')).lower()
+        alpha = float(getattr(self.config.model, 'prior_blend_alpha', 0.0)) if prob_source == 'classifier' else 0.0
         if alpha > 0.0:
-            # Compute empirical prior from features_df if available (use outcomes of training distribution if stored)
-            # Fallback to uniform prior if not enough info
-            # Here we approximate prior using class frequencies seen during label encoder fitting
             try:
-                classes_ = list(self.label_encoder.classes_)
-                # Approximate prior as uniform if we don't have frequency info
                 prior = np.full(3, 1.0 / 3.0, dtype=float)
-                # Blend: p' = (1-alpha) * p + alpha * prior
-                outcome_probs = (1.0 - alpha) * outcome_probs + alpha * prior[None, :]
-                outcome_probs = outcome_probs / outcome_probs.sum(axis=1, keepdims=True)
+                classifier_probs = (1.0 - alpha) * classifier_probs + alpha * prior[None, :]
+                classifier_probs = classifier_probs / classifier_probs.sum(axis=1, keepdims=True)
             except Exception:
                 pass
 
-        outcome_classes = np.argmax(outcome_probs, axis=1)
+        # Provisional outcomes from classifier (used for scoreline selection)
+        outcome_classes = np.argmax(classifier_probs, axis=1)
         outcomes = self.label_encoder.inverse_transform(outcome_classes)
 
         # Step 2: Predict expected goals - The Predictor
         home_lambdas = np.maximum(self.home_goals_model.predict(X), self.config.model.min_lambda)
         away_lambdas = np.maximum(self.away_goals_model.predict(X), self.config.model.min_lambda)
 
-        # Step 3: Select scorelines (parallelizable pure computation)
+        # Step 3a: Select scorelines (parallelizable pure computation)
         max_goals = int(self.config.model.max_goals)
         n = len(X)
         if workers is not None and workers > 1 and n > 0:
@@ -389,16 +388,70 @@ class MatchPredictor:
                 for i in range(n)
             ]
 
+        # Step 3b: Compute outcome probabilities based on configuration
+        # Optionally derive probabilities from Poisson goals for entire batch
+        proba_grid_G = int(getattr(self.config.model, 'proba_grid_max_goals', max_goals))
+        proba_grid_G = max(0, int(proba_grid_G))
+
+        # Vectorized Poisson outcome probabilities for the batch
+        poisson_probs: np.ndarray | None = None
+        if prob_source in ('poisson', 'hybrid'):
+            # Compute P(H), P(D), P(A) using outer products and tri masks
+            # Shapes: (n, G+1)
+            G = int(proba_grid_G)
+            x = np.arange(G + 1, dtype=int)
+            ph = poisson.pmf(x[None, :], home_lambdas[:, None])  # (n, G+1)
+            pa = poisson.pmf(x[None, :], away_lambdas[:, None])  # (n, G+1)
+            # (n, G+1, G+1)
+            grid = np.einsum('ni,nj->nij', ph, pa)
+            # Optional Dixon-Coles style diagonal bump for draws
+            rho = float(getattr(self.config.model, 'poisson_draw_rho', 0.0))
+            if rho != 0.0:
+                # multiply diagonal cells by exp(rho)
+                bump = np.exp(rho)
+                idx = np.arange(G + 1)
+                grid[:, idx, idx] *= bump
+            # Masks
+            M_eq = np.eye(G + 1, dtype=float)[None, :, :]
+            # Strict upper triangle (h > a)
+            M_gt = np.triu(np.ones((G + 1, G + 1), dtype=float), k=1)[None, :, :]
+            # Strict lower triangle (a > h)
+            M_lt = np.tril(np.ones((G + 1, G + 1), dtype=float), k=-1)[None, :, :]
+            pH = np.sum(grid * M_gt, axis=(1, 2))
+            pD = np.sum(grid * M_eq, axis=(1, 2))
+            pA = np.sum(grid * M_lt, axis=(1, 2))
+            poisson_probs = np.stack([pH, pD, pA], axis=1)
+            # Normalize to guard against numerical drift
+            denom = np.sum(poisson_probs, axis=1, keepdims=True)
+            denom[denom == 0] = 1.0
+            poisson_probs = poisson_probs / denom
+
+        # Select final probabilities
+        if prob_source == 'classifier':
+            final_probs = classifier_probs
+        elif prob_source == 'poisson':
+            final_probs = poisson_probs if poisson_probs is not None else classifier_probs
+        else:  # 'hybrid'
+            w = float(getattr(self.config.model, 'hybrid_poisson_weight', 0.5))
+            w = min(1.0, max(0.0, w))
+            if poisson_probs is None:
+                final_probs = classifier_probs
+            else:
+                final_probs = (1.0 - w) * classifier_probs + w * poisson_probs
+                # Re-normalize
+                final_probs = final_probs / final_probs.sum(axis=1, keepdims=True)
+
         predictions = []
 
         for idx in range(n):
             outcome = outcomes[idx]
             home_score, away_score = scorelines[idx]
 
-            # Get outcome probabilities (ensure correct mapping)
+            # Get final outcome probabilities (ensure correct mapping H/D/A)
             prob_dict = {}
             for class_idx, class_label in enumerate(self.label_encoder.classes_):
-                prob_dict[class_label] = float(outcome_probs[idx][class_idx])
+                # class_label order aligns with training label encoder (H/D/A)
+                prob_dict[class_label] = float(final_probs[idx][class_idx])
 
             home_win_prob = prob_dict.get('H', 0.0)
             draw_prob = prob_dict.get('D', 0.0)

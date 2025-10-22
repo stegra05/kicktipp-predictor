@@ -2,14 +2,6 @@ from flask import Flask, render_template, jsonify, request
 from kicktipp_predictor.data import DataLoader
 from kicktipp_predictor.predictor import MatchPredictor
 
-# Optional performance tracker (may not exist yet in refactored structure)
-try:
-    from kicktipp_predictor.models.performance_tracker import PerformanceTracker
-    tracker = PerformanceTracker()
-    TRACKER_AVAILABLE = True
-except ImportError:
-    TRACKER_AVAILABLE = False
-
 app = Flask(__name__)
 
 # Initialize components
@@ -202,30 +194,6 @@ def get_current_matchday():
         }), 500
 
 
-@app.route('/api/performance')
-def get_performance():
-    """Get performance statistics."""
-    try:
-        if not TRACKER_AVAILABLE:
-            return jsonify({
-                'success': False,
-                'error': 'Performance tracker not available'
-            })
-
-        stats = tracker.get_current_stats()
-
-        return jsonify({
-            'success': True,
-            'stats': stats
-        })
-
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
-
 @app.route('/api/table')
 def get_table():
     """Get current league table."""
@@ -333,7 +301,10 @@ def get_model_quality():
         metrics = {
             'brier_score': main_metrics.get('brier'),
             'log_loss': main_metrics.get('log_loss'),
-            'rps': main_metrics.get('rps')
+            'rps': main_metrics.get('rps'),
+            'avg_points': main_metrics.get('avg_points'),
+            'total_points': main_metrics.get('total_points'),
+            'accuracy': main_metrics.get('accuracy'),
         }
         return jsonify({'success': True, 'metrics': metrics})
     except Exception as e:

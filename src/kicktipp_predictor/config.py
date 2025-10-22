@@ -124,6 +124,16 @@ class ModelConfig:
     # Blend with empirical prior from training window
     prior_blend_alpha: float = 0.0
 
+    # Outcome probability source for evaluation and reporting
+    # One of: 'classifier' (default), 'poisson', 'hybrid'
+    prob_source: str = 'classifier'
+    # When prob_source='hybrid', weight of Poisson-derived probabilities in [0,1]
+    hybrid_poisson_weight: float = 0.5
+    # Max goals for Poisson probability grid used to derive P(H/D/A) (separate from scoreline grid)
+    proba_grid_max_goals: int = 12
+    # Draw bump for Poisson-derived probabilities: multiply diagonal cells by exp(rho) before normalization
+    poisson_draw_rho: float = 0.0
+
 
 @dataclass
 class Config:
@@ -171,6 +181,14 @@ class Config:
                         config.model.proba_temperature = float(params["proba_temperature"])
                     if "prior_blend_alpha" in params:
                         config.model.prior_blend_alpha = float(params["prior_blend_alpha"])
+                    if "prob_source" in params:
+                        config.model.prob_source = str(params["prob_source"]).strip().lower()
+                    if "hybrid_poisson_weight" in params:
+                        config.model.hybrid_poisson_weight = float(params["hybrid_poisson_weight"])
+                    if "proba_grid_max_goals" in params:
+                        config.model.proba_grid_max_goals = int(params["proba_grid_max_goals"])
+                    if "poisson_draw_rho" in params:
+                        config.model.poisson_draw_rho = float(params["poisson_draw_rho"])
                     if "use_time_decay" in params:
                         config.model.use_time_decay = bool(params["use_time_decay"])
                     if "time_decay_half_life_days" in params:

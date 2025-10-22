@@ -1,7 +1,5 @@
 from kicktipp_predictor.data import DataLoader
 from kicktipp_predictor.predictor import MatchPredictor
-from kicktipp_predictor.models.performance_tracker import PerformanceTracker
-from kicktipp_predictor.models.confidence_selector import extract_display_confidence
 from kicktipp_predictor.metrics import (
     ensure_dir,
     LABELS_ORDER,
@@ -35,7 +33,6 @@ def run(dynamic: bool = False, retrain_every: int = 1) -> None:
     # Initialize components
     data_loader = DataLoader()
     predictor = MatchPredictor()
-    tracker = PerformanceTracker(storage_dir="data/predictions_season_eval")
 
     # Load trained models
     print("Loading models...")
@@ -95,10 +92,19 @@ def run(dynamic: bool = False, retrain_every: int = 1) -> None:
             predictions = predictor.predict(features_df)
 
             for pred, actual in zip(predictions, matchday_matches):
-                points = tracker._calculate_points(
-                    pred['predicted_home_score'], pred['predicted_away_score'],
-                    actual['home_score'], actual['away_score']
-                )
+                # compute points directly
+                ph = int(pred['predicted_home_score'])
+                pa = int(pred['predicted_away_score'])
+                ah = int(actual['home_score'])
+                aa = int(actual['away_score'])
+                if ph == ah and pa == aa:
+                    points = 4
+                elif (ph - pa) == (ah - aa):
+                    points = 3
+                else:
+                    pred_winner = 'H' if ph > pa else ('A' if pa > ph else 'D')
+                    actual_winner = 'H' if ah > aa else ('A' if aa > ah else 'D')
+                    points = 2 if pred_winner == actual_winner else 0
                 pred['actual_home_score'] = actual['home_score']
                 pred['actual_away_score'] = actual['away_score']
                 pred['points_earned'] = points
@@ -108,7 +114,7 @@ def run(dynamic: bool = False, retrain_every: int = 1) -> None:
 
             print(f"Generated and evaluated {len(predictions)} predictions for matchday {matchday}")
     else:
-        # --- CORRECTED DYNAMIC LOGIC ---
+        # --- DYNAMIC expanding-window evaluation ---
         print("\nRunning DYNAMIC expanding-window evaluation...")
 
         # 1. Separate historical base from the season to be evaluated
@@ -128,9 +134,6 @@ def run(dynamic: bool = False, retrain_every: int = 1) -> None:
             if (matchday - first_matchday) % max(1, int(retrain_every)) == 0:
                 print(f"Retraining model with {len(cumulative_training_matches)} total matches...")
                 train_df = data_loader.create_features_from_matches(cumulative_training_matches)
-
-                # The min_training_matches guard is inside predictor.train()
-                # It will now always be met
                 predictor.train(train_df)
                 print("Model retrained successfully.")
 
@@ -142,22 +145,26 @@ def run(dynamic: bool = False, retrain_every: int = 1) -> None:
             # Use the cumulative data as context for feature generation
             features_df = data_loader.create_prediction_features(matchday_matches_to_predict, cumulative_training_matches)
 
-            # ... (rest of the prediction and point calculation logic remains the same)
             predictions = predictor.predict(features_df)
             for pred, actual in zip(predictions, matchday_matches_to_predict):
-                # ... (append to all_predictions)
-                points = tracker._calculate_points(
-                    pred['predicted_home_score'], pred['predicted_away_score'],
-                    actual['home_score'], actual['away_score']
-                )
-                # ... (full pred object creation) ...
+                ph = int(pred['predicted_home_score'])
+                pa = int(pred['predicted_away_score'])
+                ah = int(actual['home_score'])
+                aa = int(actual['away_score'])
+                if ph == ah and pa == aa:
+                    points = 4
+                elif (ph - pa) == (ah - aa):
+                    points = 3
+                else:
+                    pred_winner = 'H' if ph > pa else ('A' if pa > ph else 'D')
+                    actual_winner = 'H' if ah > aa else ('A' if aa > ah else 'D')
+                    points = 2 if pred_winner == actual_winner else 0
                 pred['actual_home_score'] = actual['home_score']
                 pred['actual_away_score'] = actual['away_score']
                 pred['points_earned'] = points
                 pred['is_evaluated'] = True
                 pred['matchday'] = matchday
                 all_predictions.append(pred)
-
 
             # 4. Add the now-finished matchday to the training pool for the next iteration
             cumulative_training_matches.extend(matchday_matches_to_predict)

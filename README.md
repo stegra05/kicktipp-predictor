@@ -1,20 +1,21 @@
 # 3. Liga Match Predictor
 
-**Version 2.0** - A clean, elegant machine learning predictor for Germany's 3. Bundesliga football matches, optimized for maximizing prediction points in fantasy football leagues.
+**Version 2.0** - A clean, transparent machine learning predictor for Germany's 3. Bundesliga football matches, optimized for maximizing prediction points in fantasy football leagues.
 
-> **🎯 What's New in v2.0:** Revolutionary Predictor-Selector architecture eliminates the complexity of ensemble models while improving draw prediction accuracy. 70% code reduction, crystal-clear logic, zero hacks.
+> **What's New in v2.0:** Predictor-Selector architecture with selectable outcome probability source (classifier, Poisson-derived, or hybrid) and clearer evaluation tooling.
 
 ## Architecture: The Predictor-Selector Model
 
-Version 2.0 introduces a revolutionary **two-step prediction system** that eliminates complexity while improving accuracy:
+Version 2.0 introduces a clear **two-step prediction system**:
 
 1. **Outcome Prediction (The Selector)**: A dedicated XGBoost classifier determines the match result (Home Win, Draw, or Away Win)
 2. **Scoreline Selection (The Predictor)**: XGBoost regressors predict expected goals, then a Poisson grid selects the most probable scoreline matching the predicted outcome
 
-This clear hierarchy ensures **transparent, robust predictions** without the fragile blending and draw-nudging hacks of earlier versions.
+Outcome probabilities used for evaluation can be sourced from the classifier, derived from the goal Poisson model, or blended via a simple hybrid weight.
 
 ## Features
 - **Clear Two-Step Architecture**: Outcome first, then scoreline - easy to understand and debug
+- **Selectable Outcome Probabilities**: Use classifier probabilities, Poisson-derived probabilities, or a hybrid blend
 - **Advanced Feature Engineering**: 80+ features including momentum, strength of schedule, rest days, and goal patterns
 - **EWMA Recency Features (new)**: Leakage-safe exponentially weighted moving averages for recent form (goals for/against, goal diff, and points per match) precomputed once and merged into match features
 - **Comprehensive Evaluation**: Brier score, log loss, RPS, accuracy, and Kicktipp points
@@ -64,8 +65,11 @@ python3 -m kicktipp_predictor predict --days 7 --workers 8
 # Predict specific matchday
 python3 -m kicktipp_predictor predict --matchday 15
 
-# Evaluate model performance
+# Evaluate model performance (default probability source)
 python3 -m kicktipp_predictor evaluate
+
+# Evaluate with Poisson-derived probabilities and detailed plots
+python3 -m kicktipp_predictor evaluate --prob-source poisson --detailed
 
 # Run web UI (defaults to 127.0.0.1:8000)
 python3 -m kicktipp_predictor web --host 0.0.0.0 --port 8000
@@ -121,6 +125,12 @@ python3 -m kicktipp_predictor predict --matchday 20
 
 # Predict specific matchday with parallel scoreline selection
 python3 -m kicktipp_predictor predict --matchday 20 --workers 4
+
+# Predict using Poisson-derived probabilities
+python3 -m kicktipp_predictor predict --days 7 --prob-source poisson --proba-grid-max-goals 12
+
+# Predict using hybrid probabilities (blend classifier with Poisson)
+python3 -m kicktipp_predictor predict --days 7 --prob-source hybrid --hybrid-poisson-weight 0.5
 ```
 
 ### Season Evaluation (Static vs Dynamic)
@@ -158,7 +168,7 @@ Notes:
    ↓
 6. Output
    │ • Predicted scoreline
-   │ • Outcome probabilities (H/D/A)
+   │ • Outcome probabilities (H/D/A) from configured source (classifier / Poisson / hybrid)
    │ • Confidence metric
    ↓
 7. Performance Tracking (points calculation)
@@ -175,15 +185,11 @@ To capture short-term momentum without leakage, the feature pipeline precomputes
 
 Early-season gaps are filled with global means to handle cold starts. These features are computed once across the dataset and reused for both training and prediction paths.
 
-### Why This Architecture Works
+### Benefits
 
-The **Predictor-Selector** model solves the fundamental problems of ensemble approaches:
-
-- ✅ **No more draw collapse**: The outcome classifier explicitly learns draw patterns
-- ✅ **No fragile blending**: Single model decides outcome, another decides magnitude
-- ✅ **No temperature hacks**: Clean separation of concerns
-- ✅ **Easy to debug**: Each step is transparent and testable
-- ✅ **Improved accuracy**: Dedicated models for dedicated tasks
+- Clear separation of concerns between outcome decision and score magnitude
+- Option to derive H/D/A probabilities directly from the Poisson goal model
+- Flexible evaluation: choose the probability source that optimizes Brier/LogLoss
 
 ### Technology Stack
 
@@ -249,9 +255,14 @@ kicktipp-predictor/
 The model's behavior is controlled by parameters in `config/best_params.yaml`. These are simple, transparent settings:
 
 ### Key Parameters
-- **`max_goals`**: Maximum goals to consider in Poisson grid (default: 8)
+- **`max_goals`**: Maximum goals to consider in Poisson grid for scoreline selection (default: 8)
+- **`proba_grid_max_goals`**: Grid cap for Poisson-derived probabilities (default: 12)
 - **`min_lambda`**: Minimum expected goals to prevent degenerate predictions (default: 0.2)
-- **`draw_boost`**: Weight multiplier for draw class to address class imbalance (default: 1.5)
+- **`prob_source`**: Outcome probability source: `classifier` | `poisson` | `hybrid` (default: `classifier`)
+- **`hybrid_poisson_weight`**: When `prob_source=hybrid`, weight of Poisson probabilities in [0,1] (default: 0.5)
+- **`proba_temperature`**: Temperature scaling for classifier probabilities (default: 1.0)
+- **`prior_blend_alpha`**: Empirical-prior blending for classifier probabilities (applies only when `prob_source='classifier'`)
+- **`draw_boost`**: Class weight multiplier for draws during classifier training
 
 ### XGBoost Hyperparameters
 - **Outcome Classifier**: `n_estimators`, `max_depth`, `learning_rate`, `subsample`, `colsample_bytree`
@@ -261,12 +272,12 @@ These parameters can be tuned using the `tune` command (see Advanced Usage below
 
 ## Advanced Usage
 
-### Hyperparameter Tuning (Optuna, selectable objectives)
-Use the CLI `tune` command to optimize hyperparameters via time-series CV using Optuna. You can choose among objectives such as weighted PPG, log loss, Brier, balanced accuracy, etc. The tuner writes per-objective YAMLs (e.g., `config/best_params_logloss.yaml`) and copies the winner (by weighted PPG) to `config/best_params.yaml`.
+### Hyperparameter Tuning (Optuna, recommended objective)
+Use the CLI `tune` command to optimize hyperparameters via time-series CV using Optuna. Starting with v2.1, the outcome classifier is trained with class-balanced weights by default, combined with time-decay and an optional `draw_boost`. We recommend optimizing for weighted Kicktipp points (PPG). The tuner writes per-objective YAMLs (e.g., `config/best_params_logloss.yaml`) and copies the winner (by weighted PPG) to `config/best_params.yaml`. The search space includes `prob_source`, `hybrid_poisson_weight`, and `proba_grid_max_goals`.
 
 Serial example (no storage required):
 ```bash
-python3 -m kicktipp_predictor tune --n-trials 200 --n-splits 3 --workers 1 --objective logloss
+python3 -m kicktipp_predictor tune --n-trials 200 --n-splits 3 --workers 1 --objective ppg
 ```
 
 Parallel example (database-coordinated workers):
@@ -278,24 +289,15 @@ python3 -m kicktipp_predictor tune \
   --storage "sqlite:///data/kicktipp_study.db?timeout=60" \
   --objective ppg
 
-### Compare multiple objectives
-Runs objectives sequentially on identical CV folds and saves a compact comparison table and JSON.
+### Recommended study run
+After enabling the balanced trainer, run a longer PPG-focused study with modest parallelism to reduce DB lock contention:
 ```bash
 python3 -m kicktipp_predictor tune \
-  --n-trials 150 \
+  --n-trials 500 \
   --n-splits 3 \
-  --workers 1 \
-  --compare ppg,logloss,brier,balanced_accuracy
-```
-
-With multi-worker and sqlite storage, separate per-objective sqlite files are created automatically:
-```bash
-python3 -m kicktipp_predictor tune \
-  --n-trials 150 \
-  --n-splits 3 \
-  --workers 4 \
-  --storage "sqlite:///data/kicktipp_study.db?timeout=60" \
-  --compare ppg,logloss,brier
+  --workers 8 \
+  --storage "sqlite:///data/study_balanced_ppg.db?timeout=120" \
+  --objective ppg
 ```
 ```
 
@@ -397,34 +399,6 @@ The interface includes the following pages:
 - Ensure models train and predictions run.
 - Update `README.md` and `pyproject.toml` as needed.
 - Tag and build a wheel if distributing externally.
-
-## Version 2.0 Migration Guide
-
-If you're upgrading from Version 1.x, here's what changed:
-
-### What's New
-✅ **Predictor-Selector Architecture**: Clean two-step prediction (outcome → scoreline)
-✅ **Simplified Codebase**: 70% reduction in complexity
-✅ **No More Blending**: Single models with clear responsibilities
-✅ **Better Draw Predictions**: Dedicated classifier eliminates draw collapse
-✅ **Centralized Config**: All settings in `config.py`
-
-### Breaking Changes
-❌ **No more strategy parameter**: `--strategy optimized/safe/aggressive` removed
-❌ **No more `--record` flag**: Removed from predict command
-❌ **No more `--update-results`**: Performance tracking simplified
-❌ **Models incompatible**: Retrain models with `train` command
-
-### Migration Steps
-1. **Retrain models**: `python3 -m kicktipp_predictor train`
-2. **Update scripts**: Remove `--strategy`, `--record`, `--update-results` flags
-3. **Check config**: Verify `config/best_params.yaml` exists
-
-### What Stays the Same
-✅ CLI commands: `train`, `predict`, `evaluate`, `web`
-✅ Web interface URL: `http://127.0.0.1:8000`
-✅ Data directory structure
-✅ Feature engineering (all 80+ features preserved)
 
 ## Disclaimer
 This predictor is for entertainment purposes only. Football is unpredictable and no model can guarantee accurate predictions.

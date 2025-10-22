@@ -7,11 +7,12 @@ from kicktipp_predictor.metrics import (
     ranked_probability_score_3c,
     expected_calibration_error,
     reliability_diagram,
-    confusion_matrix_stats,
     plot_reliability_curve,
+    confusion_matrix_stats,
     plot_confusion_matrix,
     bin_by_confidence,
     plot_confidence_buckets,
+    compute_points,
 )
 from kicktipp_predictor.predictor import MatchPredictor
 
@@ -23,8 +24,7 @@ from typing import Dict, List, Tuple
 
 def run_evaluation(season: bool = False, dynamic: bool = False, retrain_every: int = 1) -> None:
     if season:
-        from kicktipp_predictor.evaluate_season_entry import run as season_eval
-        season_eval(dynamic=dynamic, retrain_every=retrain_every)
+        _run_season_evaluation(dynamic=dynamic, retrain_every=retrain_every)
         return
 
     print("="*80)
@@ -166,7 +166,6 @@ def run_evaluation(season: bool = False, dynamic: bool = False, retrain_every: i
     ph, pa = _scores_from_preds(preds)
 
     # Points per match
-    from kicktipp_predictor.evaluate import compute_points  # reuse simple points
     pts = compute_points(ph, pa, ah, aa)
 
     # Metrics
@@ -278,6 +277,14 @@ def run_evaluation(season: bool = False, dynamic: bool = False, retrain_every: i
     print(f"avg_pts={metrics_main['avg_points']:.3f}  acc={metrics_main['accuracy']:.3f}  "
           f"brier={metrics_main['brier']:.4f}  logloss={metrics_main['log_loss']:.4f}  rps={metrics_main['rps']:.4f}")
     print(f"Artifacts written to {out_dir}")
+
+
+
+def _run_season_evaluation(dynamic: bool = False, retrain_every: int = 1) -> None:
+    # Inline the season evaluation from evaluate_season_entry.py
+    from kicktipp_predictor.evaluate_season_entry import run as _legacy_run
+    # Delegate to legacy implementation for now to keep behavior; can be fully inlined later
+    _legacy_run(dynamic=dynamic, retrain_every=retrain_every)
 
 
 

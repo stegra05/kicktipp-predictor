@@ -134,6 +134,14 @@ def _apply_params_to_config(params: Dict[str, float]) -> None:
         cfg.model.proba_temperature = float(params['proba_temperature'])
     if 'prior_blend_alpha' in params:
         cfg.model.prior_blend_alpha = float(params['prior_blend_alpha'])
+    if 'prob_source' in params:
+        cfg.model.prob_source = str(params['prob_source']).strip().lower()
+    if 'hybrid_poisson_weight' in params:
+        cfg.model.hybrid_poisson_weight = float(params['hybrid_poisson_weight'])
+    if 'proba_grid_max_goals' in params:
+        cfg.model.proba_grid_max_goals = int(params['proba_grid_max_goals'])
+    if 'poisson_draw_rho' in params:
+        cfg.model.poisson_draw_rho = float(params['poisson_draw_rho'])
 
     # Goal regressors
     if 'goals_n_estimators' in params:
@@ -205,6 +213,12 @@ def _objective_builder(base_features_df, all_matches, folds: List[Tuple[np.ndarr
             'proba_temperature': trial.suggest_float('proba_temperature', 0.85, 1.15, step=0.05), # Was 0.7-1.3, Default 1.0
             'prior_blend_alpha': trial.suggest_float('prior_blend_alpha', 0.0, 0.14, step=0.02), # Was 0-0.3, Default 0.0
 
+            # Probability source and blending
+            'prob_source': trial.suggest_categorical('prob_source', ['classifier', 'poisson', 'hybrid']),
+            'hybrid_poisson_weight': trial.suggest_float('hybrid_poisson_weight', 0.0, 1.0, step=0.05),
+            'proba_grid_max_goals': trial.suggest_int('proba_grid_max_goals', 10, 14, step=2),
+            'poisson_draw_rho': trial.suggest_float('poisson_draw_rho', 0.0, 0.20, step=0.01),
+
             # Feature-engineering knobs (optional) - Keep as is
             'form_last_n': trial.suggest_int('form_last_n', 3, 10, step=1), # Default 5
             'momentum_decay': trial.suggest_float('momentum_decay', 0.70, 0.99, step=0.01), # Default 0.9
@@ -271,7 +285,8 @@ def _objective_builder(base_features_df, all_matches, folds: List[Tuple[np.ndarr
             idx_to_label = {0: 'H', 1: 'D', 2: 'A'}
             y_pred = [idx_to_label.get(int(i), 'H') for i in y_pred_idx]
 
-            obj = (objective_name or 'ppg').lower()
+            # Force optimization toward weighted PPG as primary target
+            obj = 'ppg'
             if obj == 'ppg':
                 metric_val = float(np.sum(points_vec * weights) / max(1.0, np.sum(weights)))
             elif obj == 'ppg_unweighted':

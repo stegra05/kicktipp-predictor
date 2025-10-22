@@ -60,6 +60,7 @@ logs/
 # Editors / IDE
 .vscode/
 .idea/
+.claude/
 
 # Project-specific artifacts
 data/
