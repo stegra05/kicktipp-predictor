@@ -401,7 +401,7 @@ def shap(
     """Run SHAP analysis on the trained models and save summary plots."""
     from kicktipp_predictor.data import DataLoader
     from kicktipp_predictor.predictor import MatchPredictor
-    from kicktipp_predictor.models.shap_analysis import run_shap_for_predictor
+    from kicktipp_predictor.analysis.shap_analysis import run_shap_for_predictor
 
     print("=" * 80)
     print("SHAP ANALYSIS")

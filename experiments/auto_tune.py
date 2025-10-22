@@ -33,7 +33,8 @@ if PROJECT_ROOT not in sys.path:
 from kicktipp_predictor.data import DataLoader
 from kicktipp_predictor.predictor import MatchPredictor
 from kicktipp_predictor.config import reset_config, get_config
-from kicktipp_predictor.evaluate import compute_points, log_loss_multiclass, brier_score_multiclass, ranked_probability_score
+from kicktipp_predictor.metrics import compute_points
+from kicktipp_predictor.evaluate import log_loss_multiclass, brier_score_multiclass, ranked_probability_score
 from urllib.parse import urlparse, unquote
 
 try:
@@ -75,18 +76,7 @@ def _sqlite_fs_path(storage: Optional[str]) -> Optional[str]:
     return path
 
 
-def calculate_points(predictions: List[Dict], actuals: List[Dict]) -> int:
-    total_points = 0
-    for pred, act in zip(predictions, actuals):
-        ph, pa = pred['predicted_home_score'], pred['predicted_away_score']
-        ah, aa = int(act['home_score']), int(act['away_score'])
-        if ph == ah and pa == aa:
-            total_points += 4
-        elif (ph - pa) == (ah - aa):
-            total_points += 3
-        elif (ph > pa and ah > aa) or (ph < pa and ah < aa) or (ph == pa and ah == aa):
-            total_points += 2
-    return total_points
+# Deprecated: use compute_points from metrics for vectorized points
 
 
 def _apply_params_to_config(params: Dict[str, float]) -> None:
