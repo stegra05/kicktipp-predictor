@@ -479,10 +479,9 @@ def _safe_print(console, message: str, rich_message: str = None):
 def main():
     # Check if we're in multi-worker mode by looking at environment variables
     # When using --workers > 1, each worker process will have its own console
-    is_multiworker = (
-        os.environ.get("KTP_TUNE_COORDINATED", "0") == "1"
-        or os.environ.get("OPTUNA_WORKER_ID") is not None
-    )
+    is_coordinated = os.environ.get("KTP_TUNE_COORDINATED", "0") == "1"
+    has_worker_id = os.environ.get("OPTUNA_WORKER_ID") is not None
+    is_multiworker = is_coordinated or has_worker_id
 
     # Initialize Rich console only for single-worker mode
     if not is_multiworker:
@@ -496,13 +495,9 @@ def main():
             )
         )
     else:
-        # Suppress output for multi-worker mode to prevent console chaos
+        # Suppress ALL output for multi-worker mode to prevent console chaos
+        # The CLI will handle progress monitoring and final output
         console = None
-        # Only print minimal info for the first worker to avoid spam
-        worker_id = os.environ.get("OPTUNA_WORKER_ID", "unknown")
-        if worker_id == "0" or worker_id == "unknown":
-            print("Kicktipp Predictor Hyperparameter Tuning (Multi-worker mode)")
-            print("=" * 60)
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--n-trials", type=int, default=100, help="Optuna trials")
@@ -1099,7 +1094,7 @@ def main():
                     f"[yellow]⚠️[/yellow] Warning: Failed to delete Optuna storage DB at {storage_fs_path}: {_e}",
                 )
 
-    # Final completion message
+    # Final completion message - only show in single-worker mode
     if console is not None:
         console.print(
             Panel.fit(
@@ -1107,11 +1102,6 @@ def main():
                 "[dim]Check the config/ directory for best parameters and data/predictions/ for detailed results.[/dim]",
                 border_style="green",
             )
-        )
-    else:
-        print("\n🎉 Hyperparameter Tuning Complete!")
-        print(
-            "Check the config/ directory for best parameters and data/predictions/ for detailed results."
         )
 
 
