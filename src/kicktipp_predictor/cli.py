@@ -144,7 +144,7 @@ def evaluate(
     """Evaluate predictor performance on test data."""
     from kicktipp_predictor.data import DataLoader
     from kicktipp_predictor.predictor import MatchPredictor
-    from kicktipp_predictor.evaluate import print_evaluation_report, simple_benchmark
+    from kicktipp_predictor.evaluate import print_evaluation_report, simple_benchmark, run_evaluation
 
     print("=" * 80)
     print("MODEL EVALUATION")
@@ -172,12 +172,10 @@ def evaluate(
         raise typer.Exit(code=1)
 
     if season:
-        from kicktipp_predictor.models.evaluate import run_evaluation
         run_evaluation(season=True, dynamic=dynamic, retrain_every=retrain_every)
         return
 
     if detailed:
-        from kicktipp_predictor.models.evaluate import run_evaluation
         run_evaluation(season=False)
         return
 
