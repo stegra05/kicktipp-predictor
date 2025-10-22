@@ -137,6 +137,40 @@ class ModelConfig:
     # Draw bump for Poisson-derived probabilities: multiply diagonal cells by exp(rho) before normalization
     poisson_draw_rho: float = 0.0
 
+    @property
+    def goals_params(self) -> dict:
+        """Return XGBoost parameters for goal regressors as a dictionary."""
+        return {
+            "n_estimators": self.goals_n_estimators,
+            "max_depth": self.goals_max_depth,
+            "learning_rate": self.goals_learning_rate,
+            "subsample": self.goals_subsample,
+            "colsample_bytree": self.goals_colsample_bytree,
+            "reg_alpha": self.goals_reg_alpha,
+            "reg_lambda": self.goals_reg_lambda,
+            "gamma": self.goals_gamma,
+            "min_child_weight": self.goals_min_child_weight,
+            "random_state": self.random_state,
+            "n_jobs": self.n_jobs,
+        }
+
+    @property
+    def outcome_params(self) -> dict:
+        """Return XGBoost parameters for outcome classifier as a dictionary."""
+        return {
+            "n_estimators": self.outcome_n_estimators,
+            "max_depth": self.outcome_max_depth,
+            "learning_rate": self.outcome_learning_rate,
+            "subsample": self.outcome_subsample,
+            "colsample_bytree": self.outcome_colsample_bytree,
+            "reg_alpha": self.outcome_reg_alpha,
+            "reg_lambda": self.outcome_reg_lambda,
+            "gamma": self.outcome_gamma,
+            "min_child_weight": self.outcome_min_child_weight,
+            "random_state": self.random_state,
+            "n_jobs": self.n_jobs,
+        }
+
 
 @dataclass
 class Config:

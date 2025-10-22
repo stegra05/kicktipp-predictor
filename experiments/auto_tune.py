@@ -19,6 +19,17 @@ os.environ.setdefault("XGBOOST_NUM_THREADS", "1")
 
 import numpy as np
 import pandas as pd
+from rich import box
+
+# Rich console imports
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+)
+from rich.table import Table
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
 from sklearn.model_selection import TimeSeriesSplit
 
@@ -166,6 +177,7 @@ def _objective_builder(
     direction: str,
     omp_threads: int,
     verbose: bool,
+    console: Console,
 ):
     # Cache features by feature-knob tuple to avoid recomputation across trials
     features_cache: dict[tuple, any] = {}
@@ -291,8 +303,8 @@ def _objective_builder(
             # Recompute features for this knob combo
             dl = DataLoader()
             if verbose:
-                print(
-                    f"[FEATS] Building features for knobs form_last_n={key[0]} momentum_decay={key[1]}..."
+                console.print(
+                    f"[dim][FEATS] Building features for knobs form_last_n={key[0]} momentum_decay={key[1]}...[/dim]"
                 )
             feats_df = dl.create_features_from_matches(all_matches)
             features_cache[key] = feats_df
@@ -392,11 +404,13 @@ def _objective_builder(
                         np.sum(points_vec * weights) / max(1.0, np.sum(weights))
                     )
                     u_ppg = float(np.mean(points_vec)) if len(points_vec) else 0.0
-                    print(
-                        f"[FOLD] ppg_w={w_ppg:.4f} ppg={u_ppg:.4f} n={len(points_vec)}"
+                    console.print(
+                        f"[dim][FOLD] ppg_w={w_ppg:.4f} ppg={u_ppg:.4f} n={len(points_vec)}[/dim]"
                     )
                 else:
-                    print(f"[FOLD] {obj}={metric_val:.6f} n={len(points_vec)}")
+                    console.print(
+                        f"[dim][FOLD] {obj}={metric_val:.6f} n={len(points_vec)}[/dim]"
+                    )
 
             fold_metrics.append(metric_val)
 
@@ -409,6 +423,18 @@ def _objective_builder(
 
 
 def main():
+    # Initialize Rich console
+    console = Console()
+
+    # Display welcome banner
+    console.print(
+        Panel.fit(
+            "[bold blue]Kicktipp Predictor Hyperparameter Tuning[/bold blue]\n"
+            "[dim]Optuna-based optimization with Rich console output[/dim]",
+            border_style="blue",
+        )
+    )
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--n-trials", type=int, default=100, help="Optuna trials")
     parser.add_argument("--n-splits", type=int, default=3, help="TimeSeriesSplit folds")
@@ -480,7 +506,9 @@ def main():
     os.environ["KTP_VERBOSE"] = "1" if args.verbose else "0"
 
     if optuna is None:
-        print("Optuna is not installed. Please install optuna to run tuning.")
+        console.print(
+            "[red]❌ Optuna is not installed. Please install optuna to run tuning.[/red]"
+        )
         sys.exit(1)
 
     # Limit threads in parent
@@ -490,21 +518,31 @@ def main():
         os.environ.setdefault("MKL_NUM_THREADS", str(args.omp_threads))
         os.environ.setdefault("NUMEXPR_NUM_THREADS", str(args.omp_threads))
 
-    # Load data
-    if args.verbose:
-        print("Loading data...")
-    data_loader = DataLoader()
-    current_season = data_loader.get_current_season()
-    start_season = current_season - 2
-    all_matches = data_loader.fetch_historical_seasons(start_season, current_season)
-    if args.verbose:
-        print(f"Loaded {len(all_matches)} matches")
+    # Load data with Rich progress
+    console.print("\n[bold]📊 Data Loading Phase[/bold]")
 
-    if args.verbose:
-        print("Creating features...")
-    features_df = data_loader.create_features_from_matches(all_matches)
-    if args.verbose:
-        print(f"Created {len(features_df)} samples")
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        transient=True,
+    ) as progress:
+        # Load historical data
+        task1 = progress.add_task("Loading historical data...", total=None)
+        data_loader = DataLoader()
+        current_season = data_loader.get_current_season()
+        start_season = current_season - 2
+        all_matches = data_loader.fetch_historical_seasons(start_season, current_season)
+        progress.update(task1, description=f"✅ Loaded {len(all_matches)} matches")
+
+        # Create features
+        task2 = progress.add_task("Creating features...", total=None)
+        features_df = data_loader.create_features_from_matches(all_matches)
+        progress.update(task2, description=f"✅ Created {len(features_df)} samples")
+
+    console.print(
+        f"[green]✓[/green] Data loaded: [bold]{len(all_matches)}[/bold] matches → [bold]{len(features_df)}[/bold] samples"
+    )
 
     # Build and run study
     def _fmt_dur(sec: float) -> str:
@@ -516,11 +554,6 @@ def main():
 
     total_trials = int(max(0, args.n_trials))
     total_cv_trainings = total_trials * int(max(1, args.n_splits))
-    if args.verbose:
-        # Force single worker per process to avoid nested parallelism
-        print(
-            f"Planned: trials={total_trials} | cv-trainings={total_cv_trainings} | workers=1 x threads={args.omp_threads or 1}"
-        )
 
     # Verbosity reflects CLI flag only (quiet by default, even with multiple jobs)
     effective_verbose = bool(args.verbose)
@@ -532,15 +565,31 @@ def main():
     # Determine objectives to run
     if args.compare:
         objectives_to_run = [o.strip() for o in args.compare.split(",") if o.strip()]
-        if args.verbose:
-            print(
-                f"Compare mode active. Objectives: {objectives_to_run}. Ignoring --objective."
-            )
-            print(
-                f"Compare mode will take approximately {len(objectives_to_run)}× the time of a single run."
-            )
     else:
         objectives_to_run = [args.objective]
+
+    # Display configuration
+    console.print("\n[bold]⚙️ Configuration[/bold]")
+
+    config_table = Table(title="Tuning Configuration", box=box.ROUNDED)
+    config_table.add_column("Parameter", style="cyan", no_wrap=True)
+    config_table.add_column("Value", style="magenta")
+
+    config_table.add_row("Total Trials", str(total_trials))
+    config_table.add_row("CV Splits", str(args.n_splits))
+    config_table.add_row("Total CV Trainings", str(total_cv_trainings))
+    config_table.add_row("OMP Threads", str(args.omp_threads or 1))
+    config_table.add_row("Pruner", args.pruner)
+    config_table.add_row("Storage", args.storage or "Memory")
+    config_table.add_row("Objectives", ", ".join(objectives_to_run))
+    config_table.add_row("Mode", "Compare" if args.compare else "Single")
+
+    console.print(config_table)
+
+    if args.compare:
+        console.print(
+            f"[yellow]⚠️[/yellow] Compare mode will take approximately [bold]{len(objectives_to_run)}×[/bold] the time of a single run."
+        )
 
     # Configure pruner
     pruner = None
@@ -570,6 +619,7 @@ def main():
                 study_direction,
                 args.omp_threads,
                 effective_verbose,
+                console,
             )
 
             # Create study, optionally with storage
@@ -584,63 +634,34 @@ def main():
             else:
                 study = optuna.create_study(direction=study_direction, pruner=pruner)
 
-            progress = {
+            # Rich progress tracking
+            progress_data = {
                 "start": time.time(),
                 "completed": 0,
                 "best_value": float("-inf")
                 if study_direction == "maximize"
                 else float("inf"),
                 "best_trial": None,
-                "last_print_len": 0,
-                "last_update_ts": 0.0,
             }
 
             def _progress_cb(
                 study: "optuna.study.Study", trial: "optuna.trial.FrozenTrial"
             ) -> None:  # type: ignore[name-defined]
-                progress["completed"] += 1
+                progress_data["completed"] += 1
                 try:
-                    progress["best_value"] = float(study.best_value)
-                    progress["best_trial"] = int(study.best_trial.number)
+                    progress_data["best_value"] = float(study.best_value)
+                    progress_data["best_trial"] = int(study.best_trial.number)
                 except Exception:
                     pass
-                elapsed = time.time() - progress["start"]
-                done = progress["completed"]
-                total = max(1, total_trials)
-                rate = done / elapsed if elapsed > 0 else 0.0
-                remaining = (
-                    max(0.0, (total - done) / rate) if rate > 0 else float("inf")
-                )
-                rate_str = f"{rate:.2f} t/s" if rate > 0 else "-- t/s"
-                pct = (done / total) * 100 if total > 0 else 0.0
-                bar_len = 24
-                filled = int((pct / 100) * bar_len)
-                bar = "[" + "#" * filled + "-" * (bar_len - filled) + "]"
-                line = (
-                    f"\r[TUNE:{obj}] {bar} {done}/{total} ({pct:5.1f}%) | elapsed {_fmt_dur(elapsed)} | "
-                    f"eta {_fmt_dur(remaining)} | speed {rate_str} | best={progress['best_value']:.3f}"
-                )
-                if progress["best_trial"] is not None:
-                    line += f" (#{progress['best_trial']})"
-                now_ts = time.time()
-                should_update = (now_ts - progress["last_update_ts"] >= 0.5) or (
-                    done == total
-                )
-                if not should_update:
-                    return
-                progress["last_update_ts"] = now_ts
-                pad = max(0, progress["last_print_len"] - len(line))
-                if sys.stderr and hasattr(sys.stderr, "isatty") and sys.stderr.isatty():
-                    print(line + (" " * pad), end="", flush=True, file=sys.stderr)
-                else:
-                    print(line.replace("\r", ""), flush=True, file=sys.stderr)
-                progress["last_print_len"] = len(line)
 
-            if args.verbose:
-                print(
-                    f"Running Optuna study for objective='{obj}' for {args.n_trials} trials with n_jobs=1..."
-                )
+            console.print(f"\n[bold]🎯 Optimizing Objective: [cyan]{obj}[/cyan][/bold]")
+            console.print(
+                f"[dim]Direction: {study_direction} | Trials: {args.n_trials} | CV Splits: {args.n_splits}[/dim]"
+            )
+
             start = time.time()
+
+            # Run optimization with simple progress display
             study.optimize(
                 objective_fn,
                 n_trials=args.n_trials,
@@ -648,15 +669,16 @@ def main():
                 callbacks=[_progress_cb],
                 show_progress_bar=False,
             )
-            print(file=sys.stderr)
+
             duration = time.time() - start
-            if args.verbose:
-                try:
-                    print(
-                        f"Study complete in {duration:.1f}s. Best value={study.best_value:.6f} ({study_direction})."
-                    )
-                except Exception:
-                    print(f"Study complete in {duration:.1f}s. No completed trials.")
+            try:
+                console.print(
+                    f"[green]✅[/green] Study complete in [bold]{duration:.1f}s[/bold]. Best value: [bold]{study.best_value:.6f}[/bold] ({study_direction})"
+                )
+            except Exception:
+                console.print(
+                    f"[yellow]⚠️[/yellow] Study complete in [bold]{duration:.1f}s[/bold]. No completed trials."
+                )
 
             try:
                 completed_trials = study.get_trials(
@@ -665,8 +687,9 @@ def main():
             except Exception:
                 completed_trials = []
             if not completed_trials:
-                if args.verbose:
-                    print(f"No completed trials for objective '{obj}'; skipping save.")
+                console.print(
+                    f"[yellow]⚠️[/yellow] No completed trials for objective '{obj}'; skipping save."
+                )
                 continue
 
             best_params = dict(study.best_params)
@@ -697,13 +720,15 @@ def main():
                     encoding="utf-8",
                 ) as f:
                     json.dump(best_params, f, indent=2)
-            if args.verbose:
-                print(f"Best params saved to config/best_params_{obj}.yaml (or .json)")
+            console.print(
+                f"[green]💾[/green] Best params saved to [bold]config/best_params_{obj}.yaml[/bold]"
+            )
 
         # If we have results, re-evaluate on identical folds and choose winner by weighted PPG
         if not per_objective_best:
-            if args.verbose:
-                print("No completed trials across objectives; exiting.")
+            console.print(
+                "[red]❌[/red] No completed trials across objectives; exiting."
+            )
             return
 
         summaries: dict[str, dict[str, float]] = {}
@@ -818,6 +843,33 @@ def main():
                 "rps": float(np.nanmean(rps_list)) if rps_list else float("nan"),
             }
 
+        # Display results summary table
+        console.print("\n[bold]📊 Results Summary[/bold]")
+
+        results_table = Table(title="Objective Comparison Results", box=box.ROUNDED)
+        results_table.add_column("Objective", style="cyan", no_wrap=True)
+        results_table.add_column("PPG Weighted", justify="right", style="green")
+        results_table.add_column("PPG Unweighted", justify="right", style="green")
+        results_table.add_column("Accuracy", justify="right", style="blue")
+        results_table.add_column("Balanced Acc", justify="right", style="blue")
+        results_table.add_column("Brier Score", justify="right", style="red")
+        results_table.add_column("Log Loss", justify="right", style="red")
+        results_table.add_column("RPS", justify="right", style="red")
+
+        for obj, summ in summaries.items():
+            results_table.add_row(
+                obj,
+                f"{summ['ppg_weighted']:.4f}",
+                f"{summ['ppg_unweighted']:.4f}",
+                f"{summ['accuracy_weighted']:.4f}",
+                f"{summ['balanced_accuracy_weighted']:.4f}",
+                f"{summ['brier']:.4f}",
+                f"{summ['log_loss']:.4f}",
+                f"{summ['rps']:.4f}",
+            )
+
+        console.print(results_table)
+
         # Choose winner by highest weighted PPG
         winner = None
         best_ppg = float("-inf")
@@ -843,10 +895,12 @@ def main():
                     os.path.join(cfg_dir, "best_params.json"), "w", encoding="utf-8"
                 ) as f:
                     json.dump(win_params, f, indent=2)
-            if args.verbose:
-                print(
-                    f"Winner by weighted PPG: {winner}. Saved to config/best_params.yaml"
-                )
+            console.print(
+                f"\n[bold green]🏆 Winner: [cyan]{winner}[/cyan][/bold green]"
+            )
+            console.print(
+                "[green]💾[/green] Best parameters saved to [bold]config/best_params.yaml[/bold]"
+            )
 
         # Save summary artifacts
         out_dir = os.path.join(project_root, "data", "predictions")
@@ -873,8 +927,9 @@ def main():
             ) as f:
                 f.writelines(lines)
         except Exception as _e:  # pragma: no cover
-            if args.verbose:
-                print(f"Warning: Failed to write comparison metrics: {_e}")
+            console.print(
+                f"[yellow]⚠️[/yellow] Warning: Failed to write comparison metrics: {_e}"
+            )
 
     finally:
         # Delete SQLite storage file, if applicable, unless coordinated by external CLI
@@ -886,13 +941,22 @@ def main():
                 and os.path.exists(storage_fs_path)
             ):
                 os.remove(storage_fs_path)
-                if args.verbose:
-                    print(f"Deleted Optuna storage DB at {storage_fs_path}")
-        except Exception as _e:
-            if args.verbose:
-                print(
-                    f"Warning: Failed to delete Optuna storage DB at {storage_fs_path}: {_e}"
+                console.print(
+                    f"[green]🗑️[/green] Deleted Optuna storage DB at [bold]{storage_fs_path}[/bold]"
                 )
+        except Exception as _e:
+            console.print(
+                f"[yellow]⚠️[/yellow] Warning: Failed to delete Optuna storage DB at {storage_fs_path}: {_e}"
+            )
+
+    # Final completion message
+    console.print(
+        Panel.fit(
+            "[bold green]🎉 Hyperparameter Tuning Complete![/bold green]\n"
+            "[dim]Check the config/ directory for best parameters and data/predictions/ for detailed results.[/dim]",
+            border_style="green",
+        )
+    )
 
 
 if __name__ == "__main__":
