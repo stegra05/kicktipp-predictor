@@ -15,6 +15,10 @@ from typing import List, Dict, Optional
 from collections import defaultdict
 
 from .config import get_config
+try:
+    import yaml  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    yaml = None
 
 
 class DataLoader:
@@ -378,6 +382,9 @@ class DataLoader:
             features_df['goal_difference'] > 0, 'H', np.where(features_df['goal_difference'] < 0, 'A', 'D')
         )
 
+        # Optionally reduce to selected features if config/selected_features.yaml exists
+        features_df = self._apply_selected_features(features_df)
+
         # Ensure deterministic column order (optional)
         return features_df
 
@@ -537,6 +544,44 @@ class DataLoader:
             features_df['ewm_points_ratio'] = _safe_div(features_df['home_points_ewm5'], features_df['away_points_ewm5'])
 
         return features_df
+
+    def _apply_selected_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """If a selected features list exists, filter DataFrame to essential + selected.
+
+        This keeps ID/meta/target columns alongside the selected feature names.
+        If the selection file is absent or unreadable, returns df unchanged.
+        """
+        try:
+            sel_path = self.config.paths.config_dir / "selected_features.yaml"
+            if not sel_path.exists():
+                return df
+
+            selected: Optional[List[str]] = None
+            if yaml is not None:
+                with open(sel_path, "r", encoding="utf-8") as f:
+                    loaded = yaml.safe_load(f)
+                if isinstance(loaded, list):
+                    selected = [str(c) for c in loaded]
+            else:
+                # Fallback: try .txt with one name per line
+                txt_path = sel_path.with_suffix(".txt")
+                if txt_path.exists():
+                    selected = [line.strip() for line in txt_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+            if not selected:
+                return df
+
+            essential = {
+                'match_id', 'matchday', 'date', 'home_team', 'away_team', 'is_finished',
+                'home_score', 'away_score', 'goal_difference', 'result'
+            }
+            keep_cols = [c for c in df.columns if (c in essential) or (c in selected)]
+            # Ensure we keep at least essentials
+            if not keep_cols:
+                return df
+            return df[keep_cols].copy()
+        except Exception:
+            return df
 
     def _create_match_features(self, match: Dict, historical_matches: List[Dict],
                               is_prediction: bool = False,
