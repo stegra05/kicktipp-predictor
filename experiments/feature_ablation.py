@@ -424,7 +424,7 @@ class FeatureAblationStudy:
                 print("-" * 60)
                 # Print in YAML list format
                 for feature in sorted(best["features"]):
-                    print(f"  - {feature}")
+                    print(f"- {feature}")
                 print("-" * 60)
             # --- End copy-pasteable output ---
 

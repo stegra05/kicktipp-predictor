@@ -13,12 +13,6 @@ import os
 
 import numpy as np
 
-try:
-    import matplotlib.pyplot as plt
-except ImportError:
-    plt = None
-
-
 LABELS_ORDER: tuple[str, str, str] = ("H", "D", "A")
 
 
@@ -218,7 +212,9 @@ def plot_reliability_curve(df, class_label: str, out_path: str) -> None:
         class_label: The class label for the plot title.
         out_path: The file path to save the plot.
     """
-    if plt is None:
+    try:
+        import matplotlib.pyplot as plt  # type: ignore
+    except Exception:
         return
     ensure_dir(os.path.dirname(out_path) or ".")
     xs = []
@@ -285,7 +281,9 @@ def plot_confusion_matrix(cm: np.ndarray, out_path: str) -> None:
         cm: A 3x3 numpy array representing the confusion matrix.
         out_path: The file path to save the plot.
     """
-    if plt is None:
+    try:
+        import matplotlib.pyplot as plt  # type: ignore
+    except Exception:
         return
     ensure_dir(os.path.dirname(out_path) or ".")
     fig, ax = plt.subplots(figsize=(5, 4))
@@ -373,7 +371,9 @@ def plot_confidence_buckets(df, out_path: str) -> None:
         df: A pandas DataFrame from `bin_by_confidence`.
         out_path: The file path to save the plot.
     """
-    if plt is None:
+    try:
+        import matplotlib.pyplot as plt  # type: ignore
+    except Exception:
         return
     ensure_dir(os.path.dirname(out_path) or ".")
     plt.figure(figsize=(7, 4))

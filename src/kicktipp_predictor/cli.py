@@ -565,14 +565,25 @@ def shap(
     sample: int = typer.Option(2000, help="Max samples for SHAP computation"),
 ):
     """Run SHAP analysis on the trained models and save summary plots."""
-    from kicktipp_predictor.analysis.shap_analysis import run_shap_for_predictor
-    from kicktipp_predictor.data import DataLoader
-    from kicktipp_predictor.predictor import MatchPredictor
-
+    # Print header immediately, before any heavy imports
     print("=" * 80)
     print("SHAP ANALYSIS")
     print("=" * 80)
     print()
+
+    # Lazily import dependencies for this command
+    print("Loading dependencies for SHAP analysis (this can take a moment)...")
+
+    from kicktipp_predictor.data import DataLoader
+
+    print("Loaded data")
+    from kicktipp_predictor.predictor import MatchPredictor
+
+    print("Loaded predictor")
+    from kicktipp_predictor.models.shap_analysis import run_shap_for_predictor
+
+    print("Loaded shap_analysis")
+    print("Dependencies loaded.")
 
     loader = DataLoader()
     predictor = MatchPredictor()

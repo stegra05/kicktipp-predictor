@@ -192,14 +192,45 @@ class MatchPredictor:
 
         # Strict TS-CV tuning, or simple holdout fitting when tuning disabled (entropy bounds set by Optuna)
         try:
-            if self.config.model.calibrator_enabled and bool(
-                getattr(self.config.model, "hybrid_entropy_tune", False)
-            ):
-                self._tune_entropy_and_fit_calibrator_ts(training_data)
-            elif self.config.model.calibrator_enabled:
-                self._fit_calibrator_on_holdout(training_data)
+            if self.config.model.calibrator_enabled:
+                if bool(getattr(self.config.model, "hybrid_entropy_tune", False)):
+                    # This path is for the advanced time-series CV tuning
+                    self._tune_entropy_and_fit_calibrator_ts(training_data)
+                else:
+                    # This is the corrected path for simple holdout calibration
+                    self._log("Fitting calibrator on holdout set...")
+
+                    # Use the validation context from outcome model training
+                    X_val = val_ctx.get("X_val")
+                    y_val_enc = val_ctx.get("y_val_enc")
+
+                    if X_val is not None and y_val_enc is not None:
+                        # 1. Get the pre-calibrated probabilities for the validation set
+                        cls_val_probs = self._get_calibrated_probabilities(X_val)
+                        home_lambdas_val = np.maximum(
+                            self.home_goals_model.predict(X_val),
+                            self.config.model.min_lambda,
+                        )
+                        away_lambdas_val = np.maximum(
+                            self.away_goals_model.predict(X_val),
+                            self.config.model.min_lambda,
+                        )
+
+                        # 2. Derive the final blended probabilities (pre-calibration)
+                        final_val_probs, _ = self._derive_final_probabilities(
+                            cls_val_probs, home_lambdas_val, away_lambdas_val
+                        )
+
+                        # 3. Now, fit the calibrator using these probabilities and true labels
+                        self._fit_calibrator(final_val_probs, y_val_enc)
+                        self._log("Calibrator fitted successfully.")
+                    else:
+                        self._log(
+                            "[Warning] Could not fit calibrator: validation context not found."
+                        )
+
         except Exception as e:  # pragma: no cover - optional
-            self._log(f"[TS-CV] Skipped due to error: {e}")
+            self._log(f"[Calibration] Skipped due to error: {e}")
 
         self._log("Training completed.")
 
