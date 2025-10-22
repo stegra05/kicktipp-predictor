@@ -117,20 +117,43 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
             pa = int(pred.get("predicted_away_score", 0))
             ah = int(actual.get("home_score", 0))
             aa = int(actual.get("away_score", 0))
+
+            # Actual outcome label from final scores
+            actual_winner = "H" if ah > aa else ("A" if aa > ah else "D")
+
+            # Predicted outcome based on probabilities only (not scores)
+            pH = float(pred.get("home_win_probability", 1.0 / 3))
+            pD = float(pred.get("draw_probability", 1.0 / 3))
+            pA = float(pred.get("away_win_probability", 1.0 / 3))
+            probs = np.array([pH, pD, pA], dtype=float)
+            if probs.sum() > 0:
+                probs = probs / probs.sum()
+            pred_idx = int(np.argmax(probs))
+            winner_pred = LABELS_ORDER[pred_idx]
+            winner_pred_prob = float(probs[pred_idx])
+            winner_correct = bool(winner_pred == actual_winner)
+
+            # Points remain based on the scoreline prediction
             if ph == ah and pa == aa:
                 points = 4
             elif (ph - pa) == (ah - aa):
                 points = 3
             else:
-                pred_winner = "H" if ph > pa else ("A" if pa > ph else "D")
-                actual_winner = "H" if ah > aa else ("A" if aa > ah else "D")
-                points = 2 if pred_winner == actual_winner else 0
+                pred_winner_score = "H" if ph > pa else ("A" if pa > ph else "D")
+                points = 2 if pred_winner_score == actual_winner else 0
 
             pred["actual_home_score"] = ah
             pred["actual_away_score"] = aa
             pred["points_earned"] = points
             pred["is_evaluated"] = True
             pred["matchday"] = matchday
+
+            # Store probability-based winner info
+            pred["winner_true"] = actual_winner
+            pred["winner_pred"] = winner_pred
+            pred["winner_pred_prob"] = winner_pred_prob
+            pred["winner_correct"] = winner_correct
+
             all_predictions.append(pred)
 
         cumulative_training_matches.extend(matchday_matches)
@@ -226,6 +249,10 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
                 "actual_home_score": p.get("actual_home_score"),
                 "actual_away_score": p.get("actual_away_score"),
                 "points_earned": p.get("points_earned"),
+                +"winner_true": p.get("winner_true"),
+                +"winner_pred": p.get("winner_pred"),
+                +"winner_correct": p.get("winner_correct"),
+                +"winner_pred_prob": p.get("winner_pred_prob"),
             }
             debug_rows.append(row)
         if len(debug_rows) > 0:
@@ -288,6 +315,35 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
     label_counts = {lab: y_true.count(lab) for lab in LABELS_ORDER}
     pred_labels = [LABELS_ORDER[i] for i in np.argmax(P, axis=1)]
     pred_counts = {lab: pred_labels.count(lab) for lab in LABELS_ORDER}
+
+    # Probability-based winner correctness and per-class stats
+    y_pred_idx = np.argmax(P, axis=1)
+    y_true_arr = np.array(y_true)
+    correct_winner_count = int(
+        np.sum(np.array([LABELS_ORDER[i] for i in y_pred_idx]) == y_true_arr)
+    )
+    incorrect_winner_count = int(metrics["n"] - correct_winner_count)
+
+    per_class_prob_acc: dict[str, dict] = {}
+    for j, lab in enumerate(LABELS_ORDER):
+        idx_lab = np.where(y_pred_idx == j)[0]
+        n_lab = int(len(idx_lab))
+        if n_lab > 0:
+            mean_prob_lab = float(np.mean(P[idx_lab, j]))
+            acc_lab = float(np.mean(y_true_arr[idx_lab] == lab))
+        else:
+            mean_prob_lab = float("nan")
+            acc_lab = float("nan")
+        per_class_prob_acc[lab] = {
+            "n_predicted": n_lab,
+            "mean_pred_prob": mean_prob_lab,
+            "accuracy": acc_lab,
+        }
+
+    metrics["winner_accuracy_prob"] = float(metrics["accuracy"])  # same definition
+    metrics["winner_correct_count"] = correct_winner_count
+    metrics["winner_incorrect_count"] = incorrect_winner_count
+    metrics["winner_prob_per_class"] = per_class_prob_acc
 
     # Scoreline top-k
     pred_scores = Counter([f"{h}-{a}" for h, a in zip(ph.tolist(), pa.tolist())])
@@ -511,6 +567,53 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
                 f"{float(r.get('avg_confidence', float('nan'))):.3f}",
             )
         console.print(conf_table)
+
+    # Winner accuracy summary (probabilities only)
+    win_acc_table = Table(title="Winner Accuracy (Probabilities)", box=box.SIMPLE_HEAVY)
+    win_acc_table.add_column("Metric", justify="left")
+    win_acc_table.add_column("Value", justify="right")
+    win_acc_table.add_row("Matches", f"{metrics['n']}")
+    win_acc_table.add_row("Correct winners", f"{metrics['winner_correct_count']}")
+    win_acc_table.add_row("Incorrect winners", f"{metrics['winner_incorrect_count']}")
+    win_acc_table.add_row("Accuracy", f"{metrics['winner_accuracy_prob']:.3f}")
+    console.print(win_acc_table)
+
+    # Per-class probability vs accuracy
+    prob_pc_table = Table(
+        title="Per-class Winner Prob vs Accuracy", box=box.SIMPLE_HEAVY
+    )
+    prob_pc_table.add_column("Class", justify="center")
+    prob_pc_table.add_column("Pred Count", justify="right")
+    prob_pc_table.add_column("Mean Prob", justify="right")
+    prob_pc_table.add_column("Accuracy", justify="right")
+    for lab in LABELS_ORDER:
+        s = metrics["winner_prob_per_class"].get(lab, {})
+        n_pred = int(s.get("n_predicted", 0))
+        mean_prob = float(s.get("mean_pred_prob", float("nan")))
+        acc_lab = float(s.get("accuracy", float("nan")))
+        prob_pc_table.add_row(lab, str(n_pred), f"{mean_prob:.3f}", f"{acc_lab:.3f}")
+    console.print(prob_pc_table)
+
+    # Max-probability calibration buckets (probabilities only)
+    prob_conf_df = bin_by_confidence(max_prob, y_true, P, pts, n_bins=5)
+    if isinstance(prob_conf_df, pd.DataFrame) and len(prob_conf_df) > 0:
+        prob_conf_table = Table(
+            title="Max-Prob Calibration Buckets", box=box.SIMPLE_HEAVY
+        )
+        prob_conf_table.add_column("Bin", justify="left")
+        prob_conf_table.add_column("Count", justify="right")
+        prob_conf_table.add_column("Accuracy", justify="right")
+        prob_conf_table.add_column("Avg Max-Prob", justify="right")
+        prob_conf_table.add_column("Avg Points", justify="right")
+        for _, r in prob_conf_df.iterrows():
+            prob_conf_table.add_row(
+                str(r.get("bin")),
+                str(int(r.get("count", 0))),
+                f"{float(r.get('accuracy', float('nan'))):.3f}",
+                f"{float(r.get('avg_confidence', float('nan'))):.3f}",
+                f"{float(r.get('avg_points', float('nan'))):.3f}",
+            )
+        console.print(prob_conf_table)
 
     # Confusion matrix + per-class
     cm_table = Table(title="Confusion Matrix", box=box.SIMPLE_HEAVY)

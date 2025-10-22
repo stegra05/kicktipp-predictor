@@ -236,7 +236,27 @@ def _apply_params_to_config(params: dict[str, float]) -> None:
             cfg.model.form_last_n = int(float(params["form_last_n"]))
     if "momentum_decay" in params:
         cfg.model.momentum_decay = float(params["momentum_decay"])
-
+    # New value weighting and decision knobs
+    if "value_weight_2pt" in params:
+        cfg.model.value_weight_2pt = float(params["value_weight_2pt"])
+    if "value_weight_3pt" in params:
+        cfg.model.value_weight_3pt = float(params["value_weight_3pt"])
+    if "value_weight_4pt" in params:
+        cfg.model.value_weight_4pt = float(params["value_weight_4pt"])
+    if "confidence_shift_threshold" in params:
+        cfg.model.confidence_shift_threshold = float(
+            params["confidence_shift_threshold"]
+        )
+    if "confidence_shift_prob_ratio" in params:
+        cfg.model.confidence_shift_prob_ratio = float(
+            params["confidence_shift_prob_ratio"]
+        )
+    if "force_draw_enabled" in params:
+        cfg.model.force_draw_enabled = bool(params["force_draw_enabled"])
+    if "force_draw_entropy_threshold" in params:
+        cfg.model.force_draw_entropy_threshold = float(
+            params["force_draw_entropy_threshold"]
+        )
     # Outcome classifier
     if "outcome_n_estimators" in params:
         cfg.model.outcome_n_estimators = int(params["outcome_n_estimators"])
@@ -411,12 +431,10 @@ def _objective_builder(
                     "prior_blend_alpha", 0.0, 0.14, step=0.02
                 ),  # Was 0-0.3, Default 0.0
                 # Probability source and blending
-                "prob_source": trial.suggest_categorical(
-                    "prob_source", ["classifier", "poisson", "hybrid"]
-                ),
+                "prob_source": trial.suggest_categorical("prob_source", ["hybrid"]),
                 # Hybrid scheme and entropy bounds
                 "hybrid_scheme": trial.suggest_categorical(
-                    "hybrid_scheme", ["entropy", "fixed"]
+                    "hybrid_scheme", ["entropy"]
                 ),
                 "hybrid_poisson_weight": trial.suggest_float(
                     "hybrid_poisson_weight", 0.0, 1.0, step=0.05
@@ -440,6 +458,30 @@ def _objective_builder(
                 ),
                 "poisson_draw_rho": trial.suggest_float(
                     "poisson_draw_rho", 0.0, 0.20, step=0.01
+                ),
+                # Value weighting for EV-based scoreline selection
+                "value_weight_2pt": trial.suggest_float(
+                    "value_weight_2pt", 0.90, 1.20, step=0.05
+                ),
+                "value_weight_3pt": trial.suggest_float(
+                    "value_weight_3pt", 1.05, 1.35, step=0.05
+                ),
+                "value_weight_4pt": trial.suggest_float(
+                    "value_weight_4pt", 1.10, 1.50, step=0.05
+                ),
+                # Confidence-based H scoreline shift knobs
+                "confidence_shift_threshold": trial.suggest_float(
+                    "confidence_shift_threshold", 0.10, 0.30, step=0.01
+                ),
+                "confidence_shift_prob_ratio": trial.suggest_float(
+                    "confidence_shift_prob_ratio", 0.40, 0.80, step=0.05
+                ),
+                # Entropy-guided draw forcing knobs
+                "force_draw_enabled": trial.suggest_categorical(
+                    "force_draw_enabled", [True, False]
+                ),
+                "force_draw_entropy_threshold": trial.suggest_float(
+                    "force_draw_entropy_threshold", 0.85, 0.98, step=0.01
                 ),
                 # Feature-engineering knobs (optional) - Keep as is
                 "form_last_n": trial.suggest_int("form_last_n", 3, 12),  # Default 5

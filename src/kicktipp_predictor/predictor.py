@@ -364,10 +364,82 @@ class MatchPredictor:
             classifier_probs, home_lambdas, away_lambdas
         )
 
-        # Choose scoreline via expected KickTipp points
+        # Choose scoreline via weighted value (aggressive 4/3/2 weighting)
         scorelines, ep_values = self._compute_ep_scorelines(home_lambdas, away_lambdas)
 
-        outcomes = self.label_encoder.inverse_transform(np.argmax(final_probs, axis=1))
+        # Base outcomes: argmax over final probabilities
+        prob_map = {label: i for i, label in enumerate(self.label_encoder.classes_)}
+        outcomes_idx = np.argmax(final_probs, axis=1)
+
+        # Entropy-guided draw forcing
+        if bool(getattr(self.config.model, "force_draw_enabled", False)):
+            thr = float(
+                getattr(self.config.model, "force_draw_entropy_threshold", 0.95)
+            )
+            entropy = np.asarray(
+                diag.get("entropy", np.zeros(len(final_probs))), dtype=float
+            )
+            d_idx = int(prob_map.get("D", 1))
+            for i in range(len(outcomes_idx)):
+                if float(entropy[i]) >= thr and int(outcomes_idx[i]) != d_idx:
+                    outcomes_idx[i] = d_idx
+
+        outcomes = self.label_encoder.inverse_transform(outcomes_idx)
+
+        # If outcome is forced to draw, ensure the scoreline is a draw
+        max_goals = int(self.config.model.max_goals)
+        for i in range(len(outcomes)):
+            if outcomes[i] == "D":
+                h, a = int(scorelines[i][0]), int(scorelines[i][1])
+                if h != a:
+                    scorelines[i] = compute_scoreline_for_outcome(
+                        "D", float(home_lambdas[i]), float(away_lambdas[i]), max_goals
+                    )
+
+        # Confidence-based shift toward higher H goal differences
+        shift_thr = float(
+            getattr(self.config.model, "confidence_shift_threshold", 0.15)
+        )
+        ratio = float(getattr(self.config.model, "confidence_shift_prob_ratio", 0.5))
+        for i in range(len(outcomes)):
+            if outcomes[i] != "H":
+                continue
+            # confidence = top - second
+            probs = np.asarray(final_probs[i], dtype=float)
+            ps = np.sort(probs)[::-1]
+            conf = float(ps[0] - ps[1])
+            if conf < shift_thr:
+                continue
+            # Build Poisson grid to compare scoreline probabilities
+            lam_h = float(home_lambdas[i])
+            lam_a = float(away_lambdas[i])
+            G = int(min(max_goals, int(np.ceil(max(lam_h, lam_a) + 4))))
+            x = np.arange(G + 1)
+            ph = poisson.pmf(x, lam_h)
+            pa = poisson.pmf(x, lam_a)
+            grid = np.outer(ph, pa)
+            # Prefer higher differences if probability is within ratio of current pick
+            cur_h, cur_a = int(scorelines[i][0]), int(scorelines[i][1])
+            if cur_h <= cur_a or cur_h > G or cur_a > G:
+                continue
+            ref_p = float(grid[cur_h, cur_a])
+            if ref_p <= 0:
+                continue
+            best_h, best_a = cur_h, cur_a
+            best_diff = cur_h - cur_a
+            for h in range(G + 1):
+                for a in range(G + 1):
+                    if h <= a:
+                        continue
+                    p = float(grid[h, a])
+                    if p >= ratio * ref_p:
+                        d = h - a
+                        if d > best_diff or (
+                            d == best_diff and p > float(grid[best_h, best_a]) + 1e-12
+                        ):
+                            best_h, best_a = h, a
+                            best_diff = d
+            scorelines[i] = (best_h, best_a)
 
         return self._format_predictions(
             features_df,
@@ -549,6 +621,10 @@ class MatchPredictor:
         ep_values = np.zeros(n, dtype=float)
         max_cap = int(self.config.model.max_goals)
         rho = float(self.config.model.poisson_draw_rho)
+        # Aggressive value weights for 2/3/4-point components
+        w2 = float(self.config.model.value_weight_2pt)
+        w3 = float(self.config.model.value_weight_3pt)
+        w4 = float(self.config.model.value_weight_4pt)
         common_order = [
             (2, 1),
             (1, 0),
@@ -592,20 +668,24 @@ class MatchPredictor:
             for d in range(-G, G + 1):
                 sum_by_diff[d] = float(np.sum(np.diagonal(grid, offset=d)))
 
-            best_ep = -1.0
+            best_ev = -1.0
             best = (2, 1)
-            # Evaluate expected points efficiently using identity: EP = exact + sum_diff + 2 * p_outcome
+            # Evaluate weighted expected value: 4*e*w4 + 3*(s-e)*w3 + 2*(outcome_p - s)*w2
             for h in range(G + 1):
                 for a in range(G + 1):
                     e = float(grid[h, a])
                     d = h - a
                     s = sum_by_diff.get(d, 0.0)
                     outcome_p = pD if d == 0 else (pH if d > 0 else pA)
-                    ep = e + s + 2.0 * outcome_p
-                    if ep > best_ep + 1e-12:
-                        best_ep = ep
+                    ev = (
+                        (4.0 * w4) * e
+                        + (3.0 * w3) * max(0.0, s - e)
+                        + (2.0 * w2) * max(0.0, outcome_p - s)
+                    )
+                    if ev > best_ev + 1e-12:
+                        best_ev = ev
                         best = (h, a)
-                    elif abs(ep - best_ep) <= 1e-12:
+                    elif abs(ev - best_ev) <= 1e-12:
                         # Tie-break with common scoreline preference
                         if best not in common_order and (h, a) in common_order:
                             best = (h, a)
@@ -613,7 +693,7 @@ class MatchPredictor:
                             if common_order.index((h, a)) < common_order.index(best):
                                 best = (h, a)
             picks.append(best)
-            ep_values[i] = best_ep
+            ep_values[i] = best_ev
         return picks, ep_values
 
     def _maybe_apply_dixon_coles(

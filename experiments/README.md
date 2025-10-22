@@ -230,7 +230,7 @@ cat data/feature_ablation/ablation_results.csv
 
 # 4. Retrain and validate
 python -m kicktipp_predictor train
-python -m kicktipp_predictor evaluate --season
+python -m kicktipp_predictor evaluate 
 ```
 
 ---
@@ -280,8 +280,4 @@ def run_custom_test(self, train_df, test_df):
 Then call in `run_full_study()`.
 
 ---
-
-## Questions?
-
-See `FEATURE_COMPLEXITY_ANALYSIS.md` for detailed feature documentation.
 

@@ -146,6 +146,18 @@ class ModelConfig:
     # Dixon–Coles low-score correlation parameter (small magnitude, e.g., -0.05..0.05)
     dixon_coles_rho: float = 0.0
 
+    # Decision logic enhancements
+    # Aggressive value weighting multipliers for 2/3/4-point components
+    value_weight_2pt: float = 1.0
+    value_weight_3pt: float = 1.2
+    value_weight_4pt: float = 1.3
+    # Confidence-based scoreline shift (for 'H' outcome only)
+    confidence_shift_threshold: float = 0.15
+    confidence_shift_prob_ratio: float = 0.5
+    # Entropy-guided draw forcing
+    force_draw_enabled: bool = True
+    force_draw_entropy_threshold: float = 0.95
+
     # Feature selection list filename under config/ (default kept_features.yaml)
     selected_features_file: str = "kept_features.yaml"
 
@@ -287,68 +299,36 @@ class Config:
                         )
                     if "dixon_coles_rho" in params:
                         config.model.dixon_coles_rho = float(params["dixon_coles_rho"])
-                    if "use_time_decay" in params:
-                        config.model.use_time_decay = bool(params["use_time_decay"])
-                    if "time_decay_half_life_days" in params:
-                        config.model.time_decay_half_life_days = float(
-                            params["time_decay_half_life_days"]
-                        )
-                    if "form_last_n" in params:
-                        config.model.form_last_n = int(params["form_last_n"])
-                    if "momentum_decay" in params:
-                        config.model.momentum_decay = float(params["momentum_decay"])
-                    if "selected_features_file" in params:
-                        config.model.selected_features_file = str(
-                            params["selected_features_file"]
-                        ).strip()
 
-                    # Calibration & anchoring
-                    if "calibrator_enabled" in params:
-                        config.model.calibrator_enabled = bool(
-                            params["calibrator_enabled"]
+                    # New decision logic knobs
+                    if "value_weight_2pt" in params:
+                        config.model.value_weight_2pt = float(
+                            params["value_weight_2pt"]
                         )
-                    if "calibrator_method" in params:
-                        config.model.calibrator_method = (
-                            str(params["calibrator_method"]).strip().lower()
+                    if "value_weight_3pt" in params:
+                        config.model.value_weight_3pt = float(
+                            params["value_weight_3pt"]
                         )
-                    if "calibrator_C" in params:
-                        config.model.calibrator_C = float(params["calibrator_C"])
-                    if "calibrator_cv_folds" in params:
-                        config.model.calibrator_cv_folds = int(
-                            params["calibrator_cv_folds"]
+                    if "value_weight_4pt" in params:
+                        config.model.value_weight_4pt = float(
+                            params["value_weight_4pt"]
                         )
-                    if "prior_anchor_enabled" in params:
-                        config.model.prior_anchor_enabled = bool(
-                            params["prior_anchor_enabled"]
+                    if "confidence_shift_threshold" in params:
+                        config.model.confidence_shift_threshold = float(
+                            params["confidence_shift_threshold"]
                         )
-                    if "prior_anchor_strength" in params:
-                        config.model.prior_anchor_strength = float(
-                            params["prior_anchor_strength"]
+                    if "confidence_shift_prob_ratio" in params:
+                        config.model.confidence_shift_prob_ratio = float(
+                            params["confidence_shift_prob_ratio"]
                         )
-                    if "hybrid_entropy_tune" in params:
-                        config.model.hybrid_entropy_tune = bool(
-                            params["hybrid_entropy_tune"]
+                    if "force_draw_enabled" in params:
+                        config.model.force_draw_enabled = bool(
+                            params["force_draw_enabled"]
                         )
-                    if "hybrid_entropy_w_min_candidates" in params and isinstance(
-                        params["hybrid_entropy_w_min_candidates"], list
-                    ):
-                        try:
-                            config.model.hybrid_entropy_w_min_candidates = [
-                                float(x)
-                                for x in params["hybrid_entropy_w_min_candidates"]
-                            ]
-                        except Exception:
-                            pass
-                    if "hybrid_entropy_w_max_candidates" in params and isinstance(
-                        params["hybrid_entropy_w_max_candidates"], list
-                    ):
-                        try:
-                            config.model.hybrid_entropy_w_max_candidates = [
-                                float(x)
-                                for x in params["hybrid_entropy_w_max_candidates"]
-                            ]
-                        except Exception:
-                            pass
+                    if "force_draw_entropy_threshold" in params:
+                        config.model.force_draw_entropy_threshold = float(
+                            params["force_draw_entropy_threshold"]
+                        )
 
                     # Outcome classifier hyperparameters
                     if "outcome_n_estimators" in params:
@@ -415,17 +395,9 @@ class Config:
                         config.model.goals_min_child_weight = float(
                             params["goals_min_child_weight"]
                         )
-                    if "goals_early_stopping_rounds" in params:
-                        config.model.goals_early_stopping_rounds = int(
-                            params["goals_early_stopping_rounds"]
-                        )
 
-                    if os.getenv("KTP_VERBOSE") == "1":
-                        print(f"[Config] Loaded from {config_file}")
-            except Exception as e:
-                if os.getenv("KTP_VERBOSE") == "1":
-                    print(f"[Config] Warning: Could not load {config_file}: {e}")
-                    print("[Config] Using default configuration")
+            except Exception:
+                pass
 
         return config
 

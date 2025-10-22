@@ -96,3 +96,8 @@ features:
   - form_points_pg_ratio
   - momentum_score_ratio
   - ewm_points_ratio
+
+  # Elo Ratings
+  - home_elo
+  - away_elo
+  - elo_diff
