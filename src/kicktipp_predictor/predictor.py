@@ -676,9 +676,7 @@ class MatchPredictor:
         if method == "multinomial_logistic":
             X_cal = np.log(np.clip(probs, 1e-15, 1.0))
             C = float(getattr(self.config.model, "calibrator_C", 1.0))
-            lr = LogisticRegression(
-                multi_class="multinomial", solver="lbfgs", C=C, max_iter=1000
-            )
+            lr = LogisticRegression(solver="lbfgs", C=C, max_iter=1000)
             lr.fit(X_cal, y_enc)
             self.calibrator = lr
         elif method == "dirichlet":
@@ -692,9 +690,7 @@ class MatchPredictor:
                 # Fallback to multinomial logistic if netcal is unavailable
                 X_cal = np.log(np.clip(probs, 1e-15, 1.0))
                 C = float(getattr(self.config.model, "calibrator_C", 1.0))
-                lr = LogisticRegression(
-                    multi_class="multinomial", solver="lbfgs", C=C, max_iter=1000
-                )
+                lr = LogisticRegression(solver="lbfgs", C=C, max_iter=1000)
                 lr.fit(X_cal, y_enc)
                 self.calibrator = lr
         else:
