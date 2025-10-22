@@ -155,9 +155,18 @@ class ModelConfig:
         "multinomial_logistic"  # or 'dirichlet' if external lib available
     )
     calibrator_c: float = 1.0
+    calibrator_cv_folds: int = 3
     # Post-calibration class-prior anchoring
     prior_anchor_enabled: bool = False
     prior_anchor_strength: float = 0.15
+    # Entropy-based hybrid tuning candidates
+    hybrid_entropy_tune: bool = True
+    hybrid_entropy_w_min_candidates: list[float] = field(
+        default_factory=lambda: [0.0, 0.1, 0.2, 0.3]
+    )
+    hybrid_entropy_w_max_candidates: list[float] = field(
+        default_factory=lambda: [0.7, 0.8, 0.9, 1.0]
+    )
 
     @property
     def goals_params(self) -> dict:
@@ -304,6 +313,10 @@ class Config:
                         )
                     if "calibrator_C" in params:
                         config.model.calibrator_C = float(params["calibrator_C"])
+                    if "calibrator_cv_folds" in params:
+                        config.model.calibrator_cv_folds = int(
+                            params["calibrator_cv_folds"]
+                        )
                     if "prior_anchor_enabled" in params:
                         config.model.prior_anchor_enabled = bool(
                             params["prior_anchor_enabled"]
@@ -312,6 +325,30 @@ class Config:
                         config.model.prior_anchor_strength = float(
                             params["prior_anchor_strength"]
                         )
+                    if "hybrid_entropy_tune" in params:
+                        config.model.hybrid_entropy_tune = bool(
+                            params["hybrid_entropy_tune"]
+                        )
+                    if "hybrid_entropy_w_min_candidates" in params and isinstance(
+                        params["hybrid_entropy_w_min_candidates"], list
+                    ):
+                        try:
+                            config.model.hybrid_entropy_w_min_candidates = [
+                                float(x)
+                                for x in params["hybrid_entropy_w_min_candidates"]
+                            ]
+                        except Exception:
+                            pass
+                    if "hybrid_entropy_w_max_candidates" in params and isinstance(
+                        params["hybrid_entropy_w_max_candidates"], list
+                    ):
+                        try:
+                            config.model.hybrid_entropy_w_max_candidates = [
+                                float(x)
+                                for x in params["hybrid_entropy_w_max_candidates"]
+                            ]
+                        except Exception:
+                            pass
 
                     # Outcome classifier hyperparameters
                     if "outcome_n_estimators" in params:

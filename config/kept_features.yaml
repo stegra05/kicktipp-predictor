@@ -1,56 +1,56 @@
 - abs_form_points_diff
-- abs_momentum_score_diff
-- attack_defense_form_ratio_away
-- attack_defense_form_ratio_home
-- attack_defense_long_ratio_away
-- attack_defense_long_ratio_home
-- away_avg_goals_against
-- away_avg_goals_for
-- away_avg_points
-- away_date
-- away_form_avg_goals_conceded
-- away_form_avg_goals_scored
-- away_form_draws
-- away_form_goal_diff
-- away_form_goals_conceded
-- away_form_goals_scored
-- away_form_losses
-- away_form_points
-- away_form_points_per_game
-- away_form_wins
-- away_goal_diff_ewm5
-- away_goals_against_ewm5
-- away_goals_for_ewm5
-- away_momentum_conceded
-- away_momentum_goals
-- away_momentum_points
-- away_momentum_score
-- away_points_ewm5
-- ewm_points_ratio
-- form_points_difference
-- form_points_pg_ratio
-- home_avg_goals_against
-- home_avg_goals_for
-- home_avg_points
-- home_date
-- home_form_avg_goals_conceded
-- home_form_avg_goals_scored
-- home_form_draws
-- home_form_goal_diff
-- home_form_goals_conceded
-- home_form_goals_scored
-- home_form_losses
-- home_form_points
-- home_form_points_per_game
-- home_form_wins
-- home_goal_diff_ewm5
-- home_goals_against_ewm5
-- home_goals_for_ewm5
-- home_momentum_conceded
-- home_momentum_goals
-- home_momentum_points
-- home_momentum_score
-- home_points_ewm5
-- matchday
-- momentum_score_difference
-- momentum_score_ratio
+  - abs_momentum_score_diff
+  - attack_defense_form_ratio_away
+  - attack_defense_form_ratio_home
+  - attack_defense_long_ratio_away
+  - attack_defense_long_ratio_home
+  - away_avg_goals_against
+  - away_avg_goals_for
+  - away_avg_points
+  - away_date
+  - away_form_avg_goals_conceded
+  - away_form_avg_goals_scored
+  - away_form_draws
+  - away_form_goal_diff
+  - away_form_goals_conceded
+  - away_form_goals_scored
+  - away_form_losses
+  - away_form_points
+  - away_form_points_per_game
+  - away_form_wins
+  - away_goal_diff_ewm5
+  - away_goals_against_ewm5
+  - away_goals_for_ewm5
+  - away_momentum_conceded
+  - away_momentum_goals
+  - away_momentum_points
+  - away_momentum_score
+  - away_points_ewm5
+  - ewm_points_ratio
+  - form_points_difference
+  - form_points_pg_ratio
+  - home_avg_goals_against
+  - home_avg_goals_for
+  - home_avg_points
+  - home_date
+  - home_form_avg_goals_conceded
+  - home_form_avg_goals_scored
+  - home_form_draws
+  - home_form_goal_diff
+  - home_form_goals_conceded
+  - home_form_goals_scored
+  - home_form_losses
+  - home_form_points
+  - home_form_points_per_game
+  - home_form_wins
+  - home_goal_diff_ewm5
+  - home_goals_against_ewm5
+  - home_goals_for_ewm5
+  - home_momentum_conceded
+  - home_momentum_goals
+  - home_momentum_points
+  - home_momentum_score
+  - home_points_ewm5
+  - matchday
+  - momentum_score_difference
+  - momentum_score_ratio

@@ -175,6 +175,24 @@ def _apply_params_to_config(params: dict[str, float]) -> None:
         cfg.model.prob_source = str(params["prob_source"]).strip().lower()
     if "hybrid_poisson_weight" in params:
         cfg.model.hybrid_poisson_weight = float(params["hybrid_poisson_weight"])
+    if "hybrid_scheme" in params:
+        cfg.model.hybrid_scheme = str(params["hybrid_scheme"]).strip().lower()
+    if "hybrid_entropy_w_min" in params:
+        cfg.model.hybrid_entropy_w_min = float(params["hybrid_entropy_w_min"])
+    if "hybrid_entropy_w_max" in params:
+        cfg.model.hybrid_entropy_w_max = float(params["hybrid_entropy_w_max"])
+    if "calibrator_enabled" in params:
+        cfg.model.calibrator_enabled = bool(params["calibrator_enabled"])
+    if "calibrator_C" in params:
+        cfg.model.calibrator_C = float(params["calibrator_C"])
+    if "prior_anchor_enabled" in params:
+        cfg.model.prior_anchor_enabled = bool(params["prior_anchor_enabled"])
+    if "prior_anchor_strength" in params:
+        cfg.model.prior_anchor_strength = float(params["prior_anchor_strength"])
+    if "poisson_joint" in params:
+        cfg.model.poisson_joint = str(params["poisson_joint"]).strip().lower()
+    if "dixon_coles_rho" in params:
+        cfg.model.dixon_coles_rho = float(params["dixon_coles_rho"])
     if "proba_grid_max_goals" in params:
         cfg.model.proba_grid_max_goals = int(params["proba_grid_max_goals"])
     if "poisson_draw_rho" in params:
@@ -305,11 +323,28 @@ def _objective_builder(
                 "prob_source": trial.suggest_categorical(
                     "prob_source", ["classifier", "poisson", "hybrid"]
                 ),
+                # Hybrid scheme and entropy bounds
+                "hybrid_scheme": trial.suggest_categorical(
+                    "hybrid_scheme", ["entropy", "fixed"]
+                ),
                 "hybrid_poisson_weight": trial.suggest_float(
                     "hybrid_poisson_weight", 0.0, 1.0, step=0.05
                 ),
+                "hybrid_entropy_w_min": trial.suggest_float(
+                    "hybrid_entropy_w_min", 0.0, 0.5, step=0.05
+                ),
+                "hybrid_entropy_w_max": trial.suggest_float(
+                    "hybrid_entropy_w_max", 0.5, 1.0, step=0.05
+                ),
                 "proba_grid_max_goals": trial.suggest_int(
                     "proba_grid_max_goals", 10, 14, step=2
+                ),
+                # Dixon–Coles low-score dependence and diagonal bump
+                "poisson_joint": trial.suggest_categorical(
+                    "poisson_joint", ["independent", "dixon_coles"]
+                ),
+                "dixon_coles_rho": trial.suggest_float(
+                    "dixon_coles_rho", -0.10, 0.10, step=0.01
                 ),
                 "poisson_draw_rho": trial.suggest_float(
                     "poisson_draw_rho", 0.0, 0.20, step=0.01
@@ -321,6 +356,19 @@ def _objective_builder(
                 "momentum_decay": trial.suggest_float(
                     "momentum_decay", 0.70, 0.99, step=0.01
                 ),  # Default 0.9
+                # Calibration and prior anchoring
+                "calibrator_enabled": trial.suggest_categorical(
+                    "calibrator_enabled", [True]
+                ),
+                "calibrator_C": trial.suggest_float(
+                    "calibrator_C", 0.1, 10.0, log=True
+                ),
+                "prior_anchor_enabled": trial.suggest_categorical(
+                    "prior_anchor_enabled", [False, True]
+                ),
+                "prior_anchor_strength": trial.suggest_float(
+                    "prior_anchor_strength", 0.05, 0.30, step=0.05
+                ),
             }
 
         params: dict[str, float] = suggest_params()

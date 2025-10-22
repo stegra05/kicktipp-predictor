@@ -506,6 +506,9 @@ class DataLoader:
         features_df = self._apply_selected_features(features_df)
 
         # Ensure deterministic column order (optional)
+        # Optionally reduce to selected features if config/<selected_features_file> exists
+        features_df = self._apply_selected_features(features_df)
+
         return features_df
 
     def create_prediction_features(
@@ -839,6 +842,16 @@ class DataLoader:
                     loaded = yaml.safe_load(f)
                 if isinstance(loaded, list):
                     selected = [str(c) for c in loaded]
+                elif isinstance(loaded, dict) and "features" in loaded:
+                    val = loaded.get("features")
+                    if isinstance(val, list):
+                        selected = [str(c) for c in val]
+                    elif isinstance(val, str):
+                        # Support newline-separated string under key
+                        selected = [s.strip() for s in val.splitlines() if s.strip()]
+                elif isinstance(loaded, str):
+                    # Support plain newline-separated string in YAML
+                    selected = [s.strip() for s in loaded.splitlines() if s.strip()]
             else:
                 # Fallback: try .txt with one name per line
                 txt_path = sel_path.with_suffix(".txt")
