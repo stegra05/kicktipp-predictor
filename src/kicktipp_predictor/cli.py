@@ -1,9 +1,3 @@
-"""Command-line interface for the Kicktipp predictor.
-
-This module provides a CLI for training, evaluating, and running the Kicktipp
-predictor.
-"""
-
 import typer
 
 app = typer.Typer(help="Kicktipp Predictor CLI")
@@ -15,11 +9,7 @@ def train(
         3, help="Number of past seasons to use for training"
     ),
 ):
-    """Train the match predictor on historical data.
-
-    Args:
-        seasons_back: The number of seasons to fetch for training data.
-    """
+    """Train the match predictor on historical data."""
     from kicktipp_predictor.data import DataLoader
     from kicktipp_predictor.predictor import MatchPredictor
 
@@ -28,6 +18,7 @@ def train(
     print("=" * 80)
     print()
 
+    # Load data
     print("Loading data...")
     loader = DataLoader()
     current_season = loader.get_current_season()
@@ -37,16 +28,19 @@ def train(
     all_matches = loader.fetch_historical_seasons(start_season, current_season)
     print(f"Loaded {len(all_matches)} matches")
 
+    # Create features
     print("Creating features...")
     features_df = loader.create_features_from_matches(all_matches)
     print(
         f"Created {len(features_df)} training samples with {len(features_df.columns)} columns"
     )
 
+    # Train predictor
     print("\nTraining predictor...")
     predictor = MatchPredictor()
     predictor.train(features_df)
 
+    # Save models
     print("\nSaving models...")
     predictor.save_models()
 
@@ -75,20 +69,7 @@ def predict(
         0.0, help="Diagonal bump for draws in Poisson probs: multiply diag by exp(rho)"
     ),
 ):
-    """Make predictions for upcoming matches.
-
-    Args:
-        days: The number of days ahead to predict matches for.
-        matchday: The specific matchday to predict matches for.
-        workers: The number of workers to use for scoreline selection.
-        prob_source: The source of the outcome probabilities.
-        hybrid_poisson_weight: The weight of the Poisson probabilities when using
-            the hybrid probability source.
-        proba_grid_max_goals: The maximum number of goals for the Poisson
-            probability grid.
-        poisson_draw_rho: The diagonal bump for draws in the Poisson
-            probabilities.
-    """
+    """Make predictions for upcoming matches."""
     from kicktipp_predictor.data import DataLoader
     from kicktipp_predictor.predictor import MatchPredictor
 
@@ -97,6 +78,7 @@ def predict(
     print("=" * 80)
     print()
 
+    # Apply probability-source options to config
     from kicktipp_predictor.config import get_config
 
     cfg = get_config()
@@ -104,16 +86,20 @@ def predict(
     cfg.model.hybrid_poisson_weight = float(hybrid_poisson_weight)
     cfg.model.proba_grid_max_goals = int(proba_grid_max_goals)
     cfg.model.poisson_draw_rho = float(poisson_draw_rho)
+    # prior_blend_alpha applies only when prob_source=classifier
 
+    # Load data
     loader = DataLoader()
     predictor = MatchPredictor()
 
+    # Load trained models
     try:
         predictor.load_models()
     except FileNotFoundError:
         print("ERROR: No trained models found. Run 'train' command first.")
         raise typer.Exit(code=1)
 
+    # Get upcoming matches
     if matchday is not None:
         print(f"Getting matches for matchday {matchday}...")
         upcoming_matches = loader.fetch_matchday(matchday)
@@ -127,9 +113,11 @@ def predict(
 
     print(f"Found {len(upcoming_matches)} upcoming matches")
 
+    # Get historical data for context
     current_season = loader.get_current_season()
     historical_matches = loader.fetch_season_matches(current_season)
 
+    # Create features
     features_df = loader.create_prediction_features(
         upcoming_matches, historical_matches
     )
@@ -138,8 +126,10 @@ def predict(
         print("Could not create features (insufficient data). Try a later matchday.")
         return
 
+    # Make predictions
     predictions = predictor.predict(features_df, workers=workers)
 
+    # Display predictions
     print("\n" + "=" * 80)
     print("PREDICTIONS")
     print("=" * 80)
@@ -186,24 +176,7 @@ def evaluate(
         0.0, help="Diagonal bump for draws in Poisson probs: multiply diag by exp(rho)"
     ),
 ):
-    """Evaluate predictor performance on test data.
-
-    Args:
-        detailed: Whether to run a detailed evaluation with calibration and
-            plots.
-        season: Whether to evaluate performance across the current season.
-        dynamic: Whether to enable expanding-window retraining during season
-            evaluation.
-        retrain_every: The number of matchdays after which to retrain the
-            model.
-        prob_source: The source of the outcome probabilities.
-        hybrid_poisson_weight: The weight of the Poisson probabilities when
-            using the hybrid probability source.
-        proba_grid_max_goals: The maximum number of goals for the Poisson
-            probability grid.
-        poisson_draw_rho: The diagonal bump for draws in the Poisson
-            probabilities.
-    """
+    """Evaluate predictor performance on test data."""
     from kicktipp_predictor.data import DataLoader
     from kicktipp_predictor.evaluate import (
         print_evaluation_report,
@@ -217,6 +190,7 @@ def evaluate(
     print("=" * 80)
     print()
 
+    # Apply probability-source options to config
     from kicktipp_predictor.config import get_config
 
     cfg = get_config()
@@ -224,10 +198,13 @@ def evaluate(
     cfg.model.hybrid_poisson_weight = float(hybrid_poisson_weight)
     cfg.model.proba_grid_max_goals = int(proba_grid_max_goals)
     cfg.model.poisson_draw_rho = float(poisson_draw_rho)
+    # prior_blend_alpha applies only when prob_source=classifier
 
+    # Load data
     loader = DataLoader()
     predictor = MatchPredictor()
 
+    # Load trained models
     try:
         predictor.load_models()
     except FileNotFoundError:
@@ -242,6 +219,7 @@ def evaluate(
         run_evaluation(season=False)
         return
 
+    # Get data
     current_season = loader.get_current_season()
     start_season = current_season - 2
 
@@ -249,27 +227,25 @@ def evaluate(
     all_matches = loader.fetch_historical_seasons(start_season, current_season)
     features_df = loader.create_features_from_matches(all_matches)
 
+    # Use last 30% as test set
     split_idx = int(len(features_df) * 0.7)
     test_df = features_df[split_idx:]
 
     print(f"Evaluating on {len(test_df)} test samples...")
     print()
 
+    # Evaluate
     metrics = predictor.evaluate(test_df)
 
+    # Compute benchmark
     benchmark = simple_benchmark(test_df, strategy="home_win")
 
+    # Print report
     print_evaluation_report(metrics, benchmark)
 
 
 @app.command()
 def web(host: str = "127.0.0.1", port: int = 8000):
-    """Run the web app.
-
-    Args:
-        host: The host to run the web app on.
-        port: The port to run the web app on.
-    """
     from kicktipp_predictor.web.app import app as flask_app
 
     flask_app.run(host=host, port=port)
@@ -304,29 +280,16 @@ def tune(
 ):
     """Run Optuna tuning with selectable objectives and optional compare mode.
 
-    When workers > 1, a shared storage is required. In compare mode, separate
-    sqlite files are automatically created per objective if a sqlite storage URL
-    is provided.
-
-    Args:
-        n_trials: The total number of Optuna trials across all workers.
-        n_splits: The number of TimeSeriesSplit folds.
-        workers: The number of parallel worker processes.
-        objective: The objective to optimize.
-        direction: The direction to optimize the objective in.
-        compare: A comma-separated list of objectives to compare.
-        verbose: Whether to enable verbose inner logs during tuning.
-        storage: The Optuna storage URL for multi-process tuning.
-        study_name: The Optuna study name when using storage.
-        pruner: The pruner to use.
-        pruner_startup_trials: The number of trials before enabling pruning.
+    When workers > 1, a shared storage is required. In compare mode, separate sqlite files are
+    automatically created per objective if a sqlite storage URL is provided.
     """
     import os
     import subprocess
     import sys
     from pathlib import Path
 
-    pkg_root = Path(__file__).resolve().parents[2]
+    # Locate experiments/auto_tune.py relative to this file
+    pkg_root = Path(__file__).resolve().parents[2]  # repo root
     autotune_path = pkg_root / "experiments" / "auto_tune.py"
     if not autotune_path.exists():
         typer.echo(
@@ -337,6 +300,7 @@ def tune(
     if workers < 1:
         workers = 1
 
+    # Require storage for multi-worker coordination
     if workers > 1 and not storage:
         typer.echo(
             "When --workers > 1, you must provide --storage (e.g., sqlite:////abs/path/study.db?timeout=60)"
@@ -354,6 +318,7 @@ def tune(
             "--verbose" if verbose else None,
         ]
         args = [a for a in args if a is not None]
+        # propagate inner options
         if pruner:
             args += ["--pruner", pruner]
         if pruner_startup_trials is not None:
@@ -362,29 +327,36 @@ def tune(
             args += ["--direction", direction]
         return args
 
+    # Helper: build sqlite URL per objective
     def sqlite_url_for(obj: str) -> str | None:
         if not storage:
             return None
         if not storage.startswith("sqlite:"):
             return storage
+        # split before query
         base, *q = storage.split("?", 1)
         query = ("?" + q[0]) if q else ""
+        # derive filename suffix
         if base.endswith(".db"):
             return base.replace(".db", f"_{obj}.db") + query
         return base + f"_{obj}" + query
 
     env = os.environ.copy()
+    # tell worker not to delete DB when coordinated by CLI
     env["KTP_TUNE_COORDINATED"] = "1"
 
+    # Determine objectives list
     objectives = (
         [o.strip() for o in compare.split(",") if o.strip()] if compare else [objective]
     )
 
+    # Serial execution (workers==1)
     if workers == 1:
         procs: list[subprocess.Popen] = []
         exit_code = 0
         for obj in objectives:
             cmd = base_args(n_trials) + ["--objective", obj]
+            # storage handling
             url = sqlite_url_for(obj)
             if url:
                 cmd += ["--storage", url]
@@ -400,7 +372,9 @@ def tune(
                 exit_code = p.returncode
         raise typer.Exit(code=exit_code)
 
+    # Multi-worker execution requires storage; for compare we iterate objectives
     if workers > 1 and compare:
+        # For each objective, run a full multi-worker round using per-objective sqlite
         for obj in objectives:
             url = sqlite_url_for(obj)
             if not url:
@@ -408,6 +382,7 @@ def tune(
                     "When --workers > 1, a storage URL is required (sqlite or RDBMS)"
                 )
                 raise typer.Exit(code=2)
+            # 1) Initialize the study/db with a 0-trial run
             init_cmd = base_args(0) + ["--objective", obj, "--storage", url]
             if study_name:
                 init_cmd += ["--study-name", f"{study_name}-{obj}"]
@@ -419,10 +394,12 @@ def tune(
                 )
                 raise typer.Exit(code=init_proc.returncode)
 
+            # 2) Split total trials evenly across workers
             base = n_trials // workers
             rem = n_trials % workers
             allocations = [base + (1 if i < rem else 0) for i in range(workers)]
 
+            # 3) Launch worker subprocesses
             procs: list[subprocess.Popen] = []
             for trials in allocations:
                 if trials <= 0:
@@ -433,6 +410,7 @@ def tune(
                 p = subprocess.Popen(cmd, cwd=str(pkg_root), env=env)
                 procs.append(p)
 
+            # 4) Wait for all workers
             exit_code = 0
             for p in procs:
                 p.wait()
@@ -442,12 +420,14 @@ def tune(
                 raise typer.Exit(code=exit_code)
         raise typer.Exit(code=0)
 
+    # Multi-worker single objective
     if workers > 1:
         if not storage:
             typer.echo(
                 "When --workers > 1, a storage URL is required (sqlite or RDBMS)"
             )
             raise typer.Exit(code=2)
+        # 1) Initialize the study/db with a 0-trial run
         init_cmd = base_args(0) + ["--objective", objectives[0], "--storage", storage]
         if study_name:
             init_cmd += ["--study-name", study_name]
@@ -457,10 +437,12 @@ def tune(
             typer.echo("Failed to initialize study/storage. Aborting.")
             raise typer.Exit(code=init_proc.returncode)
 
+        # 2) Split total trials evenly across workers
         base = n_trials // workers
         rem = n_trials % workers
         allocations = [base + (1 if i < rem else 0) for i in range(workers)]
 
+        # 3) Launch worker subprocesses
         procs: list[subprocess.Popen] = []
         for trials in allocations:
             if trials <= 0:
@@ -476,6 +458,7 @@ def tune(
             p = subprocess.Popen(cmd, cwd=str(pkg_root), env=env)
             procs.append(p)
 
+        # 4) Wait for all workers
         exit_code = 0
         for p in procs:
             p.wait()
@@ -491,12 +474,7 @@ def shap(
     ),
     sample: int = typer.Option(2000, help="Max samples for SHAP computation"),
 ):
-    """Run SHAP analysis on the trained models and save summary plots.
-
-    Args:
-        seasons_back: The number of seasons to fetch for SHAP analysis.
-        sample: The maximum number of samples to use for SHAP analysis.
-    """
+    """Run SHAP analysis on the trained models and save summary plots."""
     from kicktipp_predictor.analysis.shap_analysis import run_shap_for_predictor
     from kicktipp_predictor.data import DataLoader
     from kicktipp_predictor.predictor import MatchPredictor
@@ -512,7 +490,7 @@ def shap(
     try:
         predictor.load_models()
     except FileNotFoundError:
-        print("ERROR: No trained models found. Run 'train' command first.")
+        print("ERROR: No trained models found. Run 'train' first.")
         raise typer.Exit(code=1)
 
     current = loader.get_current_season()
@@ -524,12 +502,15 @@ def shap(
         print("No data available for SHAP background.")
         raise typer.Exit(code=1)
 
+    # Build X aligned to trained schema
     import pandas as pd
 
     X = pd.DataFrame(df, copy=True)
+    # drop labels if present
     for col in ["home_score", "away_score", "goal_difference", "result"]:
         if col in X.columns:
             X.drop(columns=[col], inplace=True)
+    # Ensure columns present and ordered
     for col in predictor.feature_columns:
         if col not in X.columns:
             X[col] = 0.0
