@@ -634,9 +634,10 @@ def main():
                 print(f"Warning: Failed to write comparison metrics: {_e}")
 
     finally:
-        # Delete SQLite storage file, if applicable
+        # Delete SQLite storage file, if applicable, unless coordinated by external CLI
         try:
-            if storage_fs_path and os.path.exists(storage_fs_path):
+            coordinated = os.environ.get('KTP_TUNE_COORDINATED', '0') == '1'
+            if (not coordinated) and storage_fs_path and os.path.exists(storage_fs_path):
                 os.remove(storage_fs_path)
                 if args.verbose:
                     print(f"Deleted Optuna storage DB at {storage_fs_path}")

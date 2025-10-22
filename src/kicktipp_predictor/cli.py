@@ -191,15 +191,20 @@ def tune(
     n_trials: int = typer.Option(100, help="Total Optuna trials across all workers"),
     n_splits: int = typer.Option(3, help="TimeSeriesSplit folds"),
     workers: int = typer.Option(1, help="Number of parallel worker processes"),
-    save_final_model: bool = typer.Option(False, help="Train final model on full data and save"),
-    seasons_back: int = typer.Option(3, help="Past seasons to include for final training"),
+    objective: str = typer.Option("ppg", help="Objective: ppg|ppg_unweighted|logloss|brier|balanced_accuracy|accuracy|rps"),
+    direction: str = typer.Option("auto", help="Direction: auto|maximize|minimize"),
+    compare: str | None = typer.Option(None, help="Comma-separated objectives to compare; overrides --objective"),
     verbose: bool = typer.Option(False, help="Enable verbose inner logs during tuning"),
     storage: str | None = typer.Option(None, help="Optuna storage URL for multi-process tuning (e.g., sqlite:////abs/path/study.db?timeout=60)"),
     study_name: str | None = typer.Option(None, help="Optuna study name when using storage"),
     pruner: str = typer.Option("median", help="Pruner: none|median|hyperband"),
     pruner_startup_trials: int = typer.Option(20, help="Trials before enabling pruning (median)"),
 ):
-    """Run Optuna tuning via DB-coordinated multi-worker orchestration."""
+    """Run Optuna tuning with selectable objectives and optional compare mode.
+
+    When workers > 1, a shared storage is required. In compare mode, separate sqlite files are
+    automatically created per objective if a sqlite storage URL is provided.
+    """
     import sys
     import subprocess
     from pathlib import Path
@@ -226,81 +231,140 @@ def tune(
             str(autotune_path),
             "--n-trials", str(max(0, int(trials))),
             "--n-splits", str(n_splits),
-            # Worker script enforces single-thread internally; no n-jobs or omp-threads here
+            "--verbose" if verbose else None,
         ]
-        # Propagate strict thread caps to subprocesses
-        env_caps = {
-            'OMP_NUM_THREADS': '1',
-            'OPENBLAS_NUM_THREADS': '1',
-            'MKL_NUM_THREADS': '1',
-            'NUMEXPR_NUM_THREADS': '1',
-            'XGBOOST_NUM_THREADS': '1',
-        }
-        for k, v in env_caps.items():
-            os.environ.setdefault(k, v)
-        if verbose:
-            args.append("--verbose")
-        if storage:
-            args += ["--storage", storage]
-        if study_name:
-            args += ["--study-name", study_name]
+        args = [a for a in args if a is not None]
+        # propagate inner options
         if pruner:
             args += ["--pruner", pruner]
         if pruner_startup_trials is not None:
             args += ["--pruner-startup-trials", str(pruner_startup_trials)]
+        if direction:
+            args += ["--direction", direction]
         return args
 
-    # Serial execution
+    # Helper: build sqlite URL per objective
+    def sqlite_url_for(obj: str) -> str | None:
+        if not storage:
+            return None
+        if not storage.startswith("sqlite:"):
+            return storage
+        # split before query
+        base, *q = storage.split("?", 1)
+        query = ("?" + q[0]) if q else ""
+        # derive filename suffix
+        if base.endswith(".db"):
+            return base.replace(".db", f"_{obj}.db") + query
+        return base + f"_{obj}" + query
+
+    env = os.environ.copy()
+    # tell worker not to delete DB when coordinated by CLI
+    env['KTP_TUNE_COORDINATED'] = '1'
+
+    # Determine objectives list
+    objectives = [o.strip() for o in compare.split(',') if o.strip()] if compare else [objective]
+
+    # Serial execution (workers==1)
     if workers == 1:
-        cmd = base_args(n_trials)
-        if save_final_model:
-            cmd += ["--save-final-model", "--seasons-back", str(seasons_back)]
-        proc = subprocess.Popen(cmd, cwd=str(pkg_root))
-        proc.wait()
-        raise typer.Exit(code=proc.returncode)
-
-    # Multi-worker execution
-    # 1) Initialize the study/db with a 0-trial run
-    init_cmd = base_args(0)
-    init_proc = subprocess.Popen(init_cmd, cwd=str(pkg_root))
-    init_proc.wait()
-    if init_proc.returncode != 0:
-        typer.echo("Failed to initialize study/storage. Aborting.")
-        raise typer.Exit(code=init_proc.returncode)
-
-    # 2) Split total trials evenly across workers
-    base = n_trials // workers
-    rem = n_trials % workers
-    allocations = [base + (1 if i < rem else 0) for i in range(workers)]
-
-    # 3) Launch worker subprocesses
-    procs: list[subprocess.Popen] = []
-    for trials in allocations:
-        if trials <= 0:
-            continue
-        cmd = base_args(trials)
-        # do not pass save-final-model to workers
-        p = subprocess.Popen(cmd, cwd=str(pkg_root))
-        procs.append(p)
-
-    # 4) Wait for all workers
-    exit_code = 0
-    for p in procs:
-        p.wait()
-        if p.returncode != 0 and exit_code == 0:
-            exit_code = p.returncode
-
-    if exit_code != 0:
+        procs: list[subprocess.Popen] = []
+        exit_code = 0
+        for obj in objectives:
+            cmd = base_args(n_trials) + ["--objective", obj]
+            # storage handling
+            url = sqlite_url_for(obj)
+            if url:
+                cmd += ["--storage", url]
+            if study_name:
+                cmd += ["--study-name", f"{study_name}-{obj}" if compare else study_name]
+            p = subprocess.Popen(cmd, cwd=str(pkg_root), env=env)
+            procs.append(p)
+            p.wait()
+            if p.returncode != 0 and exit_code == 0:
+                exit_code = p.returncode
         raise typer.Exit(code=exit_code)
 
-    # 5) Optionally train final model once using best params
-    if save_final_model:
-        final_cmd = base_args(0) + ["--save-final-model", "--seasons-back", str(seasons_back)]
-        final_proc = subprocess.Popen(final_cmd, cwd=str(pkg_root))
-        final_proc.wait()
-        raise typer.Exit(code=final_proc.returncode)
+    # Multi-worker execution requires storage; for compare we iterate objectives
+    if workers > 1 and compare:
+        # For each objective, run a full multi-worker round using per-objective sqlite
+        for obj in objectives:
+            url = sqlite_url_for(obj)
+            if not url:
+                typer.echo("When --workers > 1, a storage URL is required (sqlite or RDBMS)")
+                raise typer.Exit(code=2)
+            # 1) Initialize the study/db with a 0-trial run
+            init_cmd = base_args(0) + ["--objective", obj, "--storage", url]
+            if study_name:
+                init_cmd += ["--study-name", f"{study_name}-{obj}"]
+            init_proc = subprocess.Popen(init_cmd, cwd=str(pkg_root), env=env)
+            init_proc.wait()
+            if init_proc.returncode != 0:
+                typer.echo(f"Failed to initialize storage for objective {obj}. Aborting.")
+                raise typer.Exit(code=init_proc.returncode)
 
-    raise typer.Exit(code=0)
+            # 2) Split total trials evenly across workers
+            base = n_trials // workers
+            rem = n_trials % workers
+            allocations = [base + (1 if i < rem else 0) for i in range(workers)]
+
+            # 3) Launch worker subprocesses
+            procs: list[subprocess.Popen] = []
+            for trials in allocations:
+                if trials <= 0:
+                    continue
+                cmd = base_args(trials) + ["--objective", obj, "--storage", url]
+                if study_name:
+                    cmd += ["--study-name", f"{study_name}-{obj}"]
+                p = subprocess.Popen(cmd, cwd=str(pkg_root), env=env)
+                procs.append(p)
+
+            # 4) Wait for all workers
+            exit_code = 0
+            for p in procs:
+                p.wait()
+                if p.returncode != 0 and exit_code == 0:
+                    exit_code = p.returncode
+            if exit_code != 0:
+                raise typer.Exit(code=exit_code)
+        raise typer.Exit(code=0)
+
+    # Multi-worker single objective
+    if workers > 1:
+        if not storage:
+            typer.echo("When --workers > 1, a storage URL is required (sqlite or RDBMS)")
+            raise typer.Exit(code=2)
+        # 1) Initialize the study/db with a 0-trial run
+        init_cmd = base_args(0) + ["--objective", objectives[0], "--storage", storage]
+        if study_name:
+            init_cmd += ["--study-name", study_name]
+        init_proc = subprocess.Popen(init_cmd, cwd=str(pkg_root), env=env)
+        init_proc.wait()
+        if init_proc.returncode != 0:
+            typer.echo("Failed to initialize study/storage. Aborting.")
+            raise typer.Exit(code=init_proc.returncode)
+
+        # 2) Split total trials evenly across workers
+        base = n_trials // workers
+        rem = n_trials % workers
+        allocations = [base + (1 if i < rem else 0) for i in range(workers)]
+
+        # 3) Launch worker subprocesses
+        procs: list[subprocess.Popen] = []
+        for trials in allocations:
+            if trials <= 0:
+                continue
+            cmd = base_args(trials) + ["--objective", objectives[0], "--storage", storage]
+            if study_name:
+                cmd += ["--study-name", study_name]
+            p = subprocess.Popen(cmd, cwd=str(pkg_root), env=env)
+            procs.append(p)
+
+        # 4) Wait for all workers
+        exit_code = 0
+        for p in procs:
+            p.wait()
+            if p.returncode != 0 and exit_code == 0:
+                exit_code = p.returncode
+        raise typer.Exit(code=exit_code)
 
 
 @app.command()

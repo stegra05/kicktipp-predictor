@@ -261,12 +261,12 @@ These parameters can be tuned using the `tune` command (see Advanced Usage below
 
 ## Advanced Usage
 
-### Hyperparameter Tuning (Optuna-only, PPG objective)
-Use the CLI `tune` command to optimize hyperparameters via time-series CV using Optuna. The objective is average Kicktipp points per game (PPG). Best params are written to `config/best_params.yaml`.
+### Hyperparameter Tuning (Optuna, selectable objectives)
+Use the CLI `tune` command to optimize hyperparameters via time-series CV using Optuna. You can choose among objectives such as weighted PPG, log loss, Brier, balanced accuracy, etc. The tuner writes per-objective YAMLs (e.g., `config/best_params_logloss.yaml`) and copies the winner (by weighted PPG) to `config/best_params.yaml`.
 
 Serial example (no storage required):
 ```bash
-python3 -m kicktipp_predictor tune --n-trials 200 --n-splits 3 --workers 1
+python3 -m kicktipp_predictor tune --n-trials 200 --n-splits 3 --workers 1 --objective logloss
 ```
 
 Parallel example (database-coordinated workers):
@@ -276,21 +276,42 @@ python3 -m kicktipp_predictor tune \
   --n-splits 3 \
   --workers 8 \
   --storage "sqlite:///data/kicktipp_study.db?timeout=60" \
-  --save-final-model --seasons-back 5
+  --objective ppg
+
+### Compare multiple objectives
+Runs objectives sequentially on identical CV folds and saves a compact comparison table and JSON.
+```bash
+python3 -m kicktipp_predictor tune \
+  --n-trials 150 \
+  --n-splits 3 \
+  --workers 1 \
+  --compare ppg,logloss,brier,balanced_accuracy
+```
+
+With multi-worker and sqlite storage, separate per-objective sqlite files are created automatically:
+```bash
+python3 -m kicktipp_predictor tune \
+  --n-trials 150 \
+  --n-splits 3 \
+  --workers 4 \
+  --storage "sqlite:///data/kicktipp_study.db?timeout=60" \
+  --compare ppg,logloss,brier
+```
 ```
 
 Notes:
 - `--n-trials` is the total trial budget across all workers (evenly split).
-- `--workers` controls process-level parallelism. Each worker is single-process internally to avoid nested threading issues.
-- When `--workers > 1`, a shared `--storage` is required (SQLite URL with `?timeout=60` recommended, or a remote RDBMS). A 0-trial initialization run is handled automatically by the CLI.
+- `--workers` controls process-level parallelism. Each worker is single-threaded internally to avoid nested parallelism.
+- When `--workers > 1`, a storage URL is required (SQLite with `?timeout=60` recommended, or a remote RDBMS). In compare mode with SQLite, the CLI automatically derives objective-specific files (e.g., `..._logloss.db`).
 
 Common options:
 - `--n-trials <number>`: Total Optuna trials across all workers.
 - `--n-splits <number>`: Time-series CV folds.
 - `--workers <number>`: Number of worker processes (default: 1).
 - `--storage <url>`: Optuna storage URL (required if `--workers > 1`).
-- `--save-final-model`: Train and save a model with the best parameters after tuning.
-- `--seasons-back <number>`: Historical seasons for final training when saving the model.
+- `--objective <name>`: ppg|ppg_unweighted|logloss|brier|balanced_accuracy|accuracy|rps
+- `--direction <dir>`: auto|maximize|minimize (auto resolves from objective)
+- `--compare <list>`: comma-separated objectives to run and compare (ignores `--objective`)
 
 Advanced users can still call the underlying worker script directly (single-process worker):
 ```bash
