@@ -4,92 +4,108 @@ import os
 
 from ..metrics import ensure_dir
 
-try:  # pragma: no cover - optional dependency
-    import matplotlib.pyplot as plt  # type: ignore
-    import shap  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
-    shap = None  # type: ignore
-    plt = None  # type: ignore
+# Optional dependencies for SHAP analysis. These are not required for the core
+# prediction logic and are handled gracefully if not installed.
+try:  # pragma: no cover
+    import matplotlib.pyplot as plt
+    import shap
+except ImportError:  # pragma: no cover
+    shap = None
+    plt = None
 
 
 def run_shap_for_predictor(
     predictor, sample_X, out_dir: str = os.path.join("data", "predictions", "shap")
 ) -> str | None:
-    """
-    Compute SHAP summary plots for the trained XGBoost models if dependencies are available.
-    Saves summary plots for outcome classifier and goal regressors.
+    """Computes and saves SHAP summary plots for the predictor's models.
+
+    This function generates SHAP summary plots for the outcome classifier and
+    goal regressors if the `shap` and `matplotlib` libraries are installed.
+    The plots are saved to the specified output directory.
+
+    Args:
+        predictor: The predictor instance containing trained models.
+        sample_X: A sample of input features (pandas DataFrame) for the explainer.
+        out_dir: The directory where the SHAP plots will be saved.
+
+    Returns:
+        The output directory path if SHAP plots were generated, otherwise None.
     """
     if shap is None or plt is None:
+        print("SHAP or matplotlib not installed. Skipping SHAP analysis.")
         return None
     ensure_dir(out_dir)
 
-    # Ensure sample size is reasonable
-    X = sample_X.copy()
-    if len(X) > 2000:
-        X = X.sample(2000, random_state=42)
+    # Use a smaller sample for performance reasons if the input data is large.
+    if len(sample_X) > 2000:
+        X = sample_X.sample(2000, random_state=42)
+    else:
+        X = sample_X.copy()
 
-    # Outcome classifier (multiclass): generate per-class summary plots if values is a list
+    # The following blocks are wrapped in try-except to gracefully handle cases
+    # where a model is not present in the predictor or if SHAP analysis fails.
+
+    # Generate SHAP plot for the outcome classifier.
     try:
         model = getattr(predictor, "outcome_model", None)
         if model is not None:
             explainer = shap.TreeExplainer(model)
             values = explainer.shap_values(X)
-            # If multiclass, values is a list of arrays (one per class)
+
+            # For multiclass classifiers, SHAP returns a list of arrays.
+            # We generate a separate plot for each class.
             if isinstance(values, list):
-                class_names = getattr(
-                    getattr(predictor, "label_encoder", None), "classes_", None
-                )
+                class_names = getattr(predictor.label_encoder, "classes_", [])
                 for i, val in enumerate(values):
+                    class_name = class_names[i] if i < len(class_names) else f"class_{i}"
+                    plt.figure()
                     shap.summary_plot(val, X, show=False)
                     plt.tight_layout()
-                    name = None
-                    try:
-                        if class_names is not None and i < len(class_names):
-                            name = str(class_names[i])
-                    except Exception:
-                        name = None
-                    fname = f"shap_result_summary_class_{name or i}.png"
-                    plt.savefig(os.path.join(out_dir, fname))
+                    plt.savefig(os.path.join(out_dir, f"shap_result_summary_{class_name}.png"))
                     plt.close()
             else:
+                plt.figure()
                 shap.summary_plot(values, X, show=False)
                 plt.tight_layout()
                 plt.savefig(os.path.join(out_dir, "shap_result_summary.png"))
                 plt.close()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Could not generate SHAP plot for outcome model: {e}")
 
-    # Home goals regressor
+    # Generate SHAP plot for the home goals regressor.
     try:
         model = getattr(predictor, "home_goals_model", None)
         if model is not None:
             explainer = shap.TreeExplainer(model)
             values = explainer.shap_values(X)
+            plt.figure()
             shap.summary_plot(values, X, show=False)
             plt.tight_layout()
             plt.savefig(os.path.join(out_dir, "shap_home_goals_summary.png"))
             plt.close()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Could not generate SHAP plot for home goals model: {e}")
 
-    # Away goals regressor
+    # Generate SHAP plot for the away goals regressor.
     try:
         model = getattr(predictor, "away_goals_model", None)
         if model is not None:
             explainer = shap.TreeExplainer(model)
             values = explainer.shap_values(X)
+            plt.figure()
             shap.summary_plot(values, X, show=False)
             plt.tight_layout()
             plt.savefig(os.path.join(out_dir, "shap_away_goals_summary.png"))
             plt.close()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Could not generate SHAP plot for away goals model: {e}")
 
     return out_dir
 
 
-# Backward-compatible alias
+# Backward-compatible alias.
 def run_shap_for_mlpredictor(
     ml_predictor, sample_X, out_dir: str = os.path.join("data", "predictions", "shap")
 ) -> str | None:
+    """Alias for `run_shap_for_predictor` for backward compatibility."""
     return run_shap_for_predictor(ml_predictor, sample_X, out_dir)
