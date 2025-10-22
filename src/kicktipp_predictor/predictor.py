@@ -37,7 +37,7 @@ def compute_scoreline_for_outcome(outcome: str, home_lambda: float, away_lambda:
     if outcome == 'H':
         # Home win: keep only h > a
         for h in range(max_goals + 1):
-            for a in range(h + 1, max_goals + 1):  # a >= h
+            for a in range(h, max_goals + 1):  # a >= h
                 grid[h, a] = 0
     elif outcome == 'A':
         # Away win: keep only a > h
@@ -452,7 +452,7 @@ class MatchPredictor:
         if outcome == 'H':
             # Home win: keep only h > a
             for h in range(max_goals + 1):
-                for a in range(h + 1, max_goals + 1):  # a >= h
+                for a in range(h, max_goals + 1):  # a >= h
                     grid[h, a] = 0
         elif outcome == 'A':
             # Away win: keep only a > h

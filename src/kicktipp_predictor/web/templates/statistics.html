@@ -25,18 +25,27 @@
         container.innerHTML = '';
 
         try {
-            const response = await fetch('/api/performance');
-            const data = await response.json();
+            const [perfResponse, qualityResponse] = await Promise.all([
+                fetch('/api/performance'),
+                fetch('/api/model_quality')
+            ]);
+
+            const perfData = await perfResponse.json();
+            const qualityData = await qualityResponse.json();
 
             loading.style.display = 'none';
 
-            if (!data.success) {
-                error.textContent = data.error || 'Failed to load statistics';
+            if (!perfData.success) {
+                error.textContent = perfData.error || 'Failed to load performance statistics';
                 error.style.display = 'block';
                 return;
             }
+            if (!qualityData.success) {
+                // Non-critical, so we can still display performance stats
+                console.error('Failed to load model quality stats:', qualityData.error);
+            }
 
-            displayStatistics(data.stats);
+            displayStatistics(perfData.stats, qualityData.metrics);
         } catch (err) {
             loading.style.display = 'none';
             error.textContent = 'Error loading statistics: ' + err.message;
@@ -44,7 +53,7 @@
         }
     }
 
-    function displayStatistics(stats) {
+    function displayStatistics(stats, metrics) {
         const container = document.getElementById('stats-container');
 
         if (stats.total_predictions === 0) {
@@ -53,6 +62,32 @@
         }
 
         const projectedSeason = (stats.avg_points_per_match * 38).toFixed(1);
+
+        let qualityMetricsHtml = '';
+        if (metrics) {
+            qualityMetricsHtml = `
+                <div class="header-section">
+                    <h2>Model Quality Metrics</h2>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h3>Brier Score</h3>
+                        <div class="stat-value">${metrics.brier_score.toFixed(3)}</div>
+                        <div class="stat-label">Lower is better</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Log Loss</h3>
+                        <div class="stat-value">${metrics.log_loss.toFixed(3)}</div>
+                        <div class="stat-label">Lower is better</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Ranked Probability Score</h3>
+                        <div class="stat-value">${metrics.rps.toFixed(3)}</div>
+                        <div class="stat-label">Lower is better</div>
+                    </div>
+                </div>
+            `;
+        }
 
         container.innerHTML = `
             <div class="stats-grid">
@@ -126,6 +161,30 @@
                         <span class="legend-color incorrect"></span>
                         <span>Incorrect</span>
                     </div>
+                </div>
+            </div>
+
+            ${qualityMetricsHtml}
+
+            <div class="header-section">
+                <h2>Model Visualizations</h2>
+            </div>
+            <div class="plots-container">
+                <div class="plot">
+                    <h3>Confusion Matrix</h3>
+                    <img src="/static/plots/confusion_matrix.png" alt="Confusion Matrix">
+                </div>
+                <div class="plot">
+                    <h3>Calibration Curve (Home Win)</h3>
+                    <img src="/static/plots/calibration_curve_home.png" alt="Calibration Curve Home Win">
+                </div>
+                <div class="plot">
+                    <h3>Calibration Curve (Draw)</h3>
+                    <img src="/static/plots/calibration_curve_draw.png" alt="Calibration Curve Draw">
+                </div>
+                <div class="plot">
+                    <h3>Calibration Curve (Away Win)</h3>
+                    <img src="/static/plots/calibration_curve_away.png" alt="Calibration Curve Away Win">
                 </div>
             </div>
         `;
