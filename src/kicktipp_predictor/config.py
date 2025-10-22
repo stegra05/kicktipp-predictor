@@ -1,6 +1,6 @@
-"""Configuration management for kicktipp predictor.
+"""Configuration management for the Kicktipp predictor.
 
-This module centralizes all configuration parameters including paths,
+This module centralizes all configuration parameters, including paths,
 model hyperparameters, and API settings.
 """
 
@@ -13,134 +13,170 @@ try:
 except ImportError:
     yaml = None
 
-
-# Get project root (3 levels up from this file)
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
 @dataclass
 class PathConfig:
-    """File system paths configuration."""
+    """Configuration for file system paths.
 
-    # Data directories
+    Attributes:
+        data_dir: The directory where data is stored.
+        models_dir: The directory where models are stored.
+        cache_dir: The directory where cached data is stored.
+        config_dir: The directory where configuration files are stored.
+    """
+
     data_dir: Path = PROJECT_ROOT / "data"
     models_dir: Path = data_dir / "models"
     cache_dir: Path = data_dir / "cache"
-
-    # Configuration files
     config_dir: Path = PROJECT_ROOT / "config"
 
     def __post_init__(self):
-        """Ensure all directories exist."""
+        """Create the data, models, and cache directories if they do not exist."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.models_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     @property
     def outcome_model_path(self) -> Path:
-        """Path to the outcome classifier model."""
+        """The path to the outcome classifier model."""
         return self.models_dir / "outcome_classifier.joblib"
 
     @property
     def home_goals_model_path(self) -> Path:
-        """Path to the home goals regressor model."""
+        """The path to the home goals regressor model."""
         return self.models_dir / "home_goals_regressor.joblib"
 
     @property
     def away_goals_model_path(self) -> Path:
-        """Path to the away goals regressor model."""
+        """The path to the away goals regressor model."""
         return self.models_dir / "away_goals_regressor.joblib"
 
 
 @dataclass
 class APIConfig:
-    """API and data fetching configuration."""
+    """Configuration for the API and data fetching.
+
+    Attributes:
+        base_url: The base URL of the API.
+        league_code: The league code to fetch data for.
+        cache_ttl: The time-to-live for the cache in seconds.
+        request_timeout: The timeout for HTTP requests in seconds.
+    """
 
     base_url: str = "https://api.openligadb.de"
-    league_code: str = "bl3"  # 3. Liga
-    cache_ttl: int = 3600  # Cache time-to-live in seconds (1 hour)
-    request_timeout: int = 10  # HTTP request timeout in seconds
+    league_code: str = "bl3"
+    cache_ttl: int = 3600
+    request_timeout: int = 10
 
 
 @dataclass
 class ModelConfig:
-    """Model hyperparameters and training configuration."""
+    """Configuration for the model hyperparameters and training.
 
-    # XGBoost Outcome Classifier (H/D/A)
+    Attributes:
+        outcome_n_estimators: The number of estimators for the outcome
+            classifier.
+        outcome_max_depth: The maximum depth of the outcome classifier.
+        outcome_learning_rate: The learning rate of the outcome classifier.
+        outcome_subsample: The subsample ratio of the outcome classifier.
+        outcome_colsample_bytree: The colsample_bytree ratio of the outcome
+            classifier.
+        outcome_reg_alpha: The L1 regularization term of the outcome
+            classifier.
+        outcome_reg_lambda: The L2 regularization term of the outcome
+            classifier.
+        outcome_gamma: The gamma value of the outcome classifier.
+        outcome_min_child_weight: The minimum child weight of the outcome
+            classifier.
+        goals_n_estimators: The number of estimators for the goal regressors.
+        goals_max_depth: The maximum depth of the goal regressors.
+        goals_learning_rate: The learning rate of the goal regressors.
+        goals_subsample: The subsample ratio of the goal regressors.
+        goals_colsample_bytree: The colsample_bytree ratio of the goal
+            regressors.
+        goals_reg_alpha: The L1 regularization term of the goal regressors.
+        goals_reg_lambda: The L2 regularization term of the goal regressors.
+        goals_gamma: The gamma value of the goal regressors.
+        goals_min_child_weight: The minimum child weight of the goal
+            regressors.
+        goals_early_stopping_rounds: The number of early stopping rounds for
+            the goal regressors.
+        max_goals: The maximum number of goals for the Poisson grid.
+        min_lambda: The minimum lambda value for the Poisson grid.
+        random_state: The random state for the models.
+        test_size: The test size for the train-test split.
+        min_training_matches: The minimum number of matches required for
+            training.
+        use_time_decay: Whether to use time decay for the training data.
+        time_decay_half_life_days: The half-life for the time decay in days.
+        form_last_n: The number of last matches to use for the form features.
+        momentum_decay: The decay for the momentum features.
+        n_jobs: The number of jobs to use for the models.
+        draw_boost: The boost for the draw class in the outcome classifier.
+        proba_temperature: The temperature for the outcome probabilities.
+        prior_blend_alpha: The alpha for the prior blend.
+        prob_source: The source of the outcome probabilities.
+        hybrid_poisson_weight: The weight of the Poisson probabilities when
+            using the hybrid probability source.
+        proba_grid_max_goals: The maximum number of goals for the Poisson
+            probability grid.
+        poisson_draw_rho: The diagonal bump for draws in the Poisson
+            probabilities.
+    """
+
     outcome_n_estimators: int = 800
     outcome_max_depth: int = 6
     outcome_learning_rate: float = 0.1
     outcome_subsample: float = 0.8
     outcome_colsample_bytree: float = 0.8
-    # Regularization and constraints
     outcome_reg_alpha: float = 0.0
     outcome_reg_lambda: float = 1.0
     outcome_gamma: float = 0.0
     outcome_min_child_weight: float = 1.0
-
-    # XGBoost Goal Regressors
     goals_n_estimators: int = 800
     goals_max_depth: int = 6
     goals_learning_rate: float = 0.1
     goals_subsample: float = 0.8
     goals_colsample_bytree: float = 0.8
-    # Regularization and constraints
     goals_reg_alpha: float = 0.0
     goals_reg_lambda: float = 1.0
     goals_gamma: float = 0.0
     goals_min_child_weight: float = 1.0
-
-    # Early stopping
     goals_early_stopping_rounds: int = 25
-
-    # Poisson grid for scoreline selection
     max_goals: int = 8
-    min_lambda: float = 0.2  # Minimum expected goals to avoid degenerate predictions
-
-    # Training
+    min_lambda: float = 0.2
     random_state: int = 42
     test_size: float = 0.2
     min_training_matches: int = 50
-
-    # Time-decay weighting (recency)
     use_time_decay: bool = True
     time_decay_half_life_days: float = 90.0
-
-    # Feature engineering knobs
     form_last_n: int = 5
     momentum_decay: float = 0.9
-
-    # Threading
     n_jobs: int = field(
         default_factory=lambda: max(
             1, int(os.getenv("OMP_NUM_THREADS", "0")) or os.cpu_count() or 1
         )
     )
-
-    # Class weights for outcome classifier
-    # Boost draw class since it's underrepresented
     draw_boost: float = 1.1
-
-    # Outcome probability post-processing
-    # Temperature < 1 sharpens, > 1 softens
     proba_temperature: float = 1.0
-    # Blend with empirical prior from training window
     prior_blend_alpha: float = 0.0
-
-    # Outcome probability source for evaluation and reporting
-    # One of: 'classifier' (default), 'poisson', 'hybrid'
     prob_source: str = "classifier"
-    # When prob_source='hybrid', weight of Poisson-derived probabilities in [0,1]
     hybrid_poisson_weight: float = 0.5
-    # Max goals for Poisson probability grid used to derive P(H/D/A) (separate from scoreline grid)
     proba_grid_max_goals: int = 12
-    # Draw bump for Poisson-derived probabilities: multiply diagonal cells by exp(rho) before normalization
     poisson_draw_rho: float = 0.0
 
 
 @dataclass
 class Config:
-    """Main configuration container."""
+    """The main configuration container.
+
+    Attributes:
+        paths: The path configuration.
+        api: The API configuration.
+        model: The model configuration.
+    """
 
     paths: PathConfig = field(default_factory=PathConfig)
     api: APIConfig = field(default_factory=APIConfig)
@@ -148,32 +184,29 @@ class Config:
 
     @classmethod
     def load(cls, config_file: Path | None = None) -> "Config":
-        """Load configuration from file if available.
+        """Load the configuration from a YAML file.
 
         Args:
-            config_file: Path to config YAML file. If None, uses default location.
+            config_file: The path to the configuration file.
 
         Returns:
-            Config instance with loaded or default values.
+            The configuration.
         """
         config = cls()
 
         if config_file is None:
-            # Allow override via environment variable for tuning processes
             env_cfg = os.getenv("KTP_CONFIG_FILE")
             if env_cfg and Path(env_cfg).exists():
                 config_file = Path(env_cfg)
             else:
                 config_file = config.paths.config_dir / "best_params.yaml"
 
-        # Try to load from YAML if available
         if yaml is not None and config_file.exists():
             try:
                 with open(config_file, encoding="utf-8") as f:
                     params = yaml.safe_load(f)
 
                 if isinstance(params, dict):
-                    # Load model parameters if present
                     if "max_goals" in params:
                         config.model.max_goals = int(params["max_goals"])
                     if "min_lambda" in params:
@@ -214,8 +247,6 @@ class Config:
                         config.model.form_last_n = int(params["form_last_n"])
                     if "momentum_decay" in params:
                         config.model.momentum_decay = float(params["momentum_decay"])
-
-                    # Outcome classifier hyperparameters
                     if "outcome_n_estimators" in params:
                         config.model.outcome_n_estimators = int(
                             params["outcome_n_estimators"]
@@ -250,8 +281,6 @@ class Config:
                         config.model.outcome_min_child_weight = float(
                             params["outcome_min_child_weight"]
                         )
-
-                    # Goal regressors hyperparameters
                     if "goals_n_estimators" in params:
                         config.model.goals_n_estimators = int(
                             params["goals_n_estimators"]
@@ -295,7 +324,7 @@ class Config:
         return config
 
     def __str__(self) -> str:
-        """String representation of configuration."""
+        """Return a string representation of the configuration."""
         return (
             f"Config(\n"
             f"  models_dir={self.paths.models_dir}\n"
@@ -308,15 +337,14 @@ class Config:
         )
 
 
-# Global config instance
 _config: Config | None = None
 
 
 def get_config() -> Config:
-    """Get or create the global configuration instance.
+    """Get the global configuration.
 
     Returns:
-        The global Config instance.
+        The global configuration.
     """
     global _config
     if _config is None:
@@ -325,6 +353,6 @@ def get_config() -> Config:
 
 
 def reset_config():
-    """Reset the global configuration (mainly for testing)."""
+    """Reset the global configuration."""
     global _config
     _config = None
