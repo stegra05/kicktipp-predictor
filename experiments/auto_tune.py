@@ -140,38 +140,44 @@ def _objective_builder(base_features_df, all_matches, n_splits: int, omp_threads
 
         # Search space
         params: Dict[str, float] = {
-            # Class weighting
-            'draw_boost': trial.suggest_float('draw_boost', 1.4, 2.2, step=0.1),
-            # Outcome XGB
-            'outcome_n_estimators': trial.suggest_int('outcome_n_estimators', 100, 600, step=25),
-            'outcome_max_depth': trial.suggest_int('outcome_max_depth', 3, 7),
-            'outcome_learning_rate': trial.suggest_float('outcome_learning_rate', 0.02, 0.30, step=0.01),
-            'outcome_subsample': trial.suggest_float('outcome_subsample', 0.5, 1.0, step=0.05),
-            'outcome_colsample_bytree': trial.suggest_float('outcome_colsample_bytree', 0.5, 1.0, step=0.05),
-            'outcome_reg_alpha': trial.suggest_float('outcome_reg_alpha', 0.0, 1.0, step=0.05),
-            'outcome_reg_lambda': trial.suggest_float('outcome_reg_lambda', 0.5, 3.0, step=0.05),
-            'outcome_gamma': trial.suggest_float('outcome_gamma', 0.0, 5.0, step=0.1),
-            'outcome_min_child_weight': trial.suggest_float('outcome_min_child_weight', 1.0, 10.0, step=0.5),
-            # Goals XGB
-            'goals_n_estimators': trial.suggest_int('goals_n_estimators', 100, 600, step=25),
-            'goals_max_depth': trial.suggest_int('goals_max_depth', 3, 10),
-            'goals_learning_rate': trial.suggest_float('goals_learning_rate', 0.02, 0.30, step=0.01),
-            'goals_subsample': trial.suggest_float('goals_subsample', 0.5, 1.0, step=0.05),
-            'goals_colsample_bytree': trial.suggest_float('goals_colsample_bytree', 0.5, 1.0, step=0.05),
-            'goals_reg_alpha': trial.suggest_float('goals_reg_alpha', 0.0, 1.0, step=0.05),
-            'goals_reg_lambda': trial.suggest_float('goals_reg_lambda', 0.5, 3.0, step=0.05),
-            'goals_gamma': trial.suggest_float('goals_gamma', 0.0, 5.0, step=0.1),
-            'goals_min_child_weight': trial.suggest_float('goals_min_child_weight', 1.0, 10.0, step=0.5),
+            # Class weighting - Widen range slightly
+            'draw_boost': trial.suggest_float('draw_boost', 1.2, 2.5, step=0.1), # Default 1.5
+
+            # Outcome XGB - Reduce upper bounds for regularization
+            'outcome_n_estimators': trial.suggest_int('outcome_n_estimators', 100, 800, step=50), # Default 800
+            'outcome_max_depth': trial.suggest_int('outcome_max_depth', 3, 8), # Default 6
+            'outcome_learning_rate': trial.suggest_float('outcome_learning_rate', 0.01, 0.20, step=0.01), # Default 0.1
+            'outcome_subsample': trial.suggest_float('outcome_subsample', 0.6, 1.0, step=0.05), # Default 0.8
+            'outcome_colsample_bytree': trial.suggest_float('outcome_colsample_bytree', 0.6, 1.0, step=0.05), # Default 0.8
+            'outcome_reg_alpha': trial.suggest_float('outcome_reg_alpha', 0.0, 0.5, step=0.05), # Was 0-1, Default 0.0
+            'outcome_reg_lambda': trial.suggest_float('outcome_reg_lambda', 0.5, 2.0, step=0.05), # Was 0.5-3, Default 1.0
+            'outcome_gamma': trial.suggest_float('outcome_gamma', 0.0, 2.0, step=0.1), # Was 0-5, Default 0.0
+            'outcome_min_child_weight': trial.suggest_float('outcome_min_child_weight', 1.0, 7.0, step=0.5), # Was 1-10, Default 1.0
+
+            # Goals XGB - Keep similar, maybe slightly less regularization too
+            'goals_n_estimators': trial.suggest_int('goals_n_estimators', 100, 800, step=50), # Default 800
+            'goals_max_depth': trial.suggest_int('goals_max_depth', 3, 9), # Default 6
+            'goals_learning_rate': trial.suggest_float('goals_learning_rate', 0.01, 0.20, step=0.01), # Default 0.1
+            'goals_subsample': trial.suggest_float('goals_subsample', 0.6, 1.0, step=0.05), # Default 0.8
+            'goals_colsample_bytree': trial.suggest_float('goals_colsample_bytree', 0.6, 1.0, step=0.05), # Default 0.8
+            'goals_reg_alpha': trial.suggest_float('goals_reg_alpha', 0.0, 0.5, step=0.05), # Was 0-1, Default 0.0
+            'goals_reg_lambda': trial.suggest_float('goals_reg_lambda', 0.5, 2.0, step=0.05), # Was 0.5-3, Default 1.0
+            'goals_gamma': trial.suggest_float('goals_gamma', 0.0, 2.0, step=0.1), # Was 0-5, Default 0.0
+            'goals_min_child_weight': trial.suggest_float('goals_min_child_weight', 1.0, 7.0, step=0.5), # Was 1-10, Default 1.0
+
             # Scoreline selection floor
-            'min_lambda': trial.suggest_float('min_lambda', 0.05, 0.40, step=0.01),
-            # Time-decay half-life
-            'time_decay_half_life_days': trial.suggest_float('time_decay_half_life_days', 30.0, 240.0, step=15.0),
-            # Outcome proba post-processing
-            'proba_temperature': trial.suggest_float('proba_temperature', 0.7, 1.3, step=0.05),
-            'prior_blend_alpha': trial.suggest_float('prior_blend_alpha', 0.0, 0.3, step=0.05),
-            # Feature-engineering knobs (optional)
-            'form_last_n': trial.suggest_int('form_last_n', 3, 10, step=1),
-            'momentum_decay': trial.suggest_float('momentum_decay', 0.70, 0.99, step=0.01),
+            'min_lambda': trial.suggest_float('min_lambda', 0.10, 0.35, step=0.01), # Was 0.05-0.40, Default 0.2
+
+            # Time-decay half-life - Keep broad
+            'time_decay_half_life_days': trial.suggest_float('time_decay_half_life_days', 45.0, 360.0, step=15.0), # Default 90
+
+            # Outcome proba post-processing - Limit prior blending, narrow temp
+            'proba_temperature': trial.suggest_float('proba_temperature', 0.85, 1.15, step=0.05), # Was 0.7-1.3, Default 1.0
+            'prior_blend_alpha': trial.suggest_float('prior_blend_alpha', 0.0, 0.15, step=0.02), # Was 0-0.3, Default 0.0
+
+            # Feature-engineering knobs (optional) - Keep as is
+            'form_last_n': trial.suggest_int('form_last_n', 3, 10, step=1), # Default 5
+            'momentum_decay': trial.suggest_float('momentum_decay', 0.70, 0.99, step=0.01), # Default 0.9
         }
 
         fold_points: List[float] = []
