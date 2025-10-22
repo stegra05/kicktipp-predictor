@@ -202,7 +202,7 @@ def _objective_builder(base_features_df, all_matches, folds: List[Tuple[np.ndarr
 
             # Outcome proba post-processing - Limit prior blending, narrow temp
             'proba_temperature': trial.suggest_float('proba_temperature', 0.85, 1.15, step=0.05), # Was 0.7-1.3, Default 1.0
-            'prior_blend_alpha': trial.suggest_float('prior_blend_alpha', 0.0, 0.15, step=0.02), # Was 0-0.3, Default 0.0
+            'prior_blend_alpha': trial.suggest_float('prior_blend_alpha', 0.0, 0.14, step=0.02), # Was 0-0.3, Default 0.0
 
             # Feature-engineering knobs (optional) - Keep as is
             'form_last_n': trial.suggest_int('form_last_n', 3, 10, step=1), # Default 5
