@@ -35,7 +35,7 @@ from kicktipp_predictor.data import DataLoader
 from kicktipp_predictor.evaluate import (
     brier_score_multiclass,
     log_loss_multiclass,
-    ranked_probability_score,
+    ranked_probability_score_3c,
 )
 from kicktipp_predictor.metrics import compute_points
 from kicktipp_predictor.predictor import MatchPredictor
@@ -366,7 +366,7 @@ def _objective_builder(
             elif obj == "brier":
                 metric_val = brier_score_multiclass(y_true, proba)
             elif obj == "rps":
-                metric_val = ranked_probability_score(y_true, proba)
+                metric_val = ranked_probability_score_3c(y_true, proba)
             elif obj == "balanced_accuracy":
                 try:
                     metric_val = float(
@@ -796,7 +796,7 @@ def main():
                     bacc_w_list.append(float("nan"))
                 brier_list.append(brier_score_multiclass(y_true, proba))
                 logloss_list.append(log_loss_multiclass(y_true, proba))
-                rps_list.append(ranked_probability_score(y_true, proba))
+                rps_list.append(ranked_probability_score_3c(y_true, proba))
 
             summaries[obj] = {
                 "ppg_weighted": float(np.nanmean(ppg_w_list))
