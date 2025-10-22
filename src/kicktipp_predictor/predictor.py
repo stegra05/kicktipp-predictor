@@ -278,14 +278,14 @@ class MatchPredictor:
             min_child_weight=self.config.model.outcome_min_child_weight,
             random_state=self.config.model.random_state,
             n_jobs=self.config.model.n_jobs,
-            early_stopping_rounds=100,
+            # early_stopping_rounds=100,
         )
 
         self.outcome_model.fit(
             X_train, y_train,
             sample_weight=sample_weights,
-            eval_set=[(X_val, y_val)],
-            sample_weight_eval_set=[tw_val],
+            # eval_set=[(X_val, y_val)],
+            # sample_weight_eval_set=[tw_val],
             verbose=False,
         )
 
