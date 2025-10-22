@@ -91,6 +91,7 @@ ignore = [
   "E712",   # Comparison to True/False (can be addressed incrementally)
   "B007",   # Unused loop variable (can be addressed incrementally)
   "F841",   # Unused variable (can be addressed incrementally)
+  "N815",   # Variable in class scope should not be mixedCase (allow calibrator_C)
   "UP007",
 ]
 

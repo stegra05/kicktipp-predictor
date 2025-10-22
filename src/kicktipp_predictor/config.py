@@ -152,15 +152,15 @@ class ModelConfig:
     # Calibration of final blended probabilities
     calibrator_enabled: bool = True
     calibrator_method: str = (
-        "multinomial_logistic"  # or 'dirichlet' if external lib available
+        "dirichlet"  # or 'multinomial_logistic' fallback if external lib unavailable
     )
-    calibrator_c: float = 1.0
+    calibrator_C: float = 1.0
     calibrator_cv_folds: int = 3
     # Post-calibration class-prior anchoring
     prior_anchor_enabled: bool = False
     prior_anchor_strength: float = 0.15
     # Entropy-based hybrid tuning candidates
-    hybrid_entropy_tune: bool = True
+    hybrid_entropy_tune: bool = False
     hybrid_entropy_w_min_candidates: list[float] = field(
         default_factory=lambda: [0.0, 0.1, 0.2, 0.3]
     )

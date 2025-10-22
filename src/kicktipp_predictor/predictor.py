@@ -190,10 +190,14 @@ class MatchPredictor:
             prior[i] = float(np.mean(y_result.values == lab))
         self.train_class_prior = prior / max(1e-15, prior.sum())
 
-        # Strict TS-CV tuning for entropy weights and calibrator fitting
+        # Strict TS-CV tuning, or simple holdout fitting when tuning disabled (entropy bounds set by Optuna)
         try:
-            if self.config.model.calibrator_enabled:
+            if self.config.model.calibrator_enabled and bool(
+                getattr(self.config.model, "hybrid_entropy_tune", False)
+            ):
                 self._tune_entropy_and_fit_calibrator_ts(training_data)
+            elif self.config.model.calibrator_enabled:
+                self._fit_calibrator_on_holdout(training_data)
         except Exception as e:  # pragma: no cover - optional
             self._log(f"[TS-CV] Skipped due to error: {e}")
 
@@ -614,8 +618,12 @@ class MatchPredictor:
         calibrated = np.array(probs, copy=True)
         if self.config.model.calibrator_enabled and self.calibrator is not None:
             try:
-                X_cal = np.log(np.clip(calibrated, 1e-15, 1.0))
-                calibrated = self.calibrator.predict_proba(X_cal)
+                method = getattr(self.config.model, "calibrator_method", "dirichlet")
+                if method == "multinomial_logistic":
+                    X_cal = np.log(np.clip(calibrated, 1e-15, 1.0))
+                    calibrated = self.calibrator.predict_proba(X_cal)
+                else:
+                    calibrated = self.calibrator.transform(calibrated)
             except Exception:
                 pass
         if (
@@ -633,7 +641,7 @@ class MatchPredictor:
         return calibrated
 
     def _fit_calibrator(self, probs: np.ndarray, y_enc: np.ndarray) -> None:
-        method = getattr(self.config.model, "calibrator_method", "multinomial_logistic")
+        method = getattr(self.config.model, "calibrator_method", "dirichlet")
         if method == "multinomial_logistic":
             X_cal = np.log(np.clip(probs, 1e-15, 1.0))
             C = float(getattr(self.config.model, "calibrator_C", 1.0))
@@ -642,8 +650,24 @@ class MatchPredictor:
             )
             lr.fit(X_cal, y_enc)
             self.calibrator = lr
+        elif method == "dirichlet":
+            try:
+                from netcal.scaling import DirichletCalibrator  # type: ignore
+
+                C = float(getattr(self.config.model, "calibrator_C", 1.0))
+                self.calibrator = DirichletCalibrator(reg=C)
+                self.calibrator.fit(probs, y_enc)
+            except Exception:
+                # Fallback to multinomial logistic if netcal is unavailable
+                X_cal = np.log(np.clip(probs, 1e-15, 1.0))
+                C = float(getattr(self.config.model, "calibrator_C", 1.0))
+                lr = LogisticRegression(
+                    multi_class="multinomial", solver="lbfgs", C=C, max_iter=1000
+                )
+                lr.fit(X_cal, y_enc)
+                self.calibrator = lr
         else:
-            # Placeholder: keep None if unsupported method
+            # Unsupported method
             self.calibrator = None
 
     def _tune_entropy_and_fit_calibrator_ts(self, training_data: pd.DataFrame) -> None:
@@ -682,8 +706,10 @@ class MatchPredictor:
         maxs = getattr(
             self.config.model, "hybrid_entropy_w_max_candidates", [0.8, 0.9, 1.0]
         )
+        pairs = [(float(a), float(b)) for a in mins for b in maxs]
+        # Safeguard: enforce w_min < w_max and valid [0,1]
         candidates = (
-            [(float(a), float(b)) for a in mins for b in maxs if a < b]
+            [(wm, wx) for (wm, wx) in pairs if 0.0 <= wm < wx <= 1.0]
             if do_tune
             else [
                 (

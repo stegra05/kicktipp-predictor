@@ -330,6 +330,7 @@ def _objective_builder(
                 "hybrid_poisson_weight": trial.suggest_float(
                     "hybrid_poisson_weight", 0.0, 1.0, step=0.05
                 ),
+                # Entropy bounds suggested with safeguard applied later
                 "hybrid_entropy_w_min": trial.suggest_float(
                     "hybrid_entropy_w_min", 0.0, 0.5, step=0.05
                 ),
@@ -372,6 +373,25 @@ def _objective_builder(
             }
 
         params: dict[str, float] = suggest_params()
+        # Safeguard: ensure entropy bounds valid and consistent with scheme
+        if params.get("hybrid_scheme") == "fixed":
+            # When fixed, hybrid_poisson_weight is used; bounds are irrelevant but keep valid
+            lo = float(params.get("hybrid_entropy_w_min", 0.2))
+            hi = float(params.get("hybrid_entropy_w_max", 1.0))
+            if not (0.0 <= lo < hi <= 1.0):
+                params["hybrid_entropy_w_min"], params["hybrid_entropy_w_max"] = (
+                    0.2,
+                    1.0,
+                )
+        else:
+            lo = float(params.get("hybrid_entropy_w_min", 0.2))
+            hi = float(params.get("hybrid_entropy_w_max", 1.0))
+            if not (0.0 <= lo < hi <= 1.0):
+                # If invalid, nudge to a sane default ordering
+                lo, hi = min(max(0.0, lo), 0.4), max(min(1.0, hi), 0.6)
+                if lo >= hi:
+                    lo, hi = 0.2, 1.0
+                params["hybrid_entropy_w_min"], params["hybrid_entropy_w_max"] = lo, hi
 
         fold_metrics: list[float] = []
 
