@@ -14,3 +14,4 @@ optuna>=3.0.0
 shap>=0.45.0
 matplotlib>=3.8.0
 seaborn>=0.13.0
+pyarrow==17.0.0
