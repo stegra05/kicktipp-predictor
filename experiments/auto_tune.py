@@ -43,6 +43,7 @@ except Exception:  # pragma: no cover
 
 try:
     import optuna  # type: ignore
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
 except Exception as _e:  # pragma: no cover
     optuna = None
 
