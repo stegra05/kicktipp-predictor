@@ -51,90 +51,20 @@ class FeatureAblationStudy:
         self.loader = DataLoader()
         self.results: list[dict] = []
 
-        # Load base feature list
-        self.all_features = self._load_kept_features()
+        # Feature list will be dynamically loaded in run_full_study()
+        self.all_features: list[str] = []
+        self.feature_categories: dict[str, list[str]] = {}
 
-        # Define feature categories
-        self.feature_categories = self._categorize_features()
-
-    def _load_kept_features(self) -> list[str]:
-        """Load the current kept features list."""
+    def _load_kept_features(self) -> list[str] | None:
+        """Load the current kept features list if it exists."""
         kept_path = project_root / "data" / "feature_selection" / "kept_features.yaml"
         if kept_path.exists():
             with open(kept_path) as f:
                 features = yaml.safe_load(f)
                 if isinstance(features, list):
+                    print(f"✅ Loaded {len(features)} features from {kept_path}")
                     return features
-
-        # Fallback: use all 62 features from analysis
-        print("⚠️  Warning: Could not load kept_features.yaml, using default list")
-        return self._get_default_features()
-
-    def _get_default_features(self) -> list[str]:
-        """Default feature list (62 features from analysis)."""
-        return [
-            "abs_form_points_diff",
-            "abs_momentum_score_diff",
-            "attack_defense_form_ratio_away",
-            "attack_defense_form_ratio_home",
-            "attack_defense_long_ratio_away",
-            "attack_defense_long_ratio_home",
-            "away_avg_goals_against",
-            "away_avg_points",
-            "away_form_avg_goals_conceded",
-            "away_form_avg_goals_scored",
-            "away_form_draws",
-            "away_form_goal_diff",
-            "away_form_goals_conceded",
-            "away_form_goals_scored",
-            "away_form_losses",
-            "away_form_points",
-            "away_goal_diff_ewm5",
-            "away_goals_against_ewm5",
-            "away_goals_conceded_pg_at_home",
-            "away_goals_conceded_pg_away",
-            "away_goals_for_ewm5",
-            "away_goals_pg_at_home",
-            "away_goals_pg_away",
-            "away_momentum_conceded",
-            "away_momentum_goals",
-            "away_momentum_score",
-            "away_points_ewm5",
-            "away_points_pg_at_home",
-            "away_points_pg_away",
-            "ewm_points_ratio",
-            "form_points_difference",
-            "form_points_pg_ratio",
-            "home_avg_goals_against",
-            "home_avg_goals_for",
-            "home_avg_points",
-            "home_form_avg_goals_conceded",
-            "home_form_avg_goals_scored",
-            "home_form_draws",
-            "home_form_goal_diff",
-            "home_form_goals_conceded",
-            "home_form_goals_scored",
-            "home_form_losses",
-            "home_form_points",
-            "home_goal_diff_ewm5",
-            "home_goals_against_ewm5",
-            "home_goals_conceded_pg_at_home",
-            "home_goals_conceded_pg_away",
-            "home_goals_for_ewm5",
-            "home_goals_pg_at_home",
-            "home_goals_pg_away",
-            "home_momentum_conceded",
-            "home_momentum_goals",
-            "home_momentum_score",
-            "home_points_ewm5",
-            "home_points_pg_at_home",
-            "home_points_pg_away",
-            "momentum_score_difference",
-            "momentum_score_ratio",
-            "venue_conceded_delta",
-            "venue_goals_delta",
-            "venue_points_delta",
-        ]
+        return None
 
     def _categorize_features(self) -> dict[str, list[str]]:
         """Categorize features for ablation experiments."""
@@ -189,12 +119,35 @@ class FeatureAblationStudy:
 
         start_time = time.time()
 
+        # Keep essential non-feature columns for training and evaluation
+        meta_cols = [
+            "home_score",
+            "away_score",
+            "goal_difference",
+            "result",
+            "date",
+            "match_id",
+            "home_team",
+            "away_team",
+        ]
+
+        # Create subsets with only the selected features + meta columns
+        train_cols_to_keep = features + [
+            col for col in meta_cols if col in train_df.columns
+        ]
+        train_df_subset = train_df[train_cols_to_keep]
+
+        test_cols_to_keep = features + [
+            col for col in meta_cols if col in test_df.columns
+        ]
+        test_df_subset = test_df[test_cols_to_keep]
+
         # Create predictor
         predictor = MatchPredictor(quiet=True)
 
         # Train
         try:
-            predictor.train(train_df)
+            predictor.train(train_df_subset)
         except Exception as e:
             print(f"❌ Training failed: {e}")
             return {
@@ -205,7 +158,7 @@ class FeatureAblationStudy:
             }
 
         # Prepare test data
-        test_features = test_df.drop(
+        test_features = test_df_subset.drop(
             columns=["home_score", "away_score", "goal_difference", "result"],
             errors="ignore",
         )
@@ -224,7 +177,7 @@ class FeatureAblationStudy:
 
         # Evaluate
         y_true = []
-        for _, row in test_df.iterrows():
+        for _, row in test_df_subset.iterrows():
             if row["home_score"] > row["away_score"]:
                 y_true.append("H")
             elif row["away_score"] > row["home_score"]:
@@ -249,8 +202,8 @@ class FeatureAblationStudy:
         # Predicted scores and points
         ph = np.array([int(p.get("predicted_home_score", 0)) for p in predictions])
         pa = np.array([int(p.get("predicted_away_score", 0)) for p in predictions])
-        ah = test_df["home_score"].values
-        aa = test_df["away_score"].values
+        ah = test_df_subset["home_score"].values
+        aa = test_df_subset["away_score"].values
 
         points = compute_points(ph, pa, ah, aa)
 
@@ -271,7 +224,7 @@ class FeatureAblationStudy:
             "experiment": experiment_name,
             "n_features": len(features),
             "status": "success",
-            "n_samples": len(test_df),
+            "n_samples": len(test_df_subset),
             "accuracy": accuracy,
             "avg_points": avg_points,
             "total_points": total_points,
@@ -279,6 +232,7 @@ class FeatureAblationStudy:
             "log_loss": logloss,
             "rps": rps,
             "training_time_sec": elapsed,
+            "features": features,  # Store the exact feature list
         }
 
         print("\n✅ Results:")
@@ -464,6 +418,16 @@ class FeatureAblationStudy:
                 f"   Accuracy: {best['accuracy']:.3f} ({best['accuracy'] - baseline_acc:+.3f})"
             )
 
+            # --- Add copy-pasteable output ---
+            if "features" in best and best["features"]:
+                print("\n📋 Recommended `kept_features.yaml` for best performance:")
+                print("-" * 60)
+                # Print in YAML list format
+                for feature in sorted(best["features"]):
+                    print(f"  - {feature}")
+                print("-" * 60)
+            # --- End copy-pasteable output ---
+
         # Best simplification (minimal features with <0.1 points loss)
         good_simpler = [
             r
@@ -487,6 +451,16 @@ class FeatureAblationStudy:
                 f"   Accuracy: {simplest['accuracy']:.3f} ({simplest['accuracy'] - baseline_acc:+.3f})"
             )
 
+            # --- Add copy-pasteable output ---
+            if "features" in simplest and simplest["features"]:
+                print("\n📋 Recommended `kept_features.yaml` for best simplification:")
+                print("-" * 60)
+                # Print in YAML list format
+                for feature in sorted(simplest["features"]):
+                    print(f"  - {feature}")
+                print("-" * 60)
+            # --- End copy-pasteable output ---
+
         # Category insights
         print("\n📈 CATEGORY ABLATION INSIGHTS:")
         category_results = [
@@ -494,6 +468,10 @@ class FeatureAblationStudy:
             for r in all_results
             if "removed_category" in r and r["status"] == "success"
         ]
+        if not category_results:
+            print("No category ablation results to analyze.")
+            return
+
         category_impact = sorted(
             category_results,
             key=lambda x: baseline_points - x["avg_points"],
@@ -526,8 +504,6 @@ class FeatureAblationStudy:
         """Run complete ablation study."""
         print("🚀 Starting Feature Ablation Study")
         print(f"   Output directory: {self.output_dir}")
-        print(f"   Total features: {len(self.all_features)}")
-        print()
 
         # Load data - USE MORE SEASONS FOR BETTER TRAINING
         print("📊 Loading data...")
@@ -536,6 +512,34 @@ class FeatureAblationStudy:
 
         all_matches = self.loader.fetch_historical_seasons(start_season, current_season)
         features_df = self.loader.create_features_from_matches(all_matches)
+
+        # --- DYNAMIC FEATURE LOADING ---
+        # Try to load from YAML, otherwise infer from the generated DataFrame.
+        # This is more robust than a hardcoded list.
+        self.all_features = self._load_kept_features()
+        if not self.all_features:
+            print("⚠️  Warning: Could not load kept_features.yaml, inferring from data.")
+            # Exclude non-feature columns
+            exclude_cols = {
+                "match_id",
+                "date",
+                "home_team",
+                "away_team",
+                "home_score",
+                "away_score",
+                "goal_difference",
+                "result",
+                "is_finished",
+            }
+            self.all_features = [
+                c for c in features_df.columns if c not in exclude_cols
+            ]
+        # Re-categorize features now that they are loaded
+        self.feature_categories = self._categorize_features()
+        # --- END DYNAMIC FEATURE LOADING ---
+
+        print(f"   Total features: {len(self.all_features)}")
+        print()
 
         # Train/test split (80/20 for more training data)
         split_idx = int(len(features_df) * 0.8)
