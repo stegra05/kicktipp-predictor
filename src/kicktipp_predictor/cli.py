@@ -251,6 +251,18 @@ def tune(
         )
         raise typer.Exit(code=2)
 
+    # Warn about SQLite limitations with high worker counts
+    if workers > 1 and storage and storage.startswith("sqlite:"):
+        if workers > 20:
+            typer.echo(
+                f"⚠️  Warning: Using {workers} workers with SQLite may cause database lock errors. "
+                "Consider using fewer workers (≤20) or a PostgreSQL/MySQL database for better concurrency."
+            )
+        elif workers > 10:
+            typer.echo(
+                f"ℹ️  Note: Using {workers} workers with SQLite. For optimal performance, consider using ≤10 workers or a PostgreSQL database."
+            )
+
     def base_args(trials: int) -> list[str]:
         args = [
             sys.executable,
@@ -356,16 +368,22 @@ def tune(
             rem = n_trials % workers
             allocations = [base + (1 if i < rem else 0) for i in range(workers)]
 
-            # 3) Launch worker subprocesses
-            procs: list[subprocess.Popen] = []
-            for trials in allocations:
-                if trials <= 0:
-                    continue
-                cmd = base_args(trials) + ["--objective", obj, "--storage", url]
-                if study_name:
-                    cmd += ["--study-name", f"{study_name}-{obj}"]
-                p = subprocess.Popen(cmd, cwd=str(pkg_root), env=env)
-                procs.append(p)
+        # 3) Launch worker subprocesses
+        procs: list[subprocess.Popen] = []
+        for worker_idx, trials in enumerate(allocations):
+            if trials <= 0:
+                continue
+            cmd = base_args(trials) + ["--objective", obj, "--storage", url]
+            if study_name:
+                cmd += ["--study-name", f"{study_name}-{obj}"]
+
+            # Set worker environment variables for coordination
+            worker_env = env.copy()
+            worker_env["OPTUNA_WORKER_ID"] = str(worker_idx)
+            worker_env["OPTUNA_TOTAL_WORKERS"] = str(workers)
+
+            p = subprocess.Popen(cmd, cwd=str(pkg_root), env=worker_env)
+            procs.append(p)
 
             # 4) Wait for all workers
             exit_code = 0
@@ -426,7 +444,7 @@ def tune(
 
         # 3) Launch worker subprocesses
         procs: list[subprocess.Popen] = []
-        for trials in allocations:
+        for worker_idx, trials in enumerate(allocations):
             if trials <= 0:
                 continue
             cmd = base_args(trials) + [
@@ -437,7 +455,13 @@ def tune(
             ]
             if study_name:
                 cmd += ["--study-name", study_name]
-            p = subprocess.Popen(cmd, cwd=str(pkg_root), env=env)
+
+            # Set worker environment variables for coordination
+            worker_env = env.copy()
+            worker_env["OPTUNA_WORKER_ID"] = str(worker_idx)
+            worker_env["OPTUNA_TOTAL_WORKERS"] = str(workers)
+
+            p = subprocess.Popen(cmd, cwd=str(pkg_root), env=worker_env)
             procs.append(p)
 
         # 4) Progress monitoring and wait for all workers

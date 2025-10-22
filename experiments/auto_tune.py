@@ -65,7 +65,7 @@ except Exception as _e:  # pragma: no cover
     optuna = None
 
 
-def _retry_on_database_lock(max_retries: int = 5, delay: float = 0.5):
+def _retry_on_database_lock(max_retries: int = 10, delay: float = 0.1):
     """Decorator to retry database operations on SQLite lock errors with improved backoff."""
 
     def decorator(func):
@@ -83,11 +83,16 @@ def _retry_on_database_lock(max_retries: int = 5, delay: float = 0.5):
                         or "sqlite3.OperationalError" in str(type(e))
                         or "StorageInternalError" in str(type(e))
                         or "OperationalError" in str(type(e))
+                        or "sqlite3.DatabaseError" in str(type(e))
+                        or "sqlite3.IntegrityError" in str(type(e))
                     ):
                         if attempt < max_retries - 1:
-                            # Improved backoff: start with shorter delay, then exponential
-                            backoff_delay = delay * (1.5**attempt) + (0.1 * attempt)
-                            time.sleep(min(backoff_delay, 10.0))  # Cap at 10 seconds
+                            # More aggressive backoff with jitter to reduce thundering herd
+                            import random
+
+                            jitter = random.uniform(0.1, 0.5)
+                            backoff_delay = delay * (2.0**attempt) + jitter
+                            time.sleep(min(backoff_delay, 30.0))  # Cap at 30 seconds
                             continue
                     # If it's not a database lock error, re-raise immediately
                     raise
@@ -145,9 +150,14 @@ def _configure_sqlite_for_concurrency(storage: str) -> str:
     # Set optimal parameters for high concurrency
     query_params.update(
         {
-            "timeout": "300",  # 5 minutes timeout
+            "timeout": "600",  # 10 minutes timeout for high concurrency
             "check_same_thread": "false",  # Allow different threads
             "isolation_level": "IMMEDIATE",  # Better for concurrent writes
+            "cache_size": "10000",  # Larger cache
+            "synchronous": "NORMAL",  # Balance between safety and speed
+            "journal_mode": "WAL",  # Write-Ahead Logging for better concurrency
+            "temp_store": "MEMORY",  # Use memory for temp tables
+            "mmap_size": "268435456",  # 256MB memory-mapped I/O
         }
     )
 
@@ -179,12 +189,25 @@ def _enable_sqlite_wal_mode(storage: str) -> None:
         if not os.path.isabs(db_path):
             db_path = os.path.abspath(db_path)
 
-        # Enable WAL mode for better concurrency
-        with sqlite3.connect(db_path, timeout=30) as conn:
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+
+        # Enable WAL mode and optimize for high concurrency
+        with sqlite3.connect(db_path, timeout=60) as conn:
+            # Set WAL mode for better concurrency
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA cache_size=10000")
             conn.execute("PRAGMA temp_store=MEMORY")
+            conn.execute("PRAGMA mmap_size=268435456")  # 256MB
+            conn.execute(
+                "PRAGMA wal_autocheckpoint=1000"
+            )  # Checkpoint every 1000 pages
+            conn.execute("PRAGMA busy_timeout=600000")  # 10 minutes busy timeout
+            conn.execute(
+                "PRAGMA foreign_keys=OFF"
+            )  # Disable foreign key checks for speed
+            conn.execute("PRAGMA locking_mode=NORMAL")  # Allow shared locks
             conn.commit()
     except Exception:
         # If WAL mode setup fails, continue without it
@@ -618,6 +641,17 @@ def main():
     is_coordinated = os.environ.get("KTP_TUNE_COORDINATED", "0") == "1"
     has_worker_id = os.environ.get("OPTUNA_WORKER_ID") is not None
     is_multiworker = is_coordinated or has_worker_id
+
+    # Add staggered startup for multi-worker mode to reduce database contention
+    if is_multiworker:
+        worker_id = int(os.environ.get("OPTUNA_WORKER_ID", "0"))
+        total_workers = int(os.environ.get("OPTUNA_TOTAL_WORKERS", "1"))
+        if worker_id > 0:  # Don't delay the first worker
+            # Stagger startup: each worker waits a bit longer
+            import random
+
+            delay = random.uniform(0.1, 0.5) + (worker_id * 0.1)
+            time.sleep(delay)
 
     # Initialize Rich console only for single-worker mode
     if not is_multiworker:
