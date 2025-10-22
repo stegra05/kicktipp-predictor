@@ -155,11 +155,11 @@ def _apply_params_to_config(params: Dict[str, float]) -> None:
         cfg.model.goals_min_child_weight = float(params['goals_min_child_weight'])
 
 
-def _objective_builder(base_features_df, all_matches, folds: List[Tuple[np.ndarray, np.ndarray]], objective: str, direction: str, omp_threads: int, verbose: bool):
+def _objective_builder(base_features_df, all_matches, folds: List[Tuple[np.ndarray, np.ndarray]], objective_name: str, direction: str, omp_threads: int, verbose: bool):
     # Cache features by feature-knob tuple to avoid recomputation across trials
     features_cache: Dict[tuple, any] = {}
 
-    def objective(trial: "optuna.trial.Trial") -> float:  # type: ignore[name-defined]
+    def obj_fn(trial: "optuna.trial.Trial") -> float:  # type: ignore[name-defined]
         # Limit BLAS/OMP threads to avoid oversubscription
         if omp_threads and omp_threads > 0:
             os.environ['OMP_NUM_THREADS'] = str(omp_threads)
@@ -270,7 +270,7 @@ def _objective_builder(base_features_df, all_matches, folds: List[Tuple[np.ndarr
             idx_to_label = {0: 'H', 1: 'D', 2: 'A'}
             y_pred = [idx_to_label.get(int(i), 'H') for i in y_pred_idx]
 
-            obj = (objective or 'ppg').lower()
+            obj = (objective_name or 'ppg').lower()
             if obj == 'ppg':
                 metric_val = float(np.sum(points_vec * weights) / max(1.0, np.sum(weights)))
             elif obj == 'ppg_unweighted':
@@ -309,7 +309,7 @@ def _objective_builder(base_features_df, all_matches, folds: List[Tuple[np.ndarr
             return float('inf') if direction == 'minimize' else float('-inf')
         return float(np.nanmean(fold_metrics))
 
-    return objective
+    return obj_fn
 
 
 def main():
