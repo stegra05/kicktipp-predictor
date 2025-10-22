@@ -14,12 +14,20 @@ Version 2.0 introduces a clear two-step prediction system:
 Outcome probabilities used for evaluation can be sourced from the classifier, derived from the goal Poisson model, or blended via a simple hybrid weight.
 
 ## Features
-- Clear two-step architecture: outcome first, then scoreline
-- Selectable outcome probabilities: classifier, Poisson-derived, or hybrid
-- Advanced feature engineering: 80+ features (momentum, schedule strength, rest, goal patterns)
-- EWMA recency features: leakage-safe exponentially weighted moving averages
-- Comprehensive evaluation: Brier, Log Loss, RPS, accuracy, Kicktipp points
-- Performance tracking and a simple Flask web UI
+- **Clear Two-Step Architecture**: Outcome first, then scoreline - easy to understand and debug
+- **Selectable Outcome Probabilities**: Use classifier probabilities, Poisson-derived probabilities, or a hybrid blend
+- **Dynamic Feature Management**: Comes with 80+ features, but you can use the built-in **Feature Ablation Study** to find the optimal subset for performance and simplicity.
+- **Advanced Feature Engineering**: Includes momentum, strength of schedule, rest days, goal patterns, and more.
+- **EWMA Recency Features**: Leakage-safe exponentially weighted moving averages capture recent form.
+- **Comprehensive Evaluation**: Brier score, log loss, RPS, accuracy, and Kicktipp points.
+- **Performance Tracking**: Automatic tracking of prediction accuracy and points earned.
+- **Web Interface**: Clean, responsive web UI to view predictions, league table, and statistics.
+- **Automatic Data Fetching**: Fetches match data from OpenLigaDB API with intelligent caching.
+- **Centralized Configuration**: All settings managed in one place via `config/best_params.yaml`.
+
+### Performance
+
+The feature engineering pipeline is fully vectorized with Pandas (`groupby` + `expanding/rolling` + `merge_asof`), reducing complexity from quadratic to near-linear. Training feature construction typically completes in seconds instead of minutes.
 
 ## Getting Started
 
@@ -27,34 +35,75 @@ Outcome probabilities used for evaluation can be sourced from the classifier, de
 ```bash
 git clone https://github.com/your-username/kicktipp-predictor.git
 cd kicktipp-predictor
-python3 -m pip install -e .
+pip install -e .
 ```
 
-### CLI Quickstart
+If you prefer without install, set `PYTHONPATH` to include `src`:
+```bash
+export PYTHONPATH="$PWD/src:$PYTHONPATH"
+```
+
+### 2. CLI Quickstart
 ```bash
 # Show help
-python3 -m kicktipp_predictor --help
+kicktipp_predictor --help
 
 # Train models (uses last 3 seasons by default)
-python3 -m kicktipp_predictor train
+kicktipp_predictor train
+
+# Train with more historical data
+kicktipp_predictor train --seasons-back 5
 
 # Predict upcoming matches (next 7 days)
-python3 -m kicktipp_predictor predict --days 7
+kicktipp_predictor predict --days 7
 
-# Evaluate performance across current season (dynamic, expanding window)
-python3 -m kicktipp_predictor evaluate --retrain-every 1
+# Predict with process-parallel scoreline selection (e.g., 8 workers)
+kicktipp_predictor predict --days 7 --workers 8
+
+# Predict specific matchday
+kicktipp_predictor predict --matchday 15
+
+# Evaluate model performance (default probability source)
+kicktipp_predictor evaluate
+
+# Evaluate with Poisson-derived probabilities and detailed plots
+kicktipp_predictor evaluate --prob-source poisson --detailed
 
 # Run web UI (defaults to 127.0.0.1:8000)
-python3 -m kicktipp_predictor web --host 0.0.0.0 --port 8000
+kicktipp_predictor web --host 0.0.0.0 --port 8000
+```
+
+## Usage
+
+### Weekly Workflow
+This is the recommended weekly routine for generating predictions:
+
+1.  **Generate Predictions:** Generate predictions for the next matchday.
+    ```bash
+    kicktipp_predictor predict
+    ```
+
+2.  **View Predictions:** Use the web interface to view predictions with probabilities and confidence.
+    ```bash
+    kicktipp_predictor web
+    ```
+
+### Monthly Maintenance
+To keep the models accurate, retrain them monthly with the latest match data:
+```bash
+kicktipp_predictor train
 ```
 
 ## CLI Commands
-- `train [--seasons-back N]`: Train models on historical data (default: 3 seasons)
-- `predict [--days N | --matchday N]`: Generate predictions for upcoming matches
-- `evaluate [--retrain-every N] [prob options]`: Dynamic season evaluation (expanding window)
-  - Probability options: `--prob-source classifier|poisson|hybrid`, `--hybrid-poisson-weight`, `--proba-grid-max-goals`, `--poisson-draw-rho`
-- `web [--host HOST] [--port PORT]`: Run the Flask web UI
-- `tune [options]`: Hyperparameter tuning (wrapper around `experiments/auto_tune.py`)
+
+All functionality is available through the CLI:
+
+- **`train [--seasons-back N]`**: Train models on historical data (default: 3 seasons).
+- **`predict [--days N | --matchday N]`**: Generate predictions for upcoming matches.
+- **`evaluate [--season] [--dynamic] [--retrain-every N]`**: Evaluate on a test split or across the current season; with `--dynamic`, retrain every N matchdays (default: 1).
+- **`web [--host HOST] [--port PORT]`**: Run the Flask web UI.
+- **`tune [options]`**: Hyperparameter tuning (wrapper around `experiments/auto_tune.py`).
+- **`shap`**: Run SHAP analysis to understand feature importance.
 
 ## Season Evaluation (Dynamic Only)
 
@@ -65,19 +114,198 @@ The `evaluate` command now uses a single dynamic, expanding-window procedure:
   - `data/predictions/metrics_season.json`
   - `data/predictions/per_matchday_metrics_season.csv`
 
-### Rich Console Report
-The console output includes:
-- Season metrics panel: matches, avg/total points, accuracy, Brier, Log Loss, RPS
-- Prediction quality: exact scores, correct goal difference, correct result
-- Baseline comparison (always 2-1 home): average points and accuracy deltas
-- Outcome distribution: actual vs predicted H/D/A counts and percents
-- Points distribution: counts for 0/2/3/4 points
-- Top scorelines: top 5 predicted vs top 5 actual
-- Confidence buckets: count, avg points, accuracy, avg confidence (numeric only)
-- Confusion matrix and per-class precision/recall
-- Per-matchday summary table: n, average points, baseline, delta, accuracy, exact/diff/result
+### EWMA Recency Features
 
-Plots (calibration curves, confusion PNGs) are no longer produced in evaluation; use the CSV/JSON for downstream analysis or the web UI for visualization.
+To capture short-term momentum without leakage, the feature pipeline precomputes exponentially weighted moving averages (span=5, adjust=False) on prior match values per team and merges them into match-level features. Added columns include:
+
+- `home_goals_for_ewm5`, `away_goals_for_ewm5`
+- `home_goals_against_ewm5`, `away_goals_against_ewm5`
+- `home_goal_diff_ewm5`, `away_goal_diff_ewm5`
+- `home_points_ewm5`, `away_points_ewm5`
+
+Early-season gaps are filled with global means to handle cold starts. These features are computed once across the dataset and reused for both training and prediction paths.
+
+### Benefits
+
+- Clear separation of concerns between outcome decision and score magnitude
+- Option to derive H/D/A probabilities directly from the Poisson goal model
+- Flexible evaluation: choose the probability source that optimizes Brier/LogLoss
+
+### Technology Stack
+
+#### Backend
+- **Python 3.10+**
+- **Pandas**: Data manipulation
+- **NumPy**: Numerical operations
+- **Scikit-learn**: ML utilities
+- **XGBoost**: Gradient boosting models
+- **SciPy**: Poisson distribution
+- **Flask**: Web framework
+- **Requests**: API calls
+- **BeautifulSoup**: Web scraping fallback
+
+#### Frontend
+- **HTML5/CSS3**: Structure and styling
+- **JavaScript (Vanilla)**: Interactivity
+- **Responsive Design**: Mobile-friendly
+
+## Project Structure
+
+The project features a clean hierarchy with all core logic organized into modules:
+
+```
+kicktipp-predictor/
+├── src/
+│   └── kicktipp_predictor/
+│       ├── __init__.py           # Package exports
+│       ├── __main__.py           # CLI entry point
+│       ├── cli.py                # Typer-based CLI commands
+│       ├── config.py             # Centralized configuration
+│       ├── data.py               # Data loading & feature engineering
+│       ├── predictor.py          # Predictor-Selector model
+│       ├── evaluate.py           # Evaluation logic
+│       ├── analysis/
+│       │   └── shap_analysis.py  # SHAP analysis
+│       └── web/
+│           ├── app.py            # Flask web application
+│           ├── templates/        # HTML templates
+│           └── static/           # CSS, JS assets
+├── data/
+│   ├── cache/                    # API response cache
+│   ├── models/                   # Trained model files
+│   ├── feature_selection/        # (Optional) Kept features list
+│   └── feature_ablation/         # Study artifacts
+├── config/
+│   └── best_params.yaml          # Model hyperparameters
+├── experiments/                  # Tuning & ablation scripts
+├── tests/                        # Unit tests
+├── pyproject.toml               # Package configuration
+└── README.md                    # This file
+```
+
+### Key Files
+
+- **`config.py`**: Type-safe configuration using dataclasses
+- **`data.py`**: Combines API fetching + feature engineering (927 lines → 1 class)
+- **`predictor.py`**: The entire Predictor-Selector logic (429 lines, crystal clear)
+- **`evaluate.py`**: Evaluation metrics and reporting (329 lines, no bloat)
+
+## Model Configuration
+
+The model's behavior is controlled by parameters in `config/best_params.yaml`. These are simple, transparent settings:
+
+### Key Parameters
+- **`max_goals`**: Maximum goals to consider in Poisson grid for scoreline selection (default: 8)
+- **`proba_grid_max_goals`**: Grid cap for Poisson-derived probabilities (default: 12)
+- **`min_lambda`**: Minimum expected goals to prevent degenerate predictions (default: 0.2)
+- **`prob_source`**: Outcome probability source: `classifier` | `poisson` | `hybrid` (default: `classifier`)
+- **`hybrid_poisson_weight`**: When `prob_source=hybrid`, weight of Poisson probabilities in [0,1] (default: 0.5)
+- **`proba_temperature`**: Temperature scaling for classifier probabilities (default: 1.0)
+- **`prior_blend_alpha`**: Empirical-prior blending for classifier probabilities (applies only when `prob_source='classifier'`)
+- **`draw_boost`**: Class weight multiplier for draws during classifier training
+
+### XGBoost Hyperparameters
+- **Outcome Classifier**: `n_estimators`, `max_depth`, `learning_rate`, `subsample`, `colsample_bytree`
+- **Goal Regressors**: Same hyperparameters, tuned for Poisson regression
+
+These parameters can be tuned using the `tune` command (see Advanced Usage below).
+
+## Advanced Usage
+
+### Hyperparameter Tuning (Optuna, recommended objective)
+Use the CLI `tune` command to optimize hyperparameters via time-series CV using Optuna. Starting with v2.1, the outcome classifier is trained with class-balanced weights by default, combined with time-decay and an optional `draw_boost`. We recommend optimizing for weighted Kicktipp points (PPG). The tuner writes per-objective YAMLs (e.g., `config/best_params_logloss.yaml`) and copies the winner (by weighted PPG) to `config/best_params.yaml`. The search space includes `prob_source`, `hybrid_poisson_weight`, and `proba_grid_max_goals`.
+
+Serial example (no storage required):
+```bash
+python3 -m kicktipp_predictor tune --n-trials 200 --n-splits 3 --workers 1 --objective ppg
+```
+
+Parallel example (database-coordinated workers):
+```bash
+python3 -m kicktipp_predictor tune \
+  --n-trials 200 \
+  --n-splits 3 \
+  --workers 8 \
+  --storage "sqlite:///data/kicktipp_study.db?timeout=60" \
+  --objective ppg
+
+### Recommended study run
+After enabling the balanced trainer, run a longer PPG-focused study with modest parallelism to reduce DB lock contention:
+```bash
+python3 -m kicktipp_predictor tune \
+  --n-trials 500 \
+  --n-splits 3 \
+  --workers 8 \
+  --storage "sqlite:///data/study_balanced_ppg.db?timeout=120" \
+  --objective ppg
+```
+```
+
+Notes:
+- `--n-trials` is the total trial budget across all workers (evenly split).
+- `--workers` controls process-level parallelism. Each worker is single-threaded internally to avoid nested parallelism.
+- When `--workers > 1`, a storage URL is required (SQLite with `?timeout=60` recommended, or a remote RDBMS). In compare mode with SQLite, the CLI automatically derives objective-specific files (e.g., `..._logloss.db`).
+
+Common options:
+- `--n-trials <number>`: Total Optuna trials across all workers.
+- `--n-splits <number>`: Time-series CV folds.
+- `--workers <number>`: Number of worker processes (default: 1).
+- `--storage <url>`: Optuna storage URL (required if `--workers > 1`).
+- `--objective <name>`: ppg|ppg_unweighted|logloss|brier|balanced_accuracy|accuracy|rps
+- `--direction <dir>`: auto|maximize|minimize (auto resolves from objective)
+- `--compare <list>`: comma-separated objectives to run and compare (ignores `--objective`)
+
+Advanced users can still call the underlying worker script directly (single-process worker):
+```bash
+python experiments/auto_tune.py --n-trials 200 --n-splits 3 --storage "sqlite:////absolute/path/kicktipp_study.db?timeout=60"
+```
+
+The tuner outputs the best-performing parameters to `config/best_params.yaml`, which are automatically used by `MatchPredictor`.
+
+### Feature Ablation Study
+To find the optimal balance between model complexity and performance, run the feature ablation study. This script systematically tests different feature subsets by removing categories one by one and analyzing the impact.
+
+**Usage:**
+```bash
+./run_feature_study.sh
+```
+
+The study will:
+1.  **Run Experiments**: Test various scenarios, including a baseline with all features, removing feature categories (e.g., `ewma_recency`, `venue_specific`), and testing a minimal core set.
+2.  **Generate Report**: Output a summary report with performance metrics (accuracy, avg points, Brier score) for each experiment.
+3.  **Provide Recommendations**: Suggest optimal feature sets for both **best performance** and **best simplification** (i.e., the smallest feature set with minimal performance loss).
+
+**Interpreting the Results:**
+
+The script will print a detailed report to the console and save the results to `data/feature_ablation/`. The most important section is the **"RECOMMENDED CONFIGURATIONS"**, which provides copy-pasteable YAML output for `kept_features.yaml`.
+
+-   **Best Performance**: The feature set that achieved the highest average points.
+-   **Best Simplification**: A smaller, more efficient feature set that performs almost as well as the baseline.
+
+**Workflow:**
+
+1.  **Run the study:** `./run_feature_study.sh`
+2.  **Review the report:** Analyze the results in your terminal.
+3.  **Update feature set:** Copy the recommended feature list from the report into a new file at `data/feature_selection/kept_features.yaml`.
+4.  **Retrain the model:** `python3 -m kicktipp_predictor train`
+5.  **Evaluate:** `python3 -m kicktipp_predictor evaluate --season`
+
+This workflow allows you to maintain a lean, high-performing feature set without manual trial and error.
+
+### Optional Dependencies
+
+Some features are optional and can be installed via extras:
+
+```bash
+# Hyperparameter tuning support (Optuna)
+python3 -m pip install -e .[tuning]
+
+# Plotting/analysis (SHAP + Matplotlib + Seaborn)
+python3 -m pip install -e .[plots]
+
+# Install both sets of extras
+python3 -m pip install -e .[tuning,plots]
+```
 
 ## Web Interface
 See probabilities, confidence and predictions in a simple web UI:

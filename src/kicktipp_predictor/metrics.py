@@ -1,28 +1,52 @@
+"""Evaluation metrics and plotting utilities for model assessment.
+
+This module provides functions to:
+- Calculate multiclass classification metrics (Brier score, log loss, RPS).
+- Assess model calibration (Expected Calibration Error, reliability diagrams).
+- Compute and visualize confusion matrices.
+- Analyze performance based on prediction confidence.
+- Simulate Kicktipp point scoring.
+"""
+
 import json
 import os
 
 import numpy as np
 
-try:  # optional plotting deps
-    import matplotlib.pyplot as plt  # type: ignore
-except Exception:  # pragma: no cover
-    plt = None  # type: ignore
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
 
 
 LABELS_ORDER: tuple[str, str, str] = ("H", "D", "A")
 
 
 def ensure_dir(path: str) -> None:
+    """Create a directory if it does not exist."""
     os.makedirs(path, exist_ok=True)
 
 
 def save_json(obj: dict, out_path: str) -> None:
+    """Save a dictionary to a JSON file."""
     ensure_dir(os.path.dirname(out_path) or ".")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2, ensure_ascii=False)
 
 
 def brier_score_multiclass(y_true: list[str], proba: np.ndarray) -> float:
+    """Calculate the Brier score for multiclass predictions.
+
+    The Brier score measures the mean squared difference between predicted
+    probabilities and actual outcomes. A lower score indicates better calibration.
+
+    Args:
+        y_true: A list of true labels ('H', 'D', 'A').
+        proba: A numpy array of shape (n_samples, 3) with predicted probabilities.
+
+    Returns:
+        The calculated Brier score.
+    """
     mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
     y = np.array([mapping.get(label, -1) for label in y_true], dtype=int)
     P = np.clip(np.asarray(proba, dtype=float), 1e-15, 1.0)
@@ -39,6 +63,18 @@ def brier_score_multiclass(y_true: list[str], proba: np.ndarray) -> float:
 
 
 def log_loss_multiclass(y_true: list[str], proba: np.ndarray) -> float:
+    """Calculate the logarithmic loss for multiclass predictions.
+
+    Log loss penalizes confident but incorrect predictions more heavily.
+    A lower score is better.
+
+    Args:
+        y_true: A list of true labels ('H', 'D', 'A').
+        proba: A numpy array of shape (n_samples, 3) with predicted probabilities.
+
+    Returns:
+        The calculated log loss.
+    """
     mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
     y = np.array([mapping.get(label, -1) for label in y_true], dtype=int)
     P = np.clip(np.asarray(proba, dtype=float), 1e-15, 1.0)
@@ -52,6 +88,20 @@ def log_loss_multiclass(y_true: list[str], proba: np.ndarray) -> float:
 
 
 def ranked_probability_score_3c(y_true: list[str], proba: np.ndarray) -> float:
+    """Calculate the Ranked Probability Score (RPS) for 3-class outcomes.
+
+    RPS is a proper scoring rule that measures the difference between cumulative
+    distribution functions of predictions and outcomes. It is sensitive to distance;
+    predicting a home win when the result is a draw is better than predicting an away win.
+    A lower score is better.
+
+    Args:
+        y_true: A list of true labels ('H', 'D', 'A').
+        proba: A numpy array of shape (n_samples, 3) with predicted probabilities.
+
+    Returns:
+        The calculated Ranked Probability Score.
+    """
     mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
     y = np.array([mapping.get(label, -1) for label in y_true], dtype=int)
     P = np.clip(np.asarray(proba, dtype=float), 1e-15, 1.0)
@@ -71,6 +121,21 @@ def ranked_probability_score_3c(y_true: list[str], proba: np.ndarray) -> float:
 def expected_calibration_error(
     y_true: list[str], proba: np.ndarray, n_bins: int = 10
 ) -> dict[str, float]:
+    """Calculate the Expected Calibration Error (ECE).
+
+    ECE measures the difference between a model's confidence and its accuracy.
+    It is computed by binning predictions by confidence and finding the
+    weighted average of the absolute difference between accuracy and confidence
+    in each bin. A lower ECE indicates better calibration.
+
+    Args:
+        y_true: A list of true labels ('H', 'D', 'A').
+        proba: A numpy array of shape (n_samples, 3) with predicted probabilities.
+        n_bins: The number of confidence bins to use.
+
+    Returns:
+        A dictionary mapping each class label to its ECE value.
+    """
     mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
     y = np.array([mapping.get(label, -1) for label in y_true], dtype=int)
     P = np.clip(np.asarray(proba, dtype=float), 1e-15, 1.0)
@@ -96,6 +161,21 @@ def expected_calibration_error(
 def reliability_diagram(
     y_true: list[str], proba: np.ndarray, class_label: str, n_bins: int = 10
 ):
+    """Generate data for a reliability diagram.
+
+    This function bins predictions by confidence and calculates the accuracy
+    and average confidence for each bin, which can then be plotted to visualize
+    model calibration.
+
+    Args:
+        y_true: A list of true labels ('H', 'D', 'A').
+        proba: A numpy array of shape (n_samples, 3) with predicted probabilities.
+        class_label: The class to generate the diagram for.
+        n_bins: The number of confidence bins.
+
+    Returns:
+        A pandas DataFrame with reliability diagram data.
+    """
     import pandas as pd
 
     mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
@@ -131,6 +211,13 @@ def reliability_diagram(
 
 
 def plot_reliability_curve(df, class_label: str, out_path: str) -> None:
+    """Plot a reliability curve from reliability diagram data.
+
+    Args:
+        df: A pandas DataFrame from `reliability_diagram`.
+        class_label: The class label for the plot title.
+        out_path: The file path to save the plot.
+    """
     if plt is None:
         return
     ensure_dir(os.path.dirname(out_path) or ".")
@@ -158,6 +245,16 @@ def plot_reliability_curve(df, class_label: str, out_path: str) -> None:
 
 
 def confusion_matrix_stats(y_true: list[str], proba: np.ndarray) -> dict:
+    """Calculate a confusion matrix and related statistics.
+
+    Args:
+        y_true: A list of true labels ('H', 'D', 'A').
+        proba: A numpy array of shape (n_samples, 3) with predicted probabilities.
+
+    Returns:
+        A dictionary containing the confusion matrix, overall accuracy, and
+        per-class precision and recall.
+    """
     mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
     y_idx = np.array([mapping.get(lbl, -1) for lbl in y_true], dtype=int)
     P = np.clip(np.asarray(proba, dtype=float), 1e-15, 1.0)
@@ -182,6 +279,12 @@ def confusion_matrix_stats(y_true: list[str], proba: np.ndarray) -> dict:
 
 
 def plot_confusion_matrix(cm: np.ndarray, out_path: str) -> None:
+    """Plot a confusion matrix.
+
+    Args:
+        cm: A 3x3 numpy array representing the confusion matrix.
+        out_path: The file path to save the plot.
+    """
     if plt is None:
         return
     ensure_dir(os.path.dirname(out_path) or ".")
@@ -209,6 +312,21 @@ def bin_by_confidence(
     points: np.ndarray,
     n_bins: int = 5,
 ):
+    """Group match data into confidence-based bins.
+
+    This function is useful for analyzing model performance at different
+    levels of prediction confidence.
+
+    Args:
+        conf: An array of confidence scores for each prediction.
+        y_true: A list of true labels.
+        proba: A numpy array of predicted probabilities.
+        points: An array of points awarded for each match.
+        n_bins: The number of confidence bins.
+
+    Returns:
+        A pandas DataFrame summarizing performance metrics for each bin.
+    """
     import pandas as pd
 
     mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
@@ -249,6 +367,12 @@ def bin_by_confidence(
 
 
 def plot_confidence_buckets(df, out_path: str) -> None:
+    """Plot average points scored in each confidence bucket.
+
+    Args:
+        df: A pandas DataFrame from `bin_by_confidence`.
+        out_path: The file path to save the plot.
+    """
     if plt is None:
         return
     ensure_dir(os.path.dirname(out_path) or ".")
@@ -264,6 +388,23 @@ def plot_confidence_buckets(df, out_path: str) -> None:
 
 
 def compute_points(pred_home, pred_away, act_home, act_away):
+    """Calculate Kicktipp points for predicted versus actual scores.
+
+    The scoring rules are:
+    - 4 points: Exact scoreline match.
+    - 3 points: Correct goal difference.
+    - 2 points: Correct outcome (win/draw/loss).
+    - 0 points: Incorrect outcome.
+
+    Args:
+        pred_home: Predicted home goals.
+        pred_away: Predicted away goals.
+        act_home: Actual home goals.
+        act_away: Actual away goals.
+
+    Returns:
+        A numpy array of points for each match.
+    """
     import numpy as np
 
     ph = np.asarray(list(pred_home), dtype=int)
