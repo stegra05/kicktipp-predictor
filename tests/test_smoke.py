@@ -1,5 +1,4 @@
 def test_imports():
-    import kicktipp_predictor
     from kicktipp_predictor.data import DataLoader
     from kicktipp_predictor.predictor import MatchPredictor
     from kicktipp_predictor.web.app import app
@@ -10,9 +9,13 @@ def test_imports():
 
 
 def test_cli_help():
-    import subprocess, sys
-    res = subprocess.run([sys.executable, "-m", "kicktipp_predictor", "--help"], capture_output=True, text=True)
+    import subprocess
+    import sys
+
+    res = subprocess.run(
+        [sys.executable, "-m", "kicktipp_predictor", "--help"],
+        capture_output=True,
+        text=True,
+    )
     assert res.returncode == 0
     assert "Kicktipp Predictor CLI" in res.stdout
-
-

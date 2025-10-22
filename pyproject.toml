@@ -29,6 +29,11 @@ dependencies = [
 [project.optional-dependencies]
 tuning = ["optuna>=3.0.0"]
 plots = ["shap>=0.45.0", "matplotlib>=3.8.0", "seaborn>=0.13.0"]
+dev = [
+  "ruff>=0.1.6",
+  "mypy>=1.7.0",
+  "pre-commit>=3.5.0",
+]
 
 [project.scripts]
 kicktipp-predictor = "kicktipp_predictor.cli:app"
@@ -50,4 +55,59 @@ include = ["kicktipp_predictor*"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+]
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "W",   # pycodestyle warnings
+  "C90", # mccabe complexity
+  "I",   # isort (import sorting)
+  "N",   # pep8-naming
+  "UP",  # pyupgrade
+  "B",   # flake8-bugbear
+]
+ignore = [
+  "E501",   # Line too long (handled by formatter)
+  "N803",   # Argument name should be lowercase (allow X, y for ML)
+  "N806",   # Variable should be lowercase (allow X, y, P for ML matrices)
+  "C901",   # Function is too complex (can be addressed incrementally)
+  "E402",   # Module level import not at top (some files need sys.path setup)
+  "B023",   # Function doesn't bind loop variable (false positives in closures)
+  "B905",   # zip() without strict parameter (Python 3.10+)
+  "B904",   # Exception chaining with raise...from (can be addressed incrementally)
+  "E712",   # Comparison to True/False (can be addressed incrementally)
+  "B007",   # Unused loop variable (can be addressed incrementally)
+  "F841",   # Unused variable (can be addressed incrementally)
+  "UP007",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = false
+warn_unused_configs = false
+disallow_untyped_defs = false
+check_untyped_defs = false
+no_implicit_optional = false
+warn_redundant_casts = false
+warn_unused_ignores = false
+ignore_missing_imports = true
+# Gradually tighten these settings over time
 

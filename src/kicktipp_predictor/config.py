@@ -7,7 +7,6 @@ model hyperparameters, and API settings.
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 try:
     import yaml  # type: ignore
@@ -112,7 +111,11 @@ class ModelConfig:
     momentum_decay: float = 0.9
 
     # Threading
-    n_jobs: int = field(default_factory=lambda: max(1, int(os.getenv("OMP_NUM_THREADS", "0")) or os.cpu_count() or 1))
+    n_jobs: int = field(
+        default_factory=lambda: max(
+            1, int(os.getenv("OMP_NUM_THREADS", "0")) or os.cpu_count() or 1
+        )
+    )
 
     # Class weights for outcome classifier
     # Boost draw class since it's underrepresented
@@ -126,7 +129,7 @@ class ModelConfig:
 
     # Outcome probability source for evaluation and reporting
     # One of: 'classifier' (default), 'poisson', 'hybrid'
-    prob_source: str = 'classifier'
+    prob_source: str = "classifier"
     # When prob_source='hybrid', weight of Poisson-derived probabilities in [0,1]
     hybrid_poisson_weight: float = 0.5
     # Max goals for Poisson probability grid used to derive P(H/D/A) (separate from scoreline grid)
@@ -144,7 +147,7 @@ class Config:
     model: ModelConfig = field(default_factory=ModelConfig)
 
     @classmethod
-    def load(cls, config_file: Optional[Path] = None) -> "Config":
+    def load(cls, config_file: Path | None = None) -> "Config":
         """Load configuration from file if available.
 
         Args:
@@ -166,7 +169,7 @@ class Config:
         # Try to load from YAML if available
         if yaml is not None and config_file.exists():
             try:
-                with open(config_file, "r", encoding="utf-8") as f:
+                with open(config_file, encoding="utf-8") as f:
                     params = yaml.safe_load(f)
 
                 if isinstance(params, dict):
@@ -178,21 +181,35 @@ class Config:
                     if "draw_boost" in params:
                         config.model.draw_boost = float(params["draw_boost"])
                     if "proba_temperature" in params:
-                        config.model.proba_temperature = float(params["proba_temperature"])
+                        config.model.proba_temperature = float(
+                            params["proba_temperature"]
+                        )
                     if "prior_blend_alpha" in params:
-                        config.model.prior_blend_alpha = float(params["prior_blend_alpha"])
+                        config.model.prior_blend_alpha = float(
+                            params["prior_blend_alpha"]
+                        )
                     if "prob_source" in params:
-                        config.model.prob_source = str(params["prob_source"]).strip().lower()
+                        config.model.prob_source = (
+                            str(params["prob_source"]).strip().lower()
+                        )
                     if "hybrid_poisson_weight" in params:
-                        config.model.hybrid_poisson_weight = float(params["hybrid_poisson_weight"])
+                        config.model.hybrid_poisson_weight = float(
+                            params["hybrid_poisson_weight"]
+                        )
                     if "proba_grid_max_goals" in params:
-                        config.model.proba_grid_max_goals = int(params["proba_grid_max_goals"])
+                        config.model.proba_grid_max_goals = int(
+                            params["proba_grid_max_goals"]
+                        )
                     if "poisson_draw_rho" in params:
-                        config.model.poisson_draw_rho = float(params["poisson_draw_rho"])
+                        config.model.poisson_draw_rho = float(
+                            params["poisson_draw_rho"]
+                        )
                     if "use_time_decay" in params:
                         config.model.use_time_decay = bool(params["use_time_decay"])
                     if "time_decay_half_life_days" in params:
-                        config.model.time_decay_half_life_days = float(params["time_decay_half_life_days"])
+                        config.model.time_decay_half_life_days = float(
+                            params["time_decay_half_life_days"]
+                        )
                     if "form_last_n" in params:
                         config.model.form_last_n = int(params["form_last_n"])
                     if "momentum_decay" in params:
@@ -200,45 +217,73 @@ class Config:
 
                     # Outcome classifier hyperparameters
                     if "outcome_n_estimators" in params:
-                        config.model.outcome_n_estimators = int(params["outcome_n_estimators"])
+                        config.model.outcome_n_estimators = int(
+                            params["outcome_n_estimators"]
+                        )
                     if "outcome_max_depth" in params:
-                        config.model.outcome_max_depth = int(params["outcome_max_depth"])
+                        config.model.outcome_max_depth = int(
+                            params["outcome_max_depth"]
+                        )
                     if "outcome_learning_rate" in params:
-                        config.model.outcome_learning_rate = float(params["outcome_learning_rate"])
+                        config.model.outcome_learning_rate = float(
+                            params["outcome_learning_rate"]
+                        )
                     if "outcome_subsample" in params:
-                        config.model.outcome_subsample = float(params["outcome_subsample"])
+                        config.model.outcome_subsample = float(
+                            params["outcome_subsample"]
+                        )
                     if "outcome_colsample_bytree" in params:
-                        config.model.outcome_colsample_bytree = float(params["outcome_colsample_bytree"])
+                        config.model.outcome_colsample_bytree = float(
+                            params["outcome_colsample_bytree"]
+                        )
                     if "outcome_reg_alpha" in params:
-                        config.model.outcome_reg_alpha = float(params["outcome_reg_alpha"])
+                        config.model.outcome_reg_alpha = float(
+                            params["outcome_reg_alpha"]
+                        )
                     if "outcome_reg_lambda" in params:
-                        config.model.outcome_reg_lambda = float(params["outcome_reg_lambda"])
+                        config.model.outcome_reg_lambda = float(
+                            params["outcome_reg_lambda"]
+                        )
                     if "outcome_gamma" in params:
                         config.model.outcome_gamma = float(params["outcome_gamma"])
                     if "outcome_min_child_weight" in params:
-                        config.model.outcome_min_child_weight = float(params["outcome_min_child_weight"])
+                        config.model.outcome_min_child_weight = float(
+                            params["outcome_min_child_weight"]
+                        )
 
                     # Goal regressors hyperparameters
                     if "goals_n_estimators" in params:
-                        config.model.goals_n_estimators = int(params["goals_n_estimators"])
+                        config.model.goals_n_estimators = int(
+                            params["goals_n_estimators"]
+                        )
                     if "goals_max_depth" in params:
                         config.model.goals_max_depth = int(params["goals_max_depth"])
                     if "goals_learning_rate" in params:
-                        config.model.goals_learning_rate = float(params["goals_learning_rate"])
+                        config.model.goals_learning_rate = float(
+                            params["goals_learning_rate"]
+                        )
                     if "goals_subsample" in params:
                         config.model.goals_subsample = float(params["goals_subsample"])
                     if "goals_colsample_bytree" in params:
-                        config.model.goals_colsample_bytree = float(params["goals_colsample_bytree"])
+                        config.model.goals_colsample_bytree = float(
+                            params["goals_colsample_bytree"]
+                        )
                     if "goals_reg_alpha" in params:
                         config.model.goals_reg_alpha = float(params["goals_reg_alpha"])
                     if "goals_reg_lambda" in params:
-                        config.model.goals_reg_lambda = float(params["goals_reg_lambda"])
+                        config.model.goals_reg_lambda = float(
+                            params["goals_reg_lambda"]
+                        )
                     if "goals_gamma" in params:
                         config.model.goals_gamma = float(params["goals_gamma"])
                     if "goals_min_child_weight" in params:
-                        config.model.goals_min_child_weight = float(params["goals_min_child_weight"])
+                        config.model.goals_min_child_weight = float(
+                            params["goals_min_child_weight"]
+                        )
                     if "goals_early_stopping_rounds" in params:
-                        config.model.goals_early_stopping_rounds = int(params["goals_early_stopping_rounds"])
+                        config.model.goals_early_stopping_rounds = int(
+                            params["goals_early_stopping_rounds"]
+                        )
 
                     if os.getenv("KTP_VERBOSE") == "1":
                         print(f"[Config] Loaded from {config_file}")
@@ -264,7 +309,7 @@ class Config:
 
 
 # Global config instance
-_config: Optional[Config] = None
+_config: Config | None = None
 
 
 def get_config() -> Config:

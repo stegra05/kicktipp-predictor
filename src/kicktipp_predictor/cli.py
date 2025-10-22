@@ -5,7 +5,9 @@ app = typer.Typer(help="Kicktipp Predictor CLI")
 
 @app.command()
 def train(
-    seasons_back: int = typer.Option(3, help="Number of past seasons to use for training"),
+    seasons_back: int = typer.Option(
+        3, help="Number of past seasons to use for training"
+    ),
 ):
     """Train the match predictor on historical data."""
     from kicktipp_predictor.data import DataLoader
@@ -29,7 +31,9 @@ def train(
     # Create features
     print("Creating features...")
     features_df = loader.create_features_from_matches(all_matches)
-    print(f"Created {len(features_df)} training samples with {len(features_df.columns)} columns")
+    print(
+        f"Created {len(features_df)} training samples with {len(features_df.columns)} columns"
+    )
 
     # Train predictor
     print("\nTraining predictor...")
@@ -49,11 +53,21 @@ def train(
 def predict(
     days: int = typer.Option(7, help="Days ahead to predict"),
     matchday: int | None = typer.Option(None, help="Specific matchday to predict"),
-    workers: int = typer.Option(1, help="Process workers for scoreline selection ( >1 enables parallelism)"),
-    prob_source: str = typer.Option("classifier", help="Outcome prob source: classifier|poisson|hybrid"),
-    hybrid_poisson_weight: float = typer.Option(0.5, help="When prob_source=hybrid: weight of Poisson probabilities [0,1]"),
-    proba_grid_max_goals: int = typer.Option(12, help="Grid cap for Poisson-derived probabilities (not scoreline grid)"),
-    poisson_draw_rho: float = typer.Option(0.0, help="Diagonal bump for draws in Poisson probs: multiply diag by exp(rho)"),
+    workers: int = typer.Option(
+        1, help="Process workers for scoreline selection ( >1 enables parallelism)"
+    ),
+    prob_source: str = typer.Option(
+        "classifier", help="Outcome prob source: classifier|poisson|hybrid"
+    ),
+    hybrid_poisson_weight: float = typer.Option(
+        0.5, help="When prob_source=hybrid: weight of Poisson probabilities [0,1]"
+    ),
+    proba_grid_max_goals: int = typer.Option(
+        12, help="Grid cap for Poisson-derived probabilities (not scoreline grid)"
+    ),
+    poisson_draw_rho: float = typer.Option(
+        0.0, help="Diagonal bump for draws in Poisson probs: multiply diag by exp(rho)"
+    ),
 ):
     """Make predictions for upcoming matches."""
     from kicktipp_predictor.data import DataLoader
@@ -66,6 +80,7 @@ def predict(
 
     # Apply probability-source options to config
     from kicktipp_predictor.config import get_config
+
     cfg = get_config()
     cfg.model.prob_source = str(prob_source).strip().lower()
     cfg.model.hybrid_poisson_weight = float(hybrid_poisson_weight)
@@ -103,7 +118,9 @@ def predict(
     historical_matches = loader.fetch_season_matches(current_season)
 
     # Create features
-    features_df = loader.create_prediction_features(upcoming_matches, historical_matches)
+    features_df = loader.create_prediction_features(
+        upcoming_matches, historical_matches
+    )
 
     if len(features_df) == 0:
         print("Could not create features (insufficient data). Try a later matchday.")
@@ -117,34 +134,56 @@ def predict(
     print("PREDICTIONS")
     print("=" * 80)
     for pred in predictions:
-        home = pred['home_team']
-        away = pred['away_team']
+        home = pred["home_team"]
+        away = pred["away_team"]
         score = f"{pred['predicted_home_score']}-{pred['predicted_away_score']}"
-        outcome = pred['predicted_result']
-        confidence = pred['confidence']
+        outcome = pred["predicted_result"]
+        confidence = pred["confidence"]
 
         print(f"\n{home} vs {away}")
         print(f"  Predicted Score: {score} ({outcome})")
-        print(f"  Probabilities: H={pred['home_win_probability']:.2%} "
-              f"D={pred['draw_probability']:.2%} A={pred['away_win_probability']:.2%}")
+        print(
+            f"  Probabilities: H={pred['home_win_probability']:.2%} "
+            f"D={pred['draw_probability']:.2%} A={pred['away_win_probability']:.2%}"
+        )
         print(f"  Confidence: {confidence:.3f}")
 
 
 @app.command()
 def evaluate(
-    detailed: bool = typer.Option(False, help="Run detailed evaluation with calibration and plots"),
-    season: bool = typer.Option(False, help="Evaluate performance across the current season (finished matches)"),
-    dynamic: bool = typer.Option(False, help="Enable expanding-window retraining during season evaluation"),
-    retrain_every: int = typer.Option(1, help="Retrain every N matchdays when --dynamic is set"),
-    prob_source: str = typer.Option("classifier", help="Outcome prob source: classifier|poisson|hybrid"),
-    hybrid_poisson_weight: float = typer.Option(0.5, help="When prob_source=hybrid: weight of Poisson probabilities [0,1]"),
-    proba_grid_max_goals: int = typer.Option(12, help="Grid cap for Poisson-derived probabilities (not scoreline grid)"),
-    poisson_draw_rho: float = typer.Option(0.0, help="Diagonal bump for draws in Poisson probs: multiply diag by exp(rho)"),
+    detailed: bool = typer.Option(
+        False, help="Run detailed evaluation with calibration and plots"
+    ),
+    season: bool = typer.Option(
+        False, help="Evaluate performance across the current season (finished matches)"
+    ),
+    dynamic: bool = typer.Option(
+        False, help="Enable expanding-window retraining during season evaluation"
+    ),
+    retrain_every: int = typer.Option(
+        1, help="Retrain every N matchdays when --dynamic is set"
+    ),
+    prob_source: str = typer.Option(
+        "classifier", help="Outcome prob source: classifier|poisson|hybrid"
+    ),
+    hybrid_poisson_weight: float = typer.Option(
+        0.5, help="When prob_source=hybrid: weight of Poisson probabilities [0,1]"
+    ),
+    proba_grid_max_goals: int = typer.Option(
+        12, help="Grid cap for Poisson-derived probabilities (not scoreline grid)"
+    ),
+    poisson_draw_rho: float = typer.Option(
+        0.0, help="Diagonal bump for draws in Poisson probs: multiply diag by exp(rho)"
+    ),
 ):
     """Evaluate predictor performance on test data."""
     from kicktipp_predictor.data import DataLoader
+    from kicktipp_predictor.evaluate import (
+        print_evaluation_report,
+        run_evaluation,
+        simple_benchmark,
+    )
     from kicktipp_predictor.predictor import MatchPredictor
-    from kicktipp_predictor.evaluate import print_evaluation_report, simple_benchmark, run_evaluation
 
     print("=" * 80)
     print("MODEL EVALUATION")
@@ -153,6 +192,7 @@ def evaluate(
 
     # Apply probability-source options to config
     from kicktipp_predictor.config import get_config
+
     cfg = get_config()
     cfg.model.prob_source = str(prob_source).strip().lower()
     cfg.model.hybrid_poisson_weight = float(hybrid_poisson_weight)
@@ -198,7 +238,7 @@ def evaluate(
     metrics = predictor.evaluate(test_df)
 
     # Compute benchmark
-    benchmark = simple_benchmark(test_df, strategy='home_win')
+    benchmark = simple_benchmark(test_df, strategy="home_win")
 
     # Print report
     print_evaluation_report(metrics, benchmark)
@@ -207,6 +247,7 @@ def evaluate(
 @app.command()
 def web(host: str = "127.0.0.1", port: int = 8000):
     from kicktipp_predictor.web.app import app as flask_app
+
     flask_app.run(host=host, port=port)
 
 
@@ -215,30 +256,45 @@ def tune(
     n_trials: int = typer.Option(100, help="Total Optuna trials across all workers"),
     n_splits: int = typer.Option(3, help="TimeSeriesSplit folds"),
     workers: int = typer.Option(1, help="Number of parallel worker processes"),
-    objective: str = typer.Option("ppg", help="Objective (PPG recommended): ppg|ppg_unweighted|logloss|brier|balanced_accuracy|accuracy|rps"),
+    objective: str = typer.Option(
+        "ppg",
+        help="Objective (PPG recommended): ppg|ppg_unweighted|logloss|brier|balanced_accuracy|accuracy|rps",
+    ),
     direction: str = typer.Option("auto", help="Direction: auto|maximize|minimize"),
-    compare: str | None = typer.Option(None, help="Comma-separated objectives to compare; overrides --objective (not recommended with balanced trainer)"),
+    compare: str | None = typer.Option(
+        None,
+        help="Comma-separated objectives to compare; overrides --objective (not recommended with balanced trainer)",
+    ),
     verbose: bool = typer.Option(False, help="Enable verbose inner logs during tuning"),
-    storage: str | None = typer.Option(None, help="Optuna storage URL for multi-process tuning (e.g., sqlite:////abs/path/study.db?timeout=60)"),
-    study_name: str | None = typer.Option(None, help="Optuna study name when using storage"),
+    storage: str | None = typer.Option(
+        None,
+        help="Optuna storage URL for multi-process tuning (e.g., sqlite:////abs/path/study.db?timeout=60)",
+    ),
+    study_name: str | None = typer.Option(
+        None, help="Optuna study name when using storage"
+    ),
     pruner: str = typer.Option("median", help="Pruner: none|median|hyperband"),
-    pruner_startup_trials: int = typer.Option(20, help="Trials before enabling pruning (median)"),
+    pruner_startup_trials: int = typer.Option(
+        20, help="Trials before enabling pruning (median)"
+    ),
 ):
     """Run Optuna tuning with selectable objectives and optional compare mode.
 
     When workers > 1, a shared storage is required. In compare mode, separate sqlite files are
     automatically created per objective if a sqlite storage URL is provided.
     """
-    import sys
-    import subprocess
-    from pathlib import Path
     import os
+    import subprocess
+    import sys
+    from pathlib import Path
 
     # Locate experiments/auto_tune.py relative to this file
     pkg_root = Path(__file__).resolve().parents[2]  # repo root
     autotune_path = pkg_root / "experiments" / "auto_tune.py"
     if not autotune_path.exists():
-        typer.echo(f"Could not find {autotune_path}. Run from a checkout with experiments present.")
+        typer.echo(
+            f"Could not find {autotune_path}. Run from a checkout with experiments present."
+        )
         raise typer.Exit(code=1)
 
     if workers < 1:
@@ -246,15 +302,19 @@ def tune(
 
     # Require storage for multi-worker coordination
     if workers > 1 and not storage:
-        typer.echo("When --workers > 1, you must provide --storage (e.g., sqlite:////abs/path/study.db?timeout=60)")
+        typer.echo(
+            "When --workers > 1, you must provide --storage (e.g., sqlite:////abs/path/study.db?timeout=60)"
+        )
         raise typer.Exit(code=2)
 
     def base_args(trials: int) -> list[str]:
         args = [
             sys.executable,
             str(autotune_path),
-            "--n-trials", str(max(0, int(trials))),
-            "--n-splits", str(n_splits),
+            "--n-trials",
+            str(max(0, int(trials))),
+            "--n-splits",
+            str(n_splits),
             "--verbose" if verbose else None,
         ]
         args = [a for a in args if a is not None]
@@ -283,10 +343,12 @@ def tune(
 
     env = os.environ.copy()
     # tell worker not to delete DB when coordinated by CLI
-    env['KTP_TUNE_COORDINATED'] = '1'
+    env["KTP_TUNE_COORDINATED"] = "1"
 
     # Determine objectives list
-    objectives = [o.strip() for o in compare.split(',') if o.strip()] if compare else [objective]
+    objectives = (
+        [o.strip() for o in compare.split(",") if o.strip()] if compare else [objective]
+    )
 
     # Serial execution (workers==1)
     if workers == 1:
@@ -299,7 +361,10 @@ def tune(
             if url:
                 cmd += ["--storage", url]
             if study_name:
-                cmd += ["--study-name", f"{study_name}-{obj}" if compare else study_name]
+                cmd += [
+                    "--study-name",
+                    f"{study_name}-{obj}" if compare else study_name,
+                ]
             p = subprocess.Popen(cmd, cwd=str(pkg_root), env=env)
             procs.append(p)
             p.wait()
@@ -313,7 +378,9 @@ def tune(
         for obj in objectives:
             url = sqlite_url_for(obj)
             if not url:
-                typer.echo("When --workers > 1, a storage URL is required (sqlite or RDBMS)")
+                typer.echo(
+                    "When --workers > 1, a storage URL is required (sqlite or RDBMS)"
+                )
                 raise typer.Exit(code=2)
             # 1) Initialize the study/db with a 0-trial run
             init_cmd = base_args(0) + ["--objective", obj, "--storage", url]
@@ -322,7 +389,9 @@ def tune(
             init_proc = subprocess.Popen(init_cmd, cwd=str(pkg_root), env=env)
             init_proc.wait()
             if init_proc.returncode != 0:
-                typer.echo(f"Failed to initialize storage for objective {obj}. Aborting.")
+                typer.echo(
+                    f"Failed to initialize storage for objective {obj}. Aborting."
+                )
                 raise typer.Exit(code=init_proc.returncode)
 
             # 2) Split total trials evenly across workers
@@ -354,7 +423,9 @@ def tune(
     # Multi-worker single objective
     if workers > 1:
         if not storage:
-            typer.echo("When --workers > 1, a storage URL is required (sqlite or RDBMS)")
+            typer.echo(
+                "When --workers > 1, a storage URL is required (sqlite or RDBMS)"
+            )
             raise typer.Exit(code=2)
         # 1) Initialize the study/db with a 0-trial run
         init_cmd = base_args(0) + ["--objective", objectives[0], "--storage", storage]
@@ -376,7 +447,12 @@ def tune(
         for trials in allocations:
             if trials <= 0:
                 continue
-            cmd = base_args(trials) + ["--objective", objectives[0], "--storage", storage]
+            cmd = base_args(trials) + [
+                "--objective",
+                objectives[0],
+                "--storage",
+                storage,
+            ]
             if study_name:
                 cmd += ["--study-name", study_name]
             p = subprocess.Popen(cmd, cwd=str(pkg_root), env=env)
@@ -393,13 +469,15 @@ def tune(
 
 @app.command()
 def shap(
-    seasons_back: int = typer.Option(3, help="Number of seasons back to sample training-like data"),
+    seasons_back: int = typer.Option(
+        3, help="Number of seasons back to sample training-like data"
+    ),
     sample: int = typer.Option(2000, help="Max samples for SHAP computation"),
 ):
     """Run SHAP analysis on the trained models and save summary plots."""
+    from kicktipp_predictor.analysis.shap_analysis import run_shap_for_predictor
     from kicktipp_predictor.data import DataLoader
     from kicktipp_predictor.predictor import MatchPredictor
-    from kicktipp_predictor.analysis.shap_analysis import run_shap_for_predictor
 
     print("=" * 80)
     print("SHAP ANALYSIS")
@@ -426,9 +504,10 @@ def shap(
 
     # Build X aligned to trained schema
     import pandas as pd
+
     X = pd.DataFrame(df, copy=True)
     # drop labels if present
-    for col in ['home_score', 'away_score', 'goal_difference', 'result']:
+    for col in ["home_score", "away_score", "goal_difference", "result"]:
         if col in X.columns:
             X.drop(columns=[col], inplace=True)
     # Ensure columns present and ordered
@@ -448,5 +527,3 @@ def shap(
 
 if __name__ == "__main__":
     app()
-
-
