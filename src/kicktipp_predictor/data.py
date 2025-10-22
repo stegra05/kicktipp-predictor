@@ -473,6 +473,25 @@ class DataLoader:
                 features_df["home_points_ewm5"], features_df["away_points_ewm5"]
             )
 
+        # Elo ratings (pre-match), computed leakage-safe from chronological results
+        try:
+            elo_match_df, elo_long_df = self._compute_elos_from_matches(matches)
+        except Exception:
+            elo_match_df, elo_long_df = None, None
+        if elo_match_df is not None and not elo_match_df.empty:
+            try:
+                features_df = features_df.merge(
+                    elo_match_df[["match_id", "home_elo", "away_elo"]],
+                    on="match_id",
+                    how="left",
+                )
+                # Derived Elo difference (home - away)
+                features_df["elo_diff"] = features_df.get(
+                    "home_elo", 0.0
+                ) - features_df.get("away_elo", 0.0)
+            except Exception:
+                pass
+
         # Targets
         features_df["goal_difference"] = (
             features_df["home_score"] - features_df["away_score"]
@@ -483,7 +502,7 @@ class DataLoader:
             np.where(features_df["goal_difference"] < 0, "A", "D"),
         )
 
-        # Optionally reduce to selected features if config/kept_features.yaml exists
+        # Optionally reduce to selected features if config/<selected_features_file> exists
         features_df = self._apply_selected_features(features_df)
 
         # Ensure deterministic column order (optional)
@@ -661,6 +680,44 @@ class DataLoader:
                 if away_col in features_df.columns:
                     features_df.rename(columns={away_col: f"away_{base}"}, inplace=True)
 
+        # Elo ratings as-of the match date (from historical only)
+        try:
+            _, elo_long_df = self._compute_elos_from_matches(historical_matches)
+        except Exception:
+            elo_long_df = None
+        if elo_long_df is not None and not elo_long_df.empty:
+            try:
+                # Prepare home/away elo frames
+                home_elo = elo_long_df.rename(
+                    columns={"team": "home_team", "elo": "home_elo"}
+                )[["home_team", "date", "home_elo"]].sort_values(["date"])
+                away_elo = elo_long_df.rename(
+                    columns={"team": "away_team", "elo": "away_elo"}
+                )[["away_team", "date", "away_elo"]].sort_values(["date"])
+                features_df = pd.merge_asof(
+                    features_df.sort_values("date"),
+                    home_elo,
+                    left_on="date",
+                    right_on="date",
+                    left_by="home_team",
+                    right_by="home_team",
+                    direction="backward",
+                )
+                features_df = pd.merge_asof(
+                    features_df.sort_values("date"),
+                    away_elo,
+                    left_on="date",
+                    right_on="date",
+                    left_by="away_team",
+                    right_by="away_team",
+                    direction="backward",
+                )
+                features_df["elo_diff"] = features_df.get(
+                    "home_elo", 0.0
+                ) - features_df.get("away_elo", 0.0)
+            except Exception:
+                pass
+
         # Derived diffs
         features_df["abs_form_points_diff"] = (
             features_df.get("home_form_points", 0)
@@ -769,7 +826,10 @@ class DataLoader:
         If the selection file is absent or unreadable, returns df unchanged.
         """
         try:
-            sel_path = self.config.paths.config_dir / "kept_features.yaml"
+            sel_filename = getattr(
+                self.config.model, "selected_features_file", "kept_features.yaml"
+            )
+            sel_path = self.config.paths.config_dir / sel_filename
             if not sel_path.exists():
                 return df
 
@@ -869,6 +929,57 @@ class DataLoader:
             default=0,
         )
         return long_df
+
+    def _compute_elos_from_matches(
+        self, matches: list[dict], K: float | int = 20, home_adv: float | int = 90
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Compute Elo ratings chronologically and return per-match and per-team timeseries.
+
+        Returns:
+            match_elos: DataFrame with columns ['match_id','home_elo','away_elo'] (pre-match ratings)
+            elo_long:  DataFrame with columns ['team','date','elo'] giving pre-match Elo per team per match
+        """
+        if not matches:
+            return pd.DataFrame(), pd.DataFrame()
+
+        df = pd.DataFrame(matches).copy()
+        if df.empty:
+            return pd.DataFrame(), pd.DataFrame()
+        df = df.sort_values(["date", "match_id"])  # chronological
+
+        ratings: dict[str, float] = defaultdict(lambda: 1500.0)
+        rows_match: list[dict] = []
+        rows_long: list[dict] = []
+
+        for _, m in df.iterrows():
+            mid = m.get("match_id")
+            date = m.get("date")
+            home = m.get("home_team")
+            away = m.get("away_team")
+            hs = m.get("home_score")
+            as_ = m.get("away_score")
+            r_h = float(ratings[home])
+            r_a = float(ratings[away])
+
+            rows_match.append({"match_id": mid, "home_elo": r_h, "away_elo": r_a})
+            rows_long.append({"team": home, "date": date, "elo": r_h})
+            rows_long.append({"team": away, "date": date, "elo": r_a})
+
+            if pd.notnull(hs) and pd.notnull(as_):
+                s_h = 1.0 if hs > as_ else (0.5 if hs == as_ else 0.0)
+                exp_h = 1.0 / (1.0 + 10 ** (-(r_h + float(home_adv) - r_a) / 400.0))
+                delta_h = float(K) * (s_h - exp_h)
+                ratings[home] = r_h + delta_h
+                ratings[away] = r_a - delta_h
+
+        match_elos = pd.DataFrame(rows_match).drop_duplicates(
+            subset=["match_id"], keep="last"
+        )
+        elo_long = pd.DataFrame(rows_long)
+        elo_long["date"] = (
+            pd.to_datetime(elo_long["date"]) if len(elo_long) else elo_long
+        )
+        return match_elos, elo_long
 
     def _compute_team_history_features(self, long_df: pd.DataFrame) -> pd.DataFrame:
         """Compute leakage-safe per-team expanding/rolling and momentum features.

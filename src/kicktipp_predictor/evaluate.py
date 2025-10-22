@@ -194,6 +194,50 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
         "n": int(len(preds_all)),
     }
 
+    # Diagnostics output directory
+    out_dir = os.path.join("data", "predictions")
+    ensure_dir(out_dir)
+
+    # Save blend debug CSV with per-match diagnostics if available
+    try:
+        debug_rows: list[dict] = []
+        for p in preds_all:
+            row = {
+                "match_id": p.get("match_id"),
+                "matchday": p.get("matchday"),
+                "home_team": p.get("home_team"),
+                "away_team": p.get("away_team"),
+                "predicted_home_score": p.get("predicted_home_score"),
+                "predicted_away_score": p.get("predicted_away_score"),
+                "home_expected_goals": p.get("home_expected_goals"),
+                "away_expected_goals": p.get("away_expected_goals"),
+                "home_win_probability": p.get("home_win_probability"),
+                "draw_probability": p.get("draw_probability"),
+                "away_win_probability": p.get("away_win_probability"),
+                "entropy": p.get("entropy"),
+                "blend_weight": p.get("blend_weight"),
+                "cls_p_H": p.get("cls_p_H"),
+                "cls_p_D": p.get("cls_p_D"),
+                "cls_p_A": p.get("cls_p_A"),
+                "pois_p_H": p.get("pois_p_H"),
+                "pois_p_D": p.get("pois_p_D"),
+                "pois_p_A": p.get("pois_p_A"),
+                "expected_points_pick": p.get("expected_points_pick"),
+                "actual_home_score": p.get("actual_home_score"),
+                "actual_away_score": p.get("actual_away_score"),
+                "points_earned": p.get("points_earned"),
+            }
+            debug_rows.append(row)
+        if len(debug_rows) > 0:
+            pd.DataFrame(debug_rows).to_csv(
+                os.path.join(out_dir, "blend_debug.csv"), index=False
+            )
+            console.print(
+                f"Blend diagnostics written to [bold]{os.path.join(out_dir, 'blend_debug.csv')}[/bold]"
+            )
+    except Exception as e:  # pragma: no cover
+        console.print(f"[yellow]Warning: could not write blend_debug.csv: {e}[/yellow]")
+
     # Overall quality breakdown
     exact_count = int(np.sum((ph == ah) & (pa == aa)))
     diff_count = int(np.sum(((ph - pa) == (ah - aa)) & ~((ph == ah) & (pa == aa))))
@@ -217,6 +261,29 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
         "accuracy": float(np.mean(np.array(y_true) == "H")),
     }
 
+    # Bootstrap CI for PPG delta (paired)
+    try:
+        rng = np.random.default_rng(42)
+        B = 2000
+        idx_all = (
+            np.arange(metrics["n"]) if metrics["n"] > 0 else np.array([], dtype=int)
+        )
+        deltas = []
+        if len(idx_all) > 0:
+            diff = (pts - base_pts).astype(float)
+            for _ in range(B):
+                bs = rng.choice(idx_all, size=len(idx_all), replace=True)
+                deltas.append(np.mean(diff[bs]))
+            ci_lo, ci_hi = (
+                float(np.percentile(deltas, 2.5)),
+                float(np.percentile(deltas, 97.5)),
+            )
+        else:
+            ci_lo, ci_hi = float("nan"), float("nan")
+        metrics["bootstrap_ci_ppg_delta"] = {"lo": ci_lo, "hi": ci_hi, "B": B}
+    except Exception as e:  # pragma: no cover
+        console.print(f"[yellow]Bootstrap CI computation failed: {e}[/yellow]")
+
     # Distributions
     label_counts = {lab: y_true.count(lab) for lab in LABELS_ORDER}
     pred_labels = [LABELS_ORDER[i] for i in np.argmax(P, axis=1)]
@@ -237,10 +304,6 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
     margin = sorted_probs[:, 0] - sorted_probs[:, 1]
     confidence = 0.6 * max_prob + 0.4 * margin
     conf_df = bin_by_confidence(confidence, y_true, P, pts, n_bins=5)
-
-    # Output directory
-    out_dir = os.path.join("data", "predictions")
-    ensure_dir(out_dir)
 
     # Save season metrics
     save_json({"main": metrics}, os.path.join(out_dir, "metrics_season.json"))

@@ -129,13 +129,35 @@ class ModelConfig:
 
     # Outcome probability source for evaluation and reporting
     # One of: 'classifier' (default), 'poisson', 'hybrid'
-    prob_source: str = "classifier"
+    prob_source: str = "hybrid"
     # When prob_source='hybrid', weight of Poisson-derived probabilities in [0,1]
     hybrid_poisson_weight: float = 0.5
+    # Hybrid weighting scheme: 'fixed' uses hybrid_poisson_weight, 'entropy' adapts per-match
+    hybrid_scheme: str = "entropy"
+    # Entropy-based hybrid weight bounds (in [0,1])
+    hybrid_entropy_w_min: float = 0.2
+    hybrid_entropy_w_max: float = 1.0
     # Max goals for Poisson probability grid used to derive P(H/D/A) (separate from scoreline grid)
     proba_grid_max_goals: int = 12
     # Draw bump for Poisson-derived probabilities: multiply diagonal cells by exp(rho) before normalization
     poisson_draw_rho: float = 0.0
+    # Joint model for Poisson score grid: 'independent' or 'dixon_coles'
+    poisson_joint: str = "dixon_coles"
+    # Dixon–Coles low-score correlation parameter (small magnitude, e.g., -0.05..0.05)
+    dixon_coles_rho: float = 0.0
+
+    # Feature selection list filename under config/ (default kept_features.yaml)
+    selected_features_file: str = "kept_features.yaml"
+
+    # Calibration of final blended probabilities
+    calibrator_enabled: bool = True
+    calibrator_method: str = (
+        "multinomial_logistic"  # or 'dirichlet' if external lib available
+    )
+    calibrator_c: float = 1.0
+    # Post-calibration class-prior anchoring
+    prior_anchor_enabled: bool = False
+    prior_anchor_strength: float = 0.15
 
     @property
     def goals_params(self) -> dict:
@@ -230,6 +252,18 @@ class Config:
                         config.model.hybrid_poisson_weight = float(
                             params["hybrid_poisson_weight"]
                         )
+                    if "hybrid_scheme" in params:
+                        config.model.hybrid_scheme = (
+                            str(params["hybrid_scheme"]).strip().lower()
+                        )
+                    if "hybrid_entropy_w_min" in params:
+                        config.model.hybrid_entropy_w_min = float(
+                            params["hybrid_entropy_w_min"]
+                        )
+                    if "hybrid_entropy_w_max" in params:
+                        config.model.hybrid_entropy_w_max = float(
+                            params["hybrid_entropy_w_max"]
+                        )
                     if "proba_grid_max_goals" in params:
                         config.model.proba_grid_max_goals = int(
                             params["proba_grid_max_goals"]
@@ -238,6 +272,12 @@ class Config:
                         config.model.poisson_draw_rho = float(
                             params["poisson_draw_rho"]
                         )
+                    if "poisson_joint" in params:
+                        config.model.poisson_joint = (
+                            str(params["poisson_joint"]).strip().lower()
+                        )
+                    if "dixon_coles_rho" in params:
+                        config.model.dixon_coles_rho = float(params["dixon_coles_rho"])
                     if "use_time_decay" in params:
                         config.model.use_time_decay = bool(params["use_time_decay"])
                     if "time_decay_half_life_days" in params:
@@ -248,6 +288,30 @@ class Config:
                         config.model.form_last_n = int(params["form_last_n"])
                     if "momentum_decay" in params:
                         config.model.momentum_decay = float(params["momentum_decay"])
+                    if "selected_features_file" in params:
+                        config.model.selected_features_file = str(
+                            params["selected_features_file"]
+                        ).strip()
+
+                    # Calibration & anchoring
+                    if "calibrator_enabled" in params:
+                        config.model.calibrator_enabled = bool(
+                            params["calibrator_enabled"]
+                        )
+                    if "calibrator_method" in params:
+                        config.model.calibrator_method = (
+                            str(params["calibrator_method"]).strip().lower()
+                        )
+                    if "calibrator_C" in params:
+                        config.model.calibrator_C = float(params["calibrator_C"])
+                    if "prior_anchor_enabled" in params:
+                        config.model.prior_anchor_enabled = bool(
+                            params["prior_anchor_enabled"]
+                        )
+                    if "prior_anchor_strength" in params:
+                        config.model.prior_anchor_strength = float(
+                            params["prior_anchor_strength"]
+                        )
 
                     # Outcome classifier hyperparameters
                     if "outcome_n_estimators" in params:

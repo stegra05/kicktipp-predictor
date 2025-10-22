@@ -18,6 +18,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from scipy.stats import poisson
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.utils.class_weight import compute_sample_weight
@@ -116,6 +117,8 @@ class MatchPredictor:
         self.away_goals_model: XGBRegressor | None = None
         self.feature_columns: list[str] = []
         self.label_encoder = LabelEncoder()
+        self.calibrator: LogisticRegression | None = None
+        self.train_class_prior: np.ndarray | None = None
         self._log(f"[MatchPredictor] Initialized with config: {self.config}")
 
     def _log(self, *args, **kwargs) -> None:
@@ -178,7 +181,41 @@ class MatchPredictor:
         self._train_goal_models(
             X, y_home, y_away, sample_weights=time_weights, dates=dates
         )
-        self._train_outcome_model(X, y_result_encoded, time_weights)
+        val_ctx = self._train_outcome_model(X, y_result_encoded, time_weights)
+
+        # Store class prior from full training labels (for optional prior anchoring)
+        prior = np.zeros(3, dtype=float)
+        for i, lab in enumerate(self.label_encoder.classes_):
+            prior[i] = float(np.mean(y_result.values == lab))
+        self.train_class_prior = prior / max(1e-15, prior.sum())
+
+        # Optional calibrator on blended validation probabilities (leakage-safe holdout)
+        try:
+            if self.config.model.calibrator_enabled and val_ctx is not None:
+                X_val = val_ctx.get("X_val")
+                y_val_enc = val_ctx.get("y_val_enc")
+                cls_val_probs = val_ctx.get("cls_val_probs")
+                if (
+                    X_val is not None
+                    and y_val_enc is not None
+                    and cls_val_probs is not None
+                    and self.home_goals_model is not None
+                    and self.away_goals_model is not None
+                ):
+                    # Get Poisson probabilities for the same validation rows
+                    hlam = np.maximum(
+                        self.home_goals_model.predict(X_val),
+                        self.config.model.min_lambda,
+                    )
+                    alam = np.maximum(
+                        self.away_goals_model.predict(X_val),
+                        self.config.model.min_lambda,
+                    )
+                    pois_val = self._calculate_poisson_outcome_probs(hlam, alam)
+                    blend_val = self._blend_probs(cls_val_probs, pois_val)
+                    self._fit_calibrator(blend_val, y_val_enc)
+        except Exception as e:  # pragma: no cover - optional
+            self._log(f"[Calibrator] Skipped due to error: {e}")
 
         self._log("Training completed.")
 
@@ -248,7 +285,7 @@ class MatchPredictor:
         self._log("Training outcome classifier...")
         start = time.perf_counter()
 
-        X_train, _, y_train, _, tw_train, _ = train_test_split(
+        X_train, X_val, y_train, y_val, tw_train, tw_val = train_test_split(
             X,
             y_result_encoded,
             time_weights,
@@ -276,6 +313,12 @@ class MatchPredictor:
         self._log(
             f"Applied balanced class weights, draw_boost={draw_boost}, and time-decay weighting."
         )
+        # Return validation context for calibrator fitting
+        try:
+            cls_val_probs = self.outcome_model.predict_proba(X_val)
+        except Exception:
+            cls_val_probs = None
+        return {"X_val": X_val, "y_val_enc": y_val, "cls_val_probs": cls_val_probs}
 
     def predict(
         self, features_df: pd.DataFrame, workers: int | None = None
@@ -294,10 +337,6 @@ class MatchPredictor:
 
         X = self._prepare_features(features_df)
         classifier_probs = self._get_calibrated_probabilities(X)
-        outcomes = self.label_encoder.inverse_transform(
-            np.argmax(classifier_probs, axis=1)
-        )
-
         home_lambdas = np.maximum(
             self.home_goals_model.predict(X), self.config.model.min_lambda
         )
@@ -305,16 +344,25 @@ class MatchPredictor:
             self.away_goals_model.predict(X), self.config.model.min_lambda
         )
 
-        scorelines = self._compute_scorelines(
-            outcomes, home_lambdas, away_lambdas, workers
-        )
-
-        final_probs = self._derive_final_probabilities(
+        # Final blended probabilities (with optional calibration & anchoring)
+        final_probs, diag = self._derive_final_probabilities(
             classifier_probs, home_lambdas, away_lambdas
         )
 
+        # Choose scoreline via expected KickTipp points
+        scorelines, ep_values = self._compute_ep_scorelines(home_lambdas, away_lambdas)
+
+        outcomes = self.label_encoder.inverse_transform(np.argmax(final_probs, axis=1))
+
         return self._format_predictions(
-            features_df, outcomes, scorelines, final_probs, home_lambdas, away_lambdas
+            features_df,
+            outcomes,
+            scorelines,
+            final_probs,
+            home_lambdas,
+            away_lambdas,
+            diag,
+            ep_values,
         )
 
     def _prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -364,45 +412,270 @@ class MatchPredictor:
         ]
 
     def _derive_final_probabilities(self, classifier_probs, home_lambdas, away_lambdas):
-        """Derives final outcome probabilities based on the configured source."""
+        """Blend classifier and Poisson probabilities, then calibrate and anchor."""
         prob_source = self.config.model.prob_source
+        pois_probs = self._calculate_poisson_outcome_probs(home_lambdas, away_lambdas)
+
         if prob_source == "classifier":
-            return classifier_probs
+            blend = classifier_probs
+            weights = np.zeros(len(classifier_probs))
+            entropy = -np.sum(
+                np.clip(classifier_probs, 1e-15, 1.0)
+                * np.log(np.clip(classifier_probs, 1e-15, 1.0)),
+                axis=1,
+            ) / np.log(3.0)
+        elif prob_source == "poisson":
+            blend = pois_probs
+            weights = np.ones(len(pois_probs))
+            entropy = -np.sum(
+                np.clip(classifier_probs, 1e-15, 1.0)
+                * np.log(np.clip(classifier_probs, 1e-15, 1.0)),
+                axis=1,
+            ) / np.log(3.0)
+        else:
+            # Hybrid
+            weights = self._compute_entropy_weights(classifier_probs)
+            blend = self._blend_probs(classifier_probs, pois_probs, weights)
+            entropy = -np.sum(
+                np.clip(classifier_probs, 1e-15, 1.0)
+                * np.log(np.clip(classifier_probs, 1e-15, 1.0)),
+                axis=1,
+            ) / np.log(3.0)
 
-        poisson_probs = self._calculate_poisson_outcome_probs(
-            home_lambdas, away_lambdas
+        # Calibrate and prior-anchor
+        calibrated = self._apply_calibration_and_anchoring(blend)
+        diag = {
+            "weights": weights,
+            "entropy": entropy,
+            "classifier_probs": classifier_probs,
+            "poisson_probs": pois_probs,
+            "precalibrated": blend,
+            "postcalibrated": calibrated,
+        }
+        return calibrated, diag
+
+    def _compute_entropy_weights(self, classifier_probs: np.ndarray) -> np.ndarray:
+        scheme = getattr(self.config.model, "hybrid_scheme", "entropy").lower()
+        if scheme != "entropy":
+            return np.full(
+                len(classifier_probs), float(self.config.model.hybrid_poisson_weight)
+            )
+        h = -np.sum(
+            np.clip(classifier_probs, 1e-15, 1.0)
+            * np.log(np.clip(classifier_probs, 1e-15, 1.0)),
+            axis=1,
         )
-        if prob_source == "poisson":
-            return poisson_probs
+        h_norm = h / np.log(3.0)
+        w_min = float(self.config.model.hybrid_entropy_w_min)
+        w_max = float(self.config.model.hybrid_entropy_w_max)
+        w = w_min + (w_max - w_min) * np.clip(h_norm, 0.0, 1.0)
+        return np.clip(w, 0.0, 1.0)
 
-        w = float(self.config.model.hybrid_poisson_weight)
-        final_probs = (1.0 - w) * classifier_probs + w * poisson_probs
-        return final_probs / final_probs.sum(axis=1, keepdims=True)
+    def _blend_probs(
+        self,
+        cls: np.ndarray,
+        pois: np.ndarray,
+        weights: np.ndarray | float | None = None,
+    ) -> np.ndarray:
+        if weights is None or isinstance(weights, float):
+            w = (
+                float(weights)
+                if weights is not None
+                else float(self.config.model.hybrid_poisson_weight)
+            )
+            blend = (1.0 - w) * cls + w * pois
+        else:
+            w = weights.reshape(-1, 1)
+            blend = (1.0 - w) * cls + w * pois
+        blend = np.clip(blend, 1e-15, 1.0)
+        return blend / blend.sum(axis=1, keepdims=True)
 
     def _calculate_poisson_outcome_probs(self, home_lambdas, away_lambdas):
-        """Vectorized calculation of outcome probabilities from Poisson lambdas."""
-        G = self.config.model.proba_grid_max_goals
-        x = np.arange(G + 1)
-        ph = poisson.pmf(x, home_lambdas[:, None])
-        pa = poisson.pmf(x, away_lambdas[:, None])
-        grid = np.einsum("ni,nj->nij", ph, pa)
-
+        """Outcome probabilities from Poisson lambdas with per-match dynamic grid and optional diagonal bump."""
+        n = len(home_lambdas)
+        probs = np.zeros((n, 3), dtype=float)
+        max_cap = int(self.config.model.proba_grid_max_goals)
         rho = float(self.config.model.poisson_draw_rho)
-        if rho != 0.0:
-            idx = np.arange(G + 1)
-            grid[:, idx, idx] *= np.exp(rho)
+        for i in range(n):
+            lam_h = float(home_lambdas[i])
+            lam_a = float(away_lambdas[i])
+            G = int(min(max_cap, int(np.ceil(max(lam_h, lam_a) + 4))))
+            x = np.arange(G + 1)
+            ph = poisson.pmf(x, lam_h)
+            pa = poisson.pmf(x, lam_a)
+            grid = np.outer(ph, pa)
+            # Optional Dixon–Coles low-score dependence
+            grid = self._maybe_apply_dixon_coles(grid, lam_h, lam_a)
+            # Optional diagonal bump legacy (minor tweak)
+            if rho != 0.0:
+                idx = np.arange(G + 1)
+                grid[idx, idx] *= np.exp(rho)
+            total = np.sum(grid)
+            if total <= 0:
+                probs[i] = np.array([1 / 3, 1 / 3, 1 / 3])
+                continue
+            grid /= total
+            upper = np.triu(grid, k=1)
+            lower = np.tril(grid, k=-1)
+            diag = np.diag(np.diag(grid))
+            pH = float(np.sum(upper))
+            pD = float(np.sum(np.diag(grid)))
+            pA = float(np.sum(lower))
+            probs[i] = np.array([pH, pD, pA])
+        probs = np.clip(probs, 1e-15, 1.0)
+        return probs / probs.sum(axis=1, keepdims=True)
 
-        M_gt = np.triu(np.ones((G + 1, G + 1)), k=1)
-        M_lt = np.tril(np.ones((G + 1, G + 1)), k=-1)
-        pH = np.sum(grid * M_gt, axis=(1, 2))
-        pD = np.sum(np.diagonal(grid, axis1=1, axis2=2), axis=1)
-        pA = np.sum(grid * M_lt, axis=(1, 2))
+    def _compute_ep_scorelines(
+        self, home_lambdas: np.ndarray, away_lambdas: np.ndarray
+    ) -> tuple[list[tuple[int, int]], np.ndarray]:
+        """Choose scorelines maximizing expected KickTipp points for each match."""
+        n = len(home_lambdas)
+        picks: list[tuple[int, int]] = []
+        ep_values = np.zeros(n, dtype=float)
+        max_cap = int(self.config.model.max_goals)
+        rho = float(self.config.model.poisson_draw_rho)
+        common_order = [
+            (2, 1),
+            (1, 0),
+            (1, 1),
+            (0, 1),
+            (2, 0),
+            (0, 0),
+            (2, 2),
+            (3, 1),
+            (1, 2),
+            (3, 0),
+            (0, 3),
+            (3, 2),
+            (2, 3),
+        ]
+        for i in range(n):
+            lam_h = float(home_lambdas[i])
+            lam_a = float(away_lambdas[i])
+            G = int(min(max_cap, int(np.ceil(max(lam_h, lam_a) + 4))))
+            x = np.arange(G + 1)
+            ph = poisson.pmf(x, lam_h)
+            pa = poisson.pmf(x, lam_a)
+            grid = np.outer(ph, pa)
+            # Optional Dixon–Coles
+            grid = self._maybe_apply_dixon_coles(grid, lam_h, lam_a)
+            if rho != 0.0:
+                idx = np.arange(G + 1)
+                grid[idx, idx] *= np.exp(rho)
+            total = np.sum(grid)
+            if total <= 0:
+                picks.append((2, 1))
+                ep_values[i] = 0.0
+                continue
+            grid /= total
+            # Precompute sums for same outcome categories and same goal-difference
+            pH = float(np.sum(np.triu(grid, k=1)))
+            pD = float(np.sum(np.diag(grid)))
+            pA = float(np.sum(np.tril(grid, k=-1)))
+            # Precompute sum of each diagonal (goal diff d = h - a)
+            sum_by_diff = {}
+            for d in range(-G, G + 1):
+                sum_by_diff[d] = float(np.sum(np.diagonal(grid, offset=d)))
 
-        probs = np.stack([pH, pD, pA], axis=1)
-        return probs / np.sum(probs, axis=1, keepdims=True)
+            best_ep = -1.0
+            best = (2, 1)
+            # Evaluate expected points efficiently using identity: EP = exact + sum_diff + 2 * p_outcome
+            for h in range(G + 1):
+                for a in range(G + 1):
+                    e = float(grid[h, a])
+                    d = h - a
+                    s = sum_by_diff.get(d, 0.0)
+                    outcome_p = pD if d == 0 else (pH if d > 0 else pA)
+                    ep = e + s + 2.0 * outcome_p
+                    if ep > best_ep + 1e-12:
+                        best_ep = ep
+                        best = (h, a)
+                    elif abs(ep - best_ep) <= 1e-12:
+                        # Tie-break with common scoreline preference
+                        if best not in common_order and (h, a) in common_order:
+                            best = (h, a)
+                        elif best in common_order and (h, a) in common_order:
+                            if common_order.index((h, a)) < common_order.index(best):
+                                best = (h, a)
+            picks.append(best)
+            ep_values[i] = best_ep
+        return picks, ep_values
+
+    def _maybe_apply_dixon_coles(
+        self, grid: np.ndarray, lam_h: float, lam_a: float
+    ) -> np.ndarray:
+        """Apply Dixon–Coles low-score adjustment if enabled in config.
+
+        Adjusts probabilities for (0,0), (0,1), (1,0), (1,1) using a small rho.
+        """
+        try:
+            if (
+                getattr(self.config.model, "poisson_joint", "independent").lower()
+                != "dixon_coles"
+            ):
+                return grid
+            rho = float(getattr(self.config.model, "dixon_coles_rho", 0.0))
+            if abs(rho) < 1e-12:
+                return grid
+            G = grid.shape[0] - 1
+            P = np.array(grid, copy=True)
+            # τ adjustments (common approximation)
+            # clip indexes
+            P[0, 0] *= max(0.0, 1.0 - lam_h * lam_a * rho)
+            if G >= 1:
+                P[0, 1] *= max(0.0, 1.0 + lam_h * rho)
+                P[1, 0] *= max(0.0, 1.0 + lam_a * rho)
+                P[1, 1] *= max(0.0, 1.0 - rho)
+            return P
+        except Exception:
+            return grid
+
+    def _apply_calibration_and_anchoring(self, probs: np.ndarray) -> np.ndarray:
+        calibrated = np.array(probs, copy=True)
+        if self.config.model.calibrator_enabled and self.calibrator is not None:
+            try:
+                X_cal = np.log(np.clip(calibrated, 1e-15, 1.0))
+                calibrated = self.calibrator.predict_proba(X_cal)
+            except Exception:
+                pass
+        if (
+            self.config.model.prior_anchor_enabled
+            and self.train_class_prior is not None
+        ):
+            s = float(self.config.model.prior_anchor_strength)
+            prior = np.clip(self.train_class_prior, 1e-8, 1.0)
+            anchored = (np.clip(calibrated, 1e-15, 1.0) ** (1.0 - s)) * (
+                prior.reshape(1, -1) ** s
+            )
+            anchored = np.clip(anchored, 1e-15, 1.0)
+            anchored /= anchored.sum(axis=1, keepdims=True)
+            return anchored
+        return calibrated
+
+    def _fit_calibrator(self, probs: np.ndarray, y_enc: np.ndarray) -> None:
+        method = getattr(self.config.model, "calibrator_method", "multinomial_logistic")
+        if method == "multinomial_logistic":
+            X_cal = np.log(np.clip(probs, 1e-15, 1.0))
+            C = float(getattr(self.config.model, "calibrator_C", 1.0))
+            lr = LogisticRegression(
+                multi_class="multinomial", solver="lbfgs", C=C, max_iter=1000
+            )
+            lr.fit(X_cal, y_enc)
+            self.calibrator = lr
+        else:
+            # Placeholder: keep None if unsupported method
+            self.calibrator = None
 
     def _format_predictions(
-        self, df, outcomes, scorelines, final_probs, home_lambdas, away_lambdas
+        self,
+        df,
+        outcomes,
+        scorelines,
+        final_probs,
+        home_lambdas,
+        away_lambdas,
+        diag: dict,
+        ep_values: np.ndarray,
     ):
         """Assembles the final list of prediction dictionaries."""
         predictions = []
@@ -424,6 +697,44 @@ class MatchPredictor:
                 "away_win_probability": float(final_probs[i][prob_map.get("A", 2)]),
                 "confidence": float(probs_sorted[0] - probs_sorted[1]),
                 "max_probability": float(probs_sorted[0]),
+                # Diagnostics
+                "entropy": float(diag.get("entropy", [np.nan] * len(df))[i])
+                if isinstance(diag.get("entropy"), np.ndarray)
+                else float("nan"),
+                "blend_weight": float(diag.get("weights", [np.nan] * len(df))[i])
+                if isinstance(diag.get("weights"), np.ndarray)
+                else float("nan"),
+                "cls_p_H": float(
+                    diag.get("classifier_probs", np.zeros_like(final_probs))[i][
+                        prob_map.get("H", 0)
+                    ]
+                ),
+                "cls_p_D": float(
+                    diag.get("classifier_probs", np.zeros_like(final_probs))[i][
+                        prob_map.get("D", 1)
+                    ]
+                ),
+                "cls_p_A": float(
+                    diag.get("classifier_probs", np.zeros_like(final_probs))[i][
+                        prob_map.get("A", 2)
+                    ]
+                ),
+                "pois_p_H": float(
+                    diag.get("poisson_probs", np.zeros_like(final_probs))[i][
+                        prob_map.get("H", 0)
+                    ]
+                ),
+                "pois_p_D": float(
+                    diag.get("poisson_probs", np.zeros_like(final_probs))[i][
+                        prob_map.get("D", 1)
+                    ]
+                ),
+                "pois_p_A": float(
+                    diag.get("poisson_probs", np.zeros_like(final_probs))[i][
+                        prob_map.get("A", 2)
+                    ]
+                ),
+                "expected_points_pick": float(ep_values[i]),
             }
             predictions.append(pred)
         return predictions
@@ -441,8 +752,17 @@ class MatchPredictor:
         metadata = {
             "feature_columns": self.feature_columns,
             "label_encoder": self.label_encoder,
+            "train_class_prior": self.train_class_prior,
         }
         joblib.dump(metadata, self.config.paths.models_dir / "metadata.joblib")
+        # Save calibrator if available
+        try:
+            if self.calibrator is not None:
+                joblib.dump(
+                    self.calibrator, self.config.paths.models_dir / "calibrator.joblib"
+                )
+        except Exception:
+            pass
         self._log("Models saved successfully.")
 
     def load_models(self):
@@ -460,6 +780,14 @@ class MatchPredictor:
         metadata = joblib.load(self.config.paths.models_dir / "metadata.joblib")
         self.feature_columns = metadata["feature_columns"]
         self.label_encoder = metadata["label_encoder"]
+        self.train_class_prior = metadata.get("train_class_prior")
+        # Load calibrator if present
+        try:
+            cal_path = self.config.paths.models_dir / "calibrator.joblib"
+            if cal_path.exists():
+                self.calibrator = joblib.load(cal_path)
+        except Exception:
+            self.calibrator = None
         self._log("Models loaded successfully.")
 
     def evaluate(self, test_df: pd.DataFrame) -> dict:

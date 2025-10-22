@@ -422,3 +422,37 @@ def compute_points(pred_home, pred_away, act_home, act_away):
     act_outcome = np.where(ah > aa, "H", np.where(aa > ah, "A", "D"))
     points[(pred_outcome == act_outcome) & rem] = 2
     return points
+
+
+def expected_points_from_grid(grid: np.ndarray) -> tuple[float, tuple[int, int]]:
+    """Compute maximum expected KickTipp points and corresponding scoreline from a joint grid.
+
+    This helper is not used directly in the pipeline but can support tests/diagnostics.
+    """
+    import numpy as np
+
+    G = grid.shape[0] - 1
+    grid = np.asarray(grid, dtype=float)
+    if grid.ndim != 2 or grid.shape[0] != grid.shape[1]:
+        return 0.0, (2, 1)
+    total = np.sum(grid)
+    if total <= 0:
+        return 0.0, (2, 1)
+    P = grid / total
+    pH = float(np.sum(np.triu(P, k=1)))
+    pD = float(np.sum(np.diag(P)))
+    pA = float(np.sum(np.tril(P, k=-1)))
+    sum_by_diff = {d: float(np.sum(np.diagonal(P, offset=d))) for d in range(-G, G + 1)}
+    best_ep = -1.0
+    best = (2, 1)
+    for h in range(G + 1):
+        for a in range(G + 1):
+            e = float(P[h, a])
+            d = h - a
+            s = sum_by_diff.get(d, 0.0)
+            outcome_p = pD if d == 0 else (pH if d > 0 else pA)
+            ep = e + s + 2.0 * outcome_p
+            if ep > best_ep:
+                best_ep = ep
+                best = (h, a)
+    return best_ep, best

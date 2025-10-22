@@ -57,7 +57,7 @@ def predict(
         1, help="Process workers for scoreline selection ( >1 enables parallelism)"
     ),
     prob_source: str = typer.Option(
-        "classifier", help="Outcome prob source: classifier|poisson|hybrid"
+        "hybrid", help="Outcome prob source: classifier|poisson|hybrid"
     ),
     hybrid_poisson_weight: float = typer.Option(
         0.5, help="When prob_source=hybrid: weight of Poisson probabilities [0,1]"
@@ -155,7 +155,7 @@ def evaluate(
         1, help="Retrain every N matchdays during dynamic season evaluation"
     ),
     prob_source: str = typer.Option(
-        "classifier", help="Outcome prob source: classifier|poisson|hybrid"
+        "hybrid", help="Outcome prob source: classifier|poisson|hybrid"
     ),
     hybrid_poisson_weight: float = typer.Option(
         0.5, help="When prob_source=hybrid: weight of Poisson probabilities [0,1]"

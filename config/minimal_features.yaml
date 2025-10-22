@@ -1,0 +1,15 @@
+home_elo
+away_elo
+elo_diff
+home_avg_goals_for
+home_avg_goals_against
+away_avg_goals_for
+away_avg_goals_against
+home_form_points
+away_form_points
+home_goals_for_ewm5
+away_goals_for_ewm5
+home_goals_against_ewm5
+away_goals_against_ewm5
+matchday
+date
