@@ -6,6 +6,7 @@ Removes the Optuna SQLite storage database after run to start fresh each time.
 """
 
 import argparse
+import functools
 import os
 import sys
 import time
@@ -62,6 +63,37 @@ try:
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 except Exception as _e:  # pragma: no cover
     optuna = None
+
+
+def _retry_on_database_lock(max_retries: int = 3, delay: float = 1.0):
+    """Decorator to retry database operations on SQLite lock errors."""
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    # Check if it's a database lock error
+                    if (
+                        "database is locked" in str(e).lower()
+                        or "sqlite3.OperationalError" in str(type(e))
+                        or "StorageInternalError" in str(type(e))
+                    ):
+                        if attempt < max_retries - 1:
+                            time.sleep(delay * (2**attempt))  # Exponential backoff
+                            continue
+                    # If it's not a database lock error, re-raise immediately
+                    raise
+            # If we've exhausted all retries, raise the last exception
+            raise last_exception
+
+        return wrapper
+
+    return decorator
 
 
 def _objective_direction(objective: str) -> str:
@@ -456,10 +488,13 @@ def main():
             )
         )
     else:
-        # Simple text output for multi-worker mode
+        # Suppress output for multi-worker mode to prevent console chaos
         console = None
-        print("Kicktipp Predictor Hyperparameter Tuning (Multi-worker mode)")
-        print("=" * 60)
+        # Only print minimal info for the first worker to avoid spam
+        worker_id = os.environ.get("OPTUNA_WORKER_ID", "unknown")
+        if worker_id == "0" or worker_id == "unknown":
+            print("Kicktipp Predictor Hyperparameter Tuning (Multi-worker mode)")
+            print("=" * 60)
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--n-trials", type=int, default=100, help="Optuna trials")
@@ -547,9 +582,10 @@ def main():
         os.environ.setdefault("NUMEXPR_NUM_THREADS", str(args.omp_threads))
 
     # Load data with appropriate progress display
-    _safe_print(
-        console, "\n📊 Data Loading Phase", "\n[bold]📊 Data Loading Phase[/bold]"
-    )
+    if not is_multiworker:
+        _safe_print(
+            console, "\n📊 Data Loading Phase", "\n[bold]📊 Data Loading Phase[/bold]"
+        )
 
     if console is not None:
         # Rich progress for single-worker mode
@@ -574,23 +610,20 @@ def main():
             features_df = data_loader.create_features_from_matches(all_matches)
             progress.update(task2, description=f"✅ Created {len(features_df)} samples")
     else:
-        # Simple text progress for multi-worker mode
-        print("Loading historical data...")
+        # Silent loading for multi-worker mode to prevent console chaos
         data_loader = DataLoader()
         current_season = data_loader.get_current_season()
         start_season = current_season - 2
         all_matches = data_loader.fetch_historical_seasons(start_season, current_season)
-        print(f"✅ Loaded {len(all_matches)} matches")
-
-        print("Creating features...")
         features_df = data_loader.create_features_from_matches(all_matches)
-        print(f"✅ Created {len(features_df)} samples")
 
-    _safe_print(
-        console,
-        f"✓ Data loaded: {len(all_matches)} matches → {len(features_df)} samples",
-        f"[green]✓[/green] Data loaded: [bold]{len(all_matches)}[/bold] matches → [bold]{len(features_df)}[/bold] samples",
-    )
+    # Only show data loading summary in single-worker mode
+    if not is_multiworker:
+        _safe_print(
+            console,
+            f"✓ Data loaded: {len(all_matches)} matches → {len(features_df)} samples",
+            f"[green]✓[/green] Data loaded: [bold]{len(all_matches)}[/bold] matches → [bold]{len(features_df)}[/bold] samples",
+        )
 
     # Build and run study
     def _fmt_dur(sec: float) -> str:
@@ -604,7 +637,7 @@ def main():
     total_cv_trainings = total_trials * int(max(1, args.n_splits))
 
     # Verbosity reflects CLI flag only (quiet by default, even with multiple jobs)
-    effective_verbose = bool(args.verbose)
+    effective_verbose = bool(args.verbose) and not is_multiworker
 
     # Precompute CV folds once to ensure identical splits across objectives
     tscv = TimeSeriesSplit(n_splits=args.n_splits)
@@ -616,43 +649,33 @@ def main():
     else:
         objectives_to_run = [args.objective]
 
-    # Display configuration
-    _safe_print(console, "\n⚙️ Configuration", "\n[bold]⚙️ Configuration[/bold]")
+    # Display configuration only in single-worker mode
+    if not is_multiworker:
+        _safe_print(console, "\n⚙️ Configuration", "\n[bold]⚙️ Configuration[/bold]")
 
-    if console is not None:
-        # Rich table for single-worker mode
-        config_table = Table(title="Tuning Configuration", box=box.ROUNDED)
-        config_table.add_column("Parameter", style="cyan", no_wrap=True)
-        config_table.add_column("Value", style="magenta")
+        if console is not None:
+            # Rich table for single-worker mode
+            config_table = Table(title="Tuning Configuration", box=box.ROUNDED)
+            config_table.add_column("Parameter", style="cyan", no_wrap=True)
+            config_table.add_column("Value", style="magenta")
 
-        config_table.add_row("Total Trials", str(total_trials))
-        config_table.add_row("CV Splits", str(args.n_splits))
-        config_table.add_row("Total CV Trainings", str(total_cv_trainings))
-        config_table.add_row("OMP Threads", str(args.omp_threads or 1))
-        config_table.add_row("Pruner", args.pruner)
-        config_table.add_row("Storage", args.storage or "Memory")
-        config_table.add_row("Objectives", ", ".join(objectives_to_run))
-        config_table.add_row("Mode", "Compare" if args.compare else "Single")
+            config_table.add_row("Total Trials", str(total_trials))
+            config_table.add_row("CV Splits", str(args.n_splits))
+            config_table.add_row("Total CV Trainings", str(total_cv_trainings))
+            config_table.add_row("OMP Threads", str(args.omp_threads or 1))
+            config_table.add_row("Pruner", args.pruner)
+            config_table.add_row("Storage", args.storage or "Memory")
+            config_table.add_row("Objectives", ", ".join(objectives_to_run))
+            config_table.add_row("Mode", "Compare" if args.compare else "Single")
 
-        console.print(config_table)
-    else:
-        # Simple text table for multi-worker mode
-        print("Tuning Configuration:")
-        print(f"  Total Trials: {total_trials}")
-        print(f"  CV Splits: {args.n_splits}")
-        print(f"  Total CV Trainings: {total_cv_trainings}")
-        print(f"  OMP Threads: {args.omp_threads or 1}")
-        print(f"  Pruner: {args.pruner}")
-        print(f"  Storage: {args.storage or 'Memory'}")
-        print(f"  Objectives: {', '.join(objectives_to_run)}")
-        print(f"  Mode: {'Compare' if args.compare else 'Single'}")
+            console.print(config_table)
 
-    if args.compare:
-        _safe_print(
-            console,
-            f"⚠️ Compare mode will take approximately {len(objectives_to_run)}× the time of a single run.",
-            f"[yellow]⚠️[/yellow] Compare mode will take approximately [bold]{len(objectives_to_run)}×[/bold] the time of a single run.",
-        )
+        if args.compare:
+            _safe_print(
+                console,
+                f"⚠️ Compare mode will take approximately {len(objectives_to_run)}× the time of a single run.",
+                f"[yellow]⚠️[/yellow] Compare mode will take approximately [bold]{len(objectives_to_run)}×[/bold] the time of a single run.",
+            )
 
     # Configure pruner
     pruner = None
@@ -685,17 +708,21 @@ def main():
                 console,
             )
 
-            # Create study, optionally with storage
-            if args.storage:
-                study = optuna.create_study(
-                    direction=study_direction,
-                    storage=args.storage,
-                    study_name=((args.study_name or "kicktipp-tune") + f"-{obj}"),
-                    load_if_exists=True,
-                    pruner=pruner,
-                )
-            else:
-                study = optuna.create_study(direction=study_direction, pruner=pruner)
+            # Create study, optionally with storage (with retry logic for database locks)
+            @_retry_on_database_lock(max_retries=5, delay=2.0)
+            def create_study():
+                if args.storage:
+                    return optuna.create_study(
+                        direction=study_direction,
+                        storage=args.storage,
+                        study_name=((args.study_name or "kicktipp-tune") + f"-{obj}"),
+                        load_if_exists=True,
+                        pruner=pruner,
+                    )
+                else:
+                    return optuna.create_study(direction=study_direction, pruner=pruner)
+
+            study = create_study()
 
             # Rich progress tracking
             progress_data = {
@@ -717,41 +744,49 @@ def main():
                 except Exception:
                     pass
 
-            _safe_print(
-                console,
-                f"\n🎯 Optimizing Objective: {obj}",
-                f"\n[bold]🎯 Optimizing Objective: [cyan]{obj}[/cyan][/bold]",
-            )
-            _safe_print(
-                console,
-                f"Direction: {study_direction} | Trials: {args.n_trials} | CV Splits: {args.n_splits}",
-                f"[dim]Direction: {study_direction} | Trials: {args.n_trials} | CV Splits: {args.n_splits}[/dim]",
-            )
+            # Only show objective info in single-worker mode
+            if not is_multiworker:
+                _safe_print(
+                    console,
+                    f"\n🎯 Optimizing Objective: {obj}",
+                    f"\n[bold]🎯 Optimizing Objective: [cyan]{obj}[/cyan][/bold]",
+                )
+                _safe_print(
+                    console,
+                    f"Direction: {study_direction} | Trials: {args.n_trials} | CV Splits: {args.n_splits}",
+                    f"[dim]Direction: {study_direction} | Trials: {args.n_trials} | CV Splits: {args.n_splits}[/dim]",
+                )
 
             start = time.time()
 
-            # Run optimization with simple progress display
-            study.optimize(
-                objective_fn,
-                n_trials=args.n_trials,
-                n_jobs=1,
-                callbacks=[_progress_cb],
-                show_progress_bar=False,
-            )
+            # Run optimization with simple progress display (with retry logic for database locks)
+            @_retry_on_database_lock(max_retries=3, delay=1.0)
+            def run_optimization():
+                study.optimize(
+                    objective_fn,
+                    n_trials=args.n_trials,
+                    n_jobs=1,
+                    callbacks=[_progress_cb],
+                    show_progress_bar=False,
+                )
+
+            run_optimization()
 
             duration = time.time() - start
-            try:
-                _safe_print(
-                    console,
-                    f"✅ Study complete in {duration:.1f}s. Best value: {study.best_value:.6f} ({study_direction})",
-                    f"[green]✅[/green] Study complete in [bold]{duration:.1f}s[/bold]. Best value: [bold]{study.best_value:.6f}[/bold] ({study_direction})",
-                )
-            except Exception:
-                _safe_print(
-                    console,
-                    f"⚠️ Study complete in {duration:.1f}s. No completed trials.",
-                    f"[yellow]⚠️[/yellow] Study complete in [bold]{duration:.1f}s[/bold]. No completed trials.",
-                )
+            # Only show completion messages in single-worker mode
+            if not is_multiworker:
+                try:
+                    _safe_print(
+                        console,
+                        f"✅ Study complete in {duration:.1f}s. Best value: {study.best_value:.6f} ({study_direction})",
+                        f"[green]✅[/green] Study complete in [bold]{duration:.1f}s[/bold]. Best value: [bold]{study.best_value:.6f}[/bold] ({study_direction})",
+                    )
+                except Exception:
+                    _safe_print(
+                        console,
+                        f"⚠️ Study complete in {duration:.1f}s. No completed trials.",
+                        f"[yellow]⚠️[/yellow] Study complete in [bold]{duration:.1f}s[/bold]. No completed trials.",
+                    )
 
             try:
                 completed_trials = study.get_trials(
@@ -760,11 +795,12 @@ def main():
             except Exception:
                 completed_trials = []
             if not completed_trials:
-                _safe_print(
-                    console,
-                    f"⚠️ No completed trials for objective '{obj}'; skipping save.",
-                    f"[yellow]⚠️[/yellow] No completed trials for objective '{obj}'; skipping save.",
-                )
+                if not is_multiworker:
+                    _safe_print(
+                        console,
+                        f"⚠️ No completed trials for objective '{obj}'; skipping save.",
+                        f"[yellow]⚠️[/yellow] No completed trials for objective '{obj}'; skipping save.",
+                    )
                 continue
 
             best_params = dict(study.best_params)
@@ -795,19 +831,22 @@ def main():
                     encoding="utf-8",
                 ) as f:
                     json.dump(best_params, f, indent=2)
-            _safe_print(
-                console,
-                f"💾 Best params saved to config/best_params_{obj}.yaml",
-                f"[green]💾[/green] Best params saved to [bold]config/best_params_{obj}.yaml[/bold]",
-            )
+            # Only show save messages in single-worker mode
+            if not is_multiworker:
+                _safe_print(
+                    console,
+                    f"💾 Best params saved to config/best_params_{obj}.yaml",
+                    f"[green]💾[/green] Best params saved to [bold]config/best_params_{obj}.yaml[/bold]",
+                )
 
         # If we have results, re-evaluate on identical folds and choose winner by weighted PPG
         if not per_objective_best:
-            _safe_print(
-                console,
-                "❌ No completed trials across objectives; exiting.",
-                "[red]❌[/red] No completed trials across objectives; exiting.",
-            )
+            if not is_multiworker:
+                _safe_print(
+                    console,
+                    "❌ No completed trials across objectives; exiting.",
+                    "[red]❌[/red] No completed trials across objectives; exiting.",
+                )
             return
 
         summaries: dict[str, dict[str, float]] = {}
@@ -922,49 +961,41 @@ def main():
                 "rps": float(np.nanmean(rps_list)) if rps_list else float("nan"),
             }
 
-        # Display results summary
-        _safe_print(
-            console, "\n📊 Results Summary", "\n[bold]📊 Results Summary[/bold]"
-        )
-
-        if console is not None:
-            # Rich table for single-worker mode
-            results_table = Table(title="Objective Comparison Results", box=box.ROUNDED)
-            results_table.add_column("Objective", style="cyan", no_wrap=True)
-            results_table.add_column("PPG Weighted", justify="right", style="green")
-            results_table.add_column("PPG Unweighted", justify="right", style="green")
-            results_table.add_column("Accuracy", justify="right", style="blue")
-            results_table.add_column("Balanced Acc", justify="right", style="blue")
-            results_table.add_column("Brier Score", justify="right", style="red")
-            results_table.add_column("Log Loss", justify="right", style="red")
-            results_table.add_column("RPS", justify="right", style="red")
-
-            for obj, summ in summaries.items():
-                results_table.add_row(
-                    obj,
-                    f"{summ['ppg_weighted']:.4f}",
-                    f"{summ['ppg_unweighted']:.4f}",
-                    f"{summ['accuracy_weighted']:.4f}",
-                    f"{summ['balanced_accuracy_weighted']:.4f}",
-                    f"{summ['brier']:.4f}",
-                    f"{summ['log_loss']:.4f}",
-                    f"{summ['rps']:.4f}",
-                )
-
-            console.print(results_table)
-        else:
-            # Simple text table for multi-worker mode
-            print("\nObjective Comparison Results:")
-            print(
-                f"{'Objective':<12} {'PPG_W':<8} {'PPG_U':<8} {'Acc':<8} {'BAcc':<8} {'Brier':<8} {'LogLoss':<8} {'RPS':<8}"
+        # Display results summary only in single-worker mode
+        if not is_multiworker:
+            _safe_print(
+                console, "\n📊 Results Summary", "\n[bold]📊 Results Summary[/bold]"
             )
-            print("-" * 80)
-            for obj, summ in summaries.items():
-                print(
-                    f"{obj:<12} {summ['ppg_weighted']:<8.4f} {summ['ppg_unweighted']:<8.4f} "
-                    f"{summ['accuracy_weighted']:<8.4f} {summ['balanced_accuracy_weighted']:<8.4f} "
-                    f"{summ['brier']:<8.4f} {summ['log_loss']:<8.4f} {summ['rps']:<8.4f}"
+
+            if console is not None:
+                # Rich table for single-worker mode
+                results_table = Table(
+                    title="Objective Comparison Results", box=box.ROUNDED
                 )
+                results_table.add_column("Objective", style="cyan", no_wrap=True)
+                results_table.add_column("PPG Weighted", justify="right", style="green")
+                results_table.add_column(
+                    "PPG Unweighted", justify="right", style="green"
+                )
+                results_table.add_column("Accuracy", justify="right", style="blue")
+                results_table.add_column("Balanced Acc", justify="right", style="blue")
+                results_table.add_column("Brier Score", justify="right", style="red")
+                results_table.add_column("Log Loss", justify="right", style="red")
+                results_table.add_column("RPS", justify="right", style="red")
+
+                for obj, summ in summaries.items():
+                    results_table.add_row(
+                        obj,
+                        f"{summ['ppg_weighted']:.4f}",
+                        f"{summ['ppg_unweighted']:.4f}",
+                        f"{summ['accuracy_weighted']:.4f}",
+                        f"{summ['balanced_accuracy_weighted']:.4f}",
+                        f"{summ['brier']:.4f}",
+                        f"{summ['log_loss']:.4f}",
+                        f"{summ['rps']:.4f}",
+                    )
+
+                console.print(results_table)
 
         # Choose winner by highest weighted PPG
         winner = None
@@ -991,16 +1022,18 @@ def main():
                     os.path.join(cfg_dir, "best_params.json"), "w", encoding="utf-8"
                 ) as f:
                     json.dump(win_params, f, indent=2)
-            _safe_print(
-                console,
-                f"\n🏆 Winner: {winner}",
-                f"\n[bold green]🏆 Winner: [cyan]{winner}[/cyan][/bold green]",
-            )
-            _safe_print(
-                console,
-                "💾 Best parameters saved to config/best_params.yaml",
-                "[green]💾[/green] Best parameters saved to [bold]config/best_params.yaml[/bold]",
-            )
+            # Only show winner announcement in single-worker mode
+            if not is_multiworker:
+                _safe_print(
+                    console,
+                    f"\n🏆 Winner: {winner}",
+                    f"\n[bold green]🏆 Winner: [cyan]{winner}[/cyan][/bold green]",
+                )
+                _safe_print(
+                    console,
+                    "💾 Best parameters saved to config/best_params.yaml",
+                    "[green]💾[/green] Best parameters saved to [bold]config/best_params.yaml[/bold]",
+                )
 
         # Save summary artifacts
         out_dir = os.path.join(project_root, "data", "predictions")
@@ -1027,11 +1060,12 @@ def main():
             ) as f:
                 f.writelines(lines)
         except Exception as _e:  # pragma: no cover
-            _safe_print(
-                console,
-                f"⚠️ Warning: Failed to write comparison metrics: {_e}",
-                f"[yellow]⚠️[/yellow] Warning: Failed to write comparison metrics: {_e}",
-            )
+            if not is_multiworker:
+                _safe_print(
+                    console,
+                    f"⚠️ Warning: Failed to write comparison metrics: {_e}",
+                    f"[yellow]⚠️[/yellow] Warning: Failed to write comparison metrics: {_e}",
+                )
 
     finally:
         # Delete SQLite storage file, if applicable, unless coordinated by external CLI
@@ -1043,17 +1077,19 @@ def main():
                 and os.path.exists(storage_fs_path)
             ):
                 os.remove(storage_fs_path)
+                if not is_multiworker:
+                    _safe_print(
+                        console,
+                        f"🗑️ Deleted Optuna storage DB at {storage_fs_path}",
+                        f"[green]🗑️[/green] Deleted Optuna storage DB at [bold]{storage_fs_path}[/bold]",
+                    )
+        except Exception as _e:
+            if not is_multiworker:
                 _safe_print(
                     console,
-                    f"🗑️ Deleted Optuna storage DB at {storage_fs_path}",
-                    f"[green]🗑️[/green] Deleted Optuna storage DB at [bold]{storage_fs_path}[/bold]",
+                    f"⚠️ Warning: Failed to delete Optuna storage DB at {storage_fs_path}: {_e}",
+                    f"[yellow]⚠️[/yellow] Warning: Failed to delete Optuna storage DB at {storage_fs_path}: {_e}",
                 )
-        except Exception as _e:
-            _safe_print(
-                console,
-                f"⚠️ Warning: Failed to delete Optuna storage DB at {storage_fs_path}: {_e}",
-                f"[yellow]⚠️[/yellow] Warning: Failed to delete Optuna storage DB at {storage_fs_path}: {_e}",
-            )
 
     # Final completion message
     if console is not None:

@@ -280,6 +280,15 @@ def tune(
         # split before query
         base, *q = storage.split("?", 1)
         query = ("?" + q[0]) if q else ""
+
+        # Ensure timeout parameter is set for SQLite URLs to handle database locks
+        if query:
+            # Check if timeout is already specified
+            if "timeout=" not in query:
+                query += "&timeout=60"
+        else:
+            query = "?timeout=60"
+
         # derive filename suffix
         if base.endswith(".db"):
             return base.replace(".db", f"_{obj}.db") + query
@@ -371,6 +380,31 @@ def tune(
                 "When --workers > 1, a storage URL is required (sqlite or RDBMS)"
             )
             raise typer.Exit(code=2)
+
+        # Import progress monitoring dependencies
+        try:
+            import threading
+            import time
+
+            import optuna
+            from rich.console import Console
+            from rich.panel import Panel
+            from rich.progress import (
+                BarColumn,
+                Progress,
+                TextColumn,
+                TimeElapsedColumn,
+                TimeRemainingColumn,
+            )
+        except ImportError:
+            typer.echo(
+                "Rich or Optuna not available for progress monitoring. Running without progress display."
+            )
+            progress_monitoring = False
+        else:
+            progress_monitoring = True
+            console = Console()
+
         # 1) Initialize the study/db with a 0-trial run
         init_cmd = base_args(0) + ["--objective", objectives[0], "--storage", storage]
         if study_name:
@@ -402,12 +436,124 @@ def tune(
             p = subprocess.Popen(cmd, cwd=str(pkg_root), env=env)
             procs.append(p)
 
-        # 4) Wait for all workers
+        # 4) Progress monitoring and wait for all workers
+        if progress_monitoring:
+
+            def monitor_progress():
+                """Monitor progress by polling the Optuna study database."""
+                study_name_full = (study_name or "kicktipp-tune") + f"-{objectives[0]}"
+
+                with Progress(
+                    TextColumn("[bold blue]Tuning Progress"),
+                    BarColumn(),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    TextColumn("•"),
+                    TextColumn("[bold green]{task.completed}/{task.total} trials"),
+                    TextColumn("•"),
+                    TextColumn("[bold cyan]Best: {task.fields[best_value]:.4f}"),
+                    TextColumn("•"),
+                    TimeElapsedColumn(),
+                    TextColumn("•"),
+                    TimeRemainingColumn(),
+                    console=console,
+                    transient=False,
+                ) as progress:
+                    task = progress.add_task(
+                        "Optimizing...", total=n_trials, completed=0, best_value=0.0
+                    )
+
+                    while any(p.poll() is None for p in procs):
+                        try:
+                            # Load study to get current progress
+                            study = optuna.load_study(
+                                study_name=study_name_full, storage=storage
+                            )
+
+                            completed_trials = len(
+                                [
+                                    t
+                                    for t in study.trials
+                                    if t.state == optuna.trial.TrialState.COMPLETE
+                                ]
+                            )
+
+                            best_value = study.best_value if study.best_trials else 0.0
+
+                            progress.update(
+                                task, completed=completed_trials, best_value=best_value
+                            )
+
+                        except Exception:
+                            # Study might not be ready yet, continue monitoring
+                            pass
+
+                        time.sleep(2)  # Poll every 2 seconds
+
+                    # Final update
+                    try:
+                        study = optuna.load_study(
+                            study_name=study_name_full, storage=storage
+                        )
+                        completed_trials = len(
+                            [
+                                t
+                                for t in study.trials
+                                if t.state == optuna.trial.TrialState.COMPLETE
+                            ]
+                        )
+                        best_value = study.best_value if study.best_trials else 0.0
+                        progress.update(
+                            task, completed=completed_trials, best_value=best_value
+                        )
+                    except Exception:
+                        pass
+
+            # Start progress monitoring in a separate thread
+            monitor_thread = threading.Thread(target=monitor_progress, daemon=True)
+            monitor_thread.start()
+
+        # Wait for all workers
         exit_code = 0
         for p in procs:
             p.wait()
             if p.returncode != 0 and exit_code == 0:
                 exit_code = p.returncode
+
+        # Show final results if progress monitoring was enabled
+        if progress_monitoring:
+            try:
+                study_name_full = (study_name or "kicktipp-tune") + f"-{objectives[0]}"
+                study = optuna.load_study(study_name=study_name_full, storage=storage)
+
+                completed_trials = len(
+                    [
+                        t
+                        for t in study.trials
+                        if t.state == optuna.trial.TrialState.COMPLETE
+                    ]
+                )
+
+                if completed_trials > 0:
+                    console.print(
+                        Panel.fit(
+                            f"[bold green]✅ Tuning Complete![/bold green]\n"
+                            f"[bold]Completed Trials:[/bold] {completed_trials}/{n_trials}\n"
+                            f"[bold]Best Value:[/bold] {study.best_value:.6f}\n"
+                            f"[bold]Best Trial:[/bold] #{study.best_trial.number}",
+                            border_style="green",
+                        )
+                    )
+                else:
+                    console.print(
+                        Panel.fit(
+                            "[bold red]❌ No trials completed[/bold red]\n"
+                            "Check worker processes for errors",
+                            border_style="red",
+                        )
+                    )
+            except Exception as e:
+                console.print(f"[red]Warning: Could not load final results: {e}[/red]")
+
         raise typer.Exit(code=exit_code)
 
 
