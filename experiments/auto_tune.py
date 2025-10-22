@@ -303,8 +303,10 @@ def _objective_builder(
             # Recompute features for this knob combo
             dl = DataLoader()
             if verbose:
-                console.print(
-                    f"[dim][FEATS] Building features for knobs form_last_n={key[0]} momentum_decay={key[1]}...[/dim]"
+                _safe_print(
+                    console,
+                    f"[FEATS] Building features for knobs form_last_n={key[0]} momentum_decay={key[1]}...",
+                    f"[dim][FEATS] Building features for knobs form_last_n={key[0]} momentum_decay={key[1]}...[/dim]",
                 )
             feats_df = dl.create_features_from_matches(all_matches)
             features_cache[key] = feats_df
@@ -404,12 +406,16 @@ def _objective_builder(
                         np.sum(points_vec * weights) / max(1.0, np.sum(weights))
                     )
                     u_ppg = float(np.mean(points_vec)) if len(points_vec) else 0.0
-                    console.print(
-                        f"[dim][FOLD] ppg_w={w_ppg:.4f} ppg={u_ppg:.4f} n={len(points_vec)}[/dim]"
+                    _safe_print(
+                        console,
+                        f"[FOLD] ppg_w={w_ppg:.4f} ppg={u_ppg:.4f} n={len(points_vec)}",
+                        f"[dim][FOLD] ppg_w={w_ppg:.4f} ppg={u_ppg:.4f} n={len(points_vec)}[/dim]",
                     )
                 else:
-                    console.print(
-                        f"[dim][FOLD] {obj}={metric_val:.6f} n={len(points_vec)}[/dim]"
+                    _safe_print(
+                        console,
+                        f"[FOLD] {obj}={metric_val:.6f} n={len(points_vec)}",
+                        f"[dim][FOLD] {obj}={metric_val:.6f} n={len(points_vec)}[/dim]",
                     )
 
             fold_metrics.append(metric_val)
@@ -422,18 +428,38 @@ def _objective_builder(
     return obj_fn
 
 
-def main():
-    # Initialize Rich console
-    console = Console()
+def _safe_print(console, message: str, rich_message: str = None):
+    """Print message using Rich console if available, otherwise simple print."""
+    if console is not None:
+        console.print(rich_message if rich_message else message)
+    else:
+        print(message)
 
-    # Display welcome banner
-    console.print(
-        Panel.fit(
-            "[bold blue]Kicktipp Predictor Hyperparameter Tuning[/bold blue]\n"
-            "[dim]Optuna-based optimization with Rich console output[/dim]",
-            border_style="blue",
-        )
+
+def main():
+    # Check if we're in multi-worker mode by looking at environment variables
+    # When using --workers > 1, each worker process will have its own console
+    is_multiworker = (
+        os.environ.get("KTP_TUNE_COORDINATED", "0") == "1"
+        or os.environ.get("OPTUNA_WORKER_ID") is not None
     )
+
+    # Initialize Rich console only for single-worker mode
+    if not is_multiworker:
+        console = Console()
+        # Display welcome banner
+        console.print(
+            Panel.fit(
+                "[bold blue]Kicktipp Predictor Hyperparameter Tuning[/bold blue]\n"
+                "[dim]Optuna-based optimization with Rich console output[/dim]",
+                border_style="blue",
+            )
+        )
+    else:
+        # Simple text output for multi-worker mode
+        console = None
+        print("Kicktipp Predictor Hyperparameter Tuning (Multi-worker mode)")
+        print("=" * 60)
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--n-trials", type=int, default=100, help="Optuna trials")
@@ -506,8 +532,10 @@ def main():
     os.environ["KTP_VERBOSE"] = "1" if args.verbose else "0"
 
     if optuna is None:
-        console.print(
-            "[red]❌ Optuna is not installed. Please install optuna to run tuning.[/red]"
+        _safe_print(
+            console,
+            "❌ Optuna is not installed. Please install optuna to run tuning.",
+            "[red]❌ Optuna is not installed. Please install optuna to run tuning.[/red]",
         )
         sys.exit(1)
 
@@ -518,30 +546,50 @@ def main():
         os.environ.setdefault("MKL_NUM_THREADS", str(args.omp_threads))
         os.environ.setdefault("NUMEXPR_NUM_THREADS", str(args.omp_threads))
 
-    # Load data with Rich progress
-    console.print("\n[bold]📊 Data Loading Phase[/bold]")
+    # Load data with appropriate progress display
+    _safe_print(
+        console, "\n📊 Data Loading Phase", "\n[bold]📊 Data Loading Phase[/bold]"
+    )
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-        transient=True,
-    ) as progress:
-        # Load historical data
-        task1 = progress.add_task("Loading historical data...", total=None)
+    if console is not None:
+        # Rich progress for single-worker mode
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            # Load historical data
+            task1 = progress.add_task("Loading historical data...", total=None)
+            data_loader = DataLoader()
+            current_season = data_loader.get_current_season()
+            start_season = current_season - 2
+            all_matches = data_loader.fetch_historical_seasons(
+                start_season, current_season
+            )
+            progress.update(task1, description=f"✅ Loaded {len(all_matches)} matches")
+
+            # Create features
+            task2 = progress.add_task("Creating features...", total=None)
+            features_df = data_loader.create_features_from_matches(all_matches)
+            progress.update(task2, description=f"✅ Created {len(features_df)} samples")
+    else:
+        # Simple text progress for multi-worker mode
+        print("Loading historical data...")
         data_loader = DataLoader()
         current_season = data_loader.get_current_season()
         start_season = current_season - 2
         all_matches = data_loader.fetch_historical_seasons(start_season, current_season)
-        progress.update(task1, description=f"✅ Loaded {len(all_matches)} matches")
+        print(f"✅ Loaded {len(all_matches)} matches")
 
-        # Create features
-        task2 = progress.add_task("Creating features...", total=None)
+        print("Creating features...")
         features_df = data_loader.create_features_from_matches(all_matches)
-        progress.update(task2, description=f"✅ Created {len(features_df)} samples")
+        print(f"✅ Created {len(features_df)} samples")
 
-    console.print(
-        f"[green]✓[/green] Data loaded: [bold]{len(all_matches)}[/bold] matches → [bold]{len(features_df)}[/bold] samples"
+    _safe_print(
+        console,
+        f"✓ Data loaded: {len(all_matches)} matches → {len(features_df)} samples",
+        f"[green]✓[/green] Data loaded: [bold]{len(all_matches)}[/bold] matches → [bold]{len(features_df)}[/bold] samples",
     )
 
     # Build and run study
@@ -569,26 +617,41 @@ def main():
         objectives_to_run = [args.objective]
 
     # Display configuration
-    console.print("\n[bold]⚙️ Configuration[/bold]")
+    _safe_print(console, "\n⚙️ Configuration", "\n[bold]⚙️ Configuration[/bold]")
 
-    config_table = Table(title="Tuning Configuration", box=box.ROUNDED)
-    config_table.add_column("Parameter", style="cyan", no_wrap=True)
-    config_table.add_column("Value", style="magenta")
+    if console is not None:
+        # Rich table for single-worker mode
+        config_table = Table(title="Tuning Configuration", box=box.ROUNDED)
+        config_table.add_column("Parameter", style="cyan", no_wrap=True)
+        config_table.add_column("Value", style="magenta")
 
-    config_table.add_row("Total Trials", str(total_trials))
-    config_table.add_row("CV Splits", str(args.n_splits))
-    config_table.add_row("Total CV Trainings", str(total_cv_trainings))
-    config_table.add_row("OMP Threads", str(args.omp_threads or 1))
-    config_table.add_row("Pruner", args.pruner)
-    config_table.add_row("Storage", args.storage or "Memory")
-    config_table.add_row("Objectives", ", ".join(objectives_to_run))
-    config_table.add_row("Mode", "Compare" if args.compare else "Single")
+        config_table.add_row("Total Trials", str(total_trials))
+        config_table.add_row("CV Splits", str(args.n_splits))
+        config_table.add_row("Total CV Trainings", str(total_cv_trainings))
+        config_table.add_row("OMP Threads", str(args.omp_threads or 1))
+        config_table.add_row("Pruner", args.pruner)
+        config_table.add_row("Storage", args.storage or "Memory")
+        config_table.add_row("Objectives", ", ".join(objectives_to_run))
+        config_table.add_row("Mode", "Compare" if args.compare else "Single")
 
-    console.print(config_table)
+        console.print(config_table)
+    else:
+        # Simple text table for multi-worker mode
+        print("Tuning Configuration:")
+        print(f"  Total Trials: {total_trials}")
+        print(f"  CV Splits: {args.n_splits}")
+        print(f"  Total CV Trainings: {total_cv_trainings}")
+        print(f"  OMP Threads: {args.omp_threads or 1}")
+        print(f"  Pruner: {args.pruner}")
+        print(f"  Storage: {args.storage or 'Memory'}")
+        print(f"  Objectives: {', '.join(objectives_to_run)}")
+        print(f"  Mode: {'Compare' if args.compare else 'Single'}")
 
     if args.compare:
-        console.print(
-            f"[yellow]⚠️[/yellow] Compare mode will take approximately [bold]{len(objectives_to_run)}×[/bold] the time of a single run."
+        _safe_print(
+            console,
+            f"⚠️ Compare mode will take approximately {len(objectives_to_run)}× the time of a single run.",
+            f"[yellow]⚠️[/yellow] Compare mode will take approximately [bold]{len(objectives_to_run)}×[/bold] the time of a single run.",
         )
 
     # Configure pruner
@@ -654,9 +717,15 @@ def main():
                 except Exception:
                     pass
 
-            console.print(f"\n[bold]🎯 Optimizing Objective: [cyan]{obj}[/cyan][/bold]")
-            console.print(
-                f"[dim]Direction: {study_direction} | Trials: {args.n_trials} | CV Splits: {args.n_splits}[/dim]"
+            _safe_print(
+                console,
+                f"\n🎯 Optimizing Objective: {obj}",
+                f"\n[bold]🎯 Optimizing Objective: [cyan]{obj}[/cyan][/bold]",
+            )
+            _safe_print(
+                console,
+                f"Direction: {study_direction} | Trials: {args.n_trials} | CV Splits: {args.n_splits}",
+                f"[dim]Direction: {study_direction} | Trials: {args.n_trials} | CV Splits: {args.n_splits}[/dim]",
             )
 
             start = time.time()
@@ -672,12 +741,16 @@ def main():
 
             duration = time.time() - start
             try:
-                console.print(
-                    f"[green]✅[/green] Study complete in [bold]{duration:.1f}s[/bold]. Best value: [bold]{study.best_value:.6f}[/bold] ({study_direction})"
+                _safe_print(
+                    console,
+                    f"✅ Study complete in {duration:.1f}s. Best value: {study.best_value:.6f} ({study_direction})",
+                    f"[green]✅[/green] Study complete in [bold]{duration:.1f}s[/bold]. Best value: [bold]{study.best_value:.6f}[/bold] ({study_direction})",
                 )
             except Exception:
-                console.print(
-                    f"[yellow]⚠️[/yellow] Study complete in [bold]{duration:.1f}s[/bold]. No completed trials."
+                _safe_print(
+                    console,
+                    f"⚠️ Study complete in {duration:.1f}s. No completed trials.",
+                    f"[yellow]⚠️[/yellow] Study complete in [bold]{duration:.1f}s[/bold]. No completed trials.",
                 )
 
             try:
@@ -687,8 +760,10 @@ def main():
             except Exception:
                 completed_trials = []
             if not completed_trials:
-                console.print(
-                    f"[yellow]⚠️[/yellow] No completed trials for objective '{obj}'; skipping save."
+                _safe_print(
+                    console,
+                    f"⚠️ No completed trials for objective '{obj}'; skipping save.",
+                    f"[yellow]⚠️[/yellow] No completed trials for objective '{obj}'; skipping save.",
                 )
                 continue
 
@@ -720,14 +795,18 @@ def main():
                     encoding="utf-8",
                 ) as f:
                     json.dump(best_params, f, indent=2)
-            console.print(
-                f"[green]💾[/green] Best params saved to [bold]config/best_params_{obj}.yaml[/bold]"
+            _safe_print(
+                console,
+                f"💾 Best params saved to config/best_params_{obj}.yaml",
+                f"[green]💾[/green] Best params saved to [bold]config/best_params_{obj}.yaml[/bold]",
             )
 
         # If we have results, re-evaluate on identical folds and choose winner by weighted PPG
         if not per_objective_best:
-            console.print(
-                "[red]❌[/red] No completed trials across objectives; exiting."
+            _safe_print(
+                console,
+                "❌ No completed trials across objectives; exiting.",
+                "[red]❌[/red] No completed trials across objectives; exiting.",
             )
             return
 
@@ -843,32 +922,49 @@ def main():
                 "rps": float(np.nanmean(rps_list)) if rps_list else float("nan"),
             }
 
-        # Display results summary table
-        console.print("\n[bold]📊 Results Summary[/bold]")
+        # Display results summary
+        _safe_print(
+            console, "\n📊 Results Summary", "\n[bold]📊 Results Summary[/bold]"
+        )
 
-        results_table = Table(title="Objective Comparison Results", box=box.ROUNDED)
-        results_table.add_column("Objective", style="cyan", no_wrap=True)
-        results_table.add_column("PPG Weighted", justify="right", style="green")
-        results_table.add_column("PPG Unweighted", justify="right", style="green")
-        results_table.add_column("Accuracy", justify="right", style="blue")
-        results_table.add_column("Balanced Acc", justify="right", style="blue")
-        results_table.add_column("Brier Score", justify="right", style="red")
-        results_table.add_column("Log Loss", justify="right", style="red")
-        results_table.add_column("RPS", justify="right", style="red")
+        if console is not None:
+            # Rich table for single-worker mode
+            results_table = Table(title="Objective Comparison Results", box=box.ROUNDED)
+            results_table.add_column("Objective", style="cyan", no_wrap=True)
+            results_table.add_column("PPG Weighted", justify="right", style="green")
+            results_table.add_column("PPG Unweighted", justify="right", style="green")
+            results_table.add_column("Accuracy", justify="right", style="blue")
+            results_table.add_column("Balanced Acc", justify="right", style="blue")
+            results_table.add_column("Brier Score", justify="right", style="red")
+            results_table.add_column("Log Loss", justify="right", style="red")
+            results_table.add_column("RPS", justify="right", style="red")
 
-        for obj, summ in summaries.items():
-            results_table.add_row(
-                obj,
-                f"{summ['ppg_weighted']:.4f}",
-                f"{summ['ppg_unweighted']:.4f}",
-                f"{summ['accuracy_weighted']:.4f}",
-                f"{summ['balanced_accuracy_weighted']:.4f}",
-                f"{summ['brier']:.4f}",
-                f"{summ['log_loss']:.4f}",
-                f"{summ['rps']:.4f}",
+            for obj, summ in summaries.items():
+                results_table.add_row(
+                    obj,
+                    f"{summ['ppg_weighted']:.4f}",
+                    f"{summ['ppg_unweighted']:.4f}",
+                    f"{summ['accuracy_weighted']:.4f}",
+                    f"{summ['balanced_accuracy_weighted']:.4f}",
+                    f"{summ['brier']:.4f}",
+                    f"{summ['log_loss']:.4f}",
+                    f"{summ['rps']:.4f}",
+                )
+
+            console.print(results_table)
+        else:
+            # Simple text table for multi-worker mode
+            print("\nObjective Comparison Results:")
+            print(
+                f"{'Objective':<12} {'PPG_W':<8} {'PPG_U':<8} {'Acc':<8} {'BAcc':<8} {'Brier':<8} {'LogLoss':<8} {'RPS':<8}"
             )
-
-        console.print(results_table)
+            print("-" * 80)
+            for obj, summ in summaries.items():
+                print(
+                    f"{obj:<12} {summ['ppg_weighted']:<8.4f} {summ['ppg_unweighted']:<8.4f} "
+                    f"{summ['accuracy_weighted']:<8.4f} {summ['balanced_accuracy_weighted']:<8.4f} "
+                    f"{summ['brier']:<8.4f} {summ['log_loss']:<8.4f} {summ['rps']:<8.4f}"
+                )
 
         # Choose winner by highest weighted PPG
         winner = None
@@ -895,11 +991,15 @@ def main():
                     os.path.join(cfg_dir, "best_params.json"), "w", encoding="utf-8"
                 ) as f:
                     json.dump(win_params, f, indent=2)
-            console.print(
-                f"\n[bold green]🏆 Winner: [cyan]{winner}[/cyan][/bold green]"
+            _safe_print(
+                console,
+                f"\n🏆 Winner: {winner}",
+                f"\n[bold green]🏆 Winner: [cyan]{winner}[/cyan][/bold green]",
             )
-            console.print(
-                "[green]💾[/green] Best parameters saved to [bold]config/best_params.yaml[/bold]"
+            _safe_print(
+                console,
+                "💾 Best parameters saved to config/best_params.yaml",
+                "[green]💾[/green] Best parameters saved to [bold]config/best_params.yaml[/bold]",
             )
 
         # Save summary artifacts
@@ -927,8 +1027,10 @@ def main():
             ) as f:
                 f.writelines(lines)
         except Exception as _e:  # pragma: no cover
-            console.print(
-                f"[yellow]⚠️[/yellow] Warning: Failed to write comparison metrics: {_e}"
+            _safe_print(
+                console,
+                f"⚠️ Warning: Failed to write comparison metrics: {_e}",
+                f"[yellow]⚠️[/yellow] Warning: Failed to write comparison metrics: {_e}",
             )
 
     finally:
@@ -941,22 +1043,32 @@ def main():
                 and os.path.exists(storage_fs_path)
             ):
                 os.remove(storage_fs_path)
-                console.print(
-                    f"[green]🗑️[/green] Deleted Optuna storage DB at [bold]{storage_fs_path}[/bold]"
+                _safe_print(
+                    console,
+                    f"🗑️ Deleted Optuna storage DB at {storage_fs_path}",
+                    f"[green]🗑️[/green] Deleted Optuna storage DB at [bold]{storage_fs_path}[/bold]",
                 )
         except Exception as _e:
-            console.print(
-                f"[yellow]⚠️[/yellow] Warning: Failed to delete Optuna storage DB at {storage_fs_path}: {_e}"
+            _safe_print(
+                console,
+                f"⚠️ Warning: Failed to delete Optuna storage DB at {storage_fs_path}: {_e}",
+                f"[yellow]⚠️[/yellow] Warning: Failed to delete Optuna storage DB at {storage_fs_path}: {_e}",
             )
 
     # Final completion message
-    console.print(
-        Panel.fit(
-            "[bold green]🎉 Hyperparameter Tuning Complete![/bold green]\n"
-            "[dim]Check the config/ directory for best parameters and data/predictions/ for detailed results.[/dim]",
-            border_style="green",
+    if console is not None:
+        console.print(
+            Panel.fit(
+                "[bold green]🎉 Hyperparameter Tuning Complete![/bold green]\n"
+                "[dim]Check the config/ directory for best parameters and data/predictions/ for detailed results.[/dim]",
+                border_style="green",
+            )
         )
-    )
+    else:
+        print("\n🎉 Hyperparameter Tuning Complete!")
+        print(
+            "Check the config/ directory for best parameters and data/predictions/ for detailed results."
+        )
 
 
 if __name__ == "__main__":

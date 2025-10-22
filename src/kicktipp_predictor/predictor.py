@@ -66,8 +66,19 @@ def compute_scoreline_for_outcome(
         return int(candidates[0][0]), int(candidates[0][1])
 
     common_scorelines = [
-        (2, 1), (1, 0), (1, 1), (0, 1), (2, 0), (0, 0), (2, 2),
-        (3, 1), (1, 2), (3, 0), (0, 3), (3, 2), (2, 3),
+        (2, 1),
+        (1, 0),
+        (1, 1),
+        (0, 1),
+        (2, 0),
+        (0, 0),
+        (2, 2),
+        (3, 1),
+        (1, 2),
+        (3, 0),
+        (0, 3),
+        (3, 2),
+        (2, 3),
     ]
     for h, a in common_scorelines:
         if h <= max_goals and a <= max_goals and grid[h, a] == np.max(grid):
@@ -95,6 +106,7 @@ class MatchPredictor:
         feature_columns: A list of feature names used for training.
         label_encoder: A LabelEncoder for the outcome variable.
     """
+
     def __init__(self, quiet: bool = False):
         """Initializes the MatchPredictor with its configuration."""
         self.config = get_config()
@@ -119,17 +131,27 @@ class MatchPredictor:
         training_data = matches_df[matches_df["home_score"].notna()].copy()
 
         if len(training_data) < self.config.model.min_training_matches:
-            self._log(f"Insufficient training data: {len(training_data)} matches found, "
-                      f"but {self.config.model.min_training_matches} are required.")
+            self._log(
+                f"Insufficient training data: {len(training_data)} matches found, "
+                f"but {self.config.model.min_training_matches} are required."
+            )
             return
 
         exclude_cols = [
-            "match_id", "home_team", "away_team", "home_score", "away_score",
-            "goal_difference", "result", "is_finished",
+            "match_id",
+            "home_team",
+            "away_team",
+            "home_score",
+            "away_score",
+            "goal_difference",
+            "result",
+            "is_finished",
         ]
-        self.feature_columns = training_data.drop(
-            columns=exclude_cols, errors="ignore"
-        ).select_dtypes(include=[np.number, bool]).columns.tolist()
+        self.feature_columns = (
+            training_data.drop(columns=exclude_cols, errors="ignore")
+            .select_dtypes(include=[np.number, bool])
+            .columns.tolist()
+        )
 
         X = training_data[self.feature_columns].fillna(0)
         y_home = training_data["home_score"]
@@ -140,11 +162,22 @@ class MatchPredictor:
         time_weights = self._compute_time_decay_weights(training_data)
 
         counts = y_result.value_counts()
-        self._log(f"Training on {len(training_data)} matches with {len(self.feature_columns)} features.")
-        self._log("Outcome distribution:", {k: f"{v} ({v / len(y_result):.1%})" for k, v in counts.items()})
+        self._log(
+            f"Training on {len(training_data)} matches with {len(self.feature_columns)} features."
+        )
+        self._log(
+            "Outcome distribution:",
+            {k: f"{v} ({v / len(y_result):.1%})" for k, v in counts.items()},
+        )
 
-        dates = pd.to_datetime(training_data["date"], errors='coerce') if "date" in training_data.columns else None
-        self._train_goal_models(X, y_home, y_away, sample_weights=time_weights, dates=dates)
+        dates = (
+            pd.to_datetime(training_data["date"], errors="coerce")
+            if "date" in training_data.columns
+            else None
+        )
+        self._train_goal_models(
+            X, y_home, y_away, sample_weights=time_weights, dates=dates
+        )
         self._train_outcome_model(X, y_result_encoded, time_weights)
 
         self._log("Training completed.")
@@ -161,8 +194,12 @@ class MatchPredictor:
         return np.exp(-decay_rate * days_old.values)
 
     def _train_goal_models(
-        self, X: pd.DataFrame, y_home: pd.Series, y_away: pd.Series,
-        sample_weights: np.ndarray | None, dates: pd.Series | None
+        self,
+        X: pd.DataFrame,
+        y_home: pd.Series,
+        y_away: pd.Series,
+        sample_weights: np.ndarray | None,
+        dates: pd.Series | None,
     ):
         """Trains the home and away goal regression models."""
         self._log("Training goal regressors...")
@@ -177,24 +214,28 @@ class MatchPredictor:
         ya_tr, ya_val = y_away[train_mask], y_away[~train_mask]
         sw_tr = sample_weights[train_mask] if sample_weights is not None else None
 
-        fit_params = {'eval_set': [(X_val, yh_val)], 'verbose': False}
+        fit_params = {"eval_set": [(X_val, yh_val)], "verbose": False}
         if sw_tr is not None:
-            fit_params['sample_weight'] = sw_tr
+            fit_params["sample_weight"] = sw_tr
         self.home_goals_model.fit(X_tr, yh_tr, **fit_params)
 
-        fit_params['eval_set'] = [(X_val, ya_val)]
+        fit_params["eval_set"] = [(X_val, ya_val)]
         self.away_goals_model.fit(X_tr, ya_tr, **fit_params)
 
         self._log(f"Goal regressors trained in {time.perf_counter() - start:.2f}s")
 
-    def _get_train_validation_split(self, X: pd.DataFrame, dates: pd.Series | None) -> np.ndarray:
+    def _get_train_validation_split(
+        self, X: pd.DataFrame, dates: pd.Series | None
+    ) -> np.ndarray:
         """Creates a train/validation split, time-based if possible."""
         if dates is not None and not dates.isnull().all():
             cutoff = dates.quantile(0.9)
             return dates < cutoff
 
         _, val_idx = train_test_split(
-            np.arange(len(X)), test_size=0.1, random_state=self.config.model.random_state
+            np.arange(len(X)),
+            test_size=0.1,
+            random_state=self.config.model.random_state,
         )
         train_mask = np.ones(len(X), dtype=bool)
         train_mask[val_idx] = False
@@ -208,10 +249,12 @@ class MatchPredictor:
         start = time.perf_counter()
 
         X_train, _, y_train, _, tw_train, _ = train_test_split(
-            X, y_result_encoded, time_weights,
+            X,
+            y_result_encoded,
+            time_weights,
             test_size=self.config.model.test_size,
             random_state=self.config.model.random_state,
-            stratify=y_result_encoded
+            stratify=y_result_encoded,
         )
 
         balanced_weights = compute_sample_weight("balanced", y=y_train)
@@ -225,12 +268,18 @@ class MatchPredictor:
         sample_weights = balanced_weights * tw_train * boost_weights
 
         self.outcome_model = XGBClassifier(**self.config.model.outcome_params)
-        self.outcome_model.fit(X_train, y_train, sample_weight=sample_weights, verbose=False)
+        self.outcome_model.fit(
+            X_train, y_train, sample_weight=sample_weights, verbose=False
+        )
 
         self._log(f"Outcome classifier trained in {time.perf_counter() - start:.2f}s")
-        self._log(f"Applied balanced class weights, draw_boost={draw_boost}, and time-decay weighting.")
+        self._log(
+            f"Applied balanced class weights, draw_boost={draw_boost}, and time-decay weighting."
+        )
 
-    def predict(self, features_df: pd.DataFrame, workers: int | None = None) -> list[dict]:
+    def predict(
+        self, features_df: pd.DataFrame, workers: int | None = None
+    ) -> list[dict]:
         """Predicts match outcomes and scorelines.
 
         Args:
@@ -245,16 +294,28 @@ class MatchPredictor:
 
         X = self._prepare_features(features_df)
         classifier_probs = self._get_calibrated_probabilities(X)
-        outcomes = self.label_encoder.inverse_transform(np.argmax(classifier_probs, axis=1))
+        outcomes = self.label_encoder.inverse_transform(
+            np.argmax(classifier_probs, axis=1)
+        )
 
-        home_lambdas = np.maximum(self.home_goals_model.predict(X), self.config.model.min_lambda)
-        away_lambdas = np.maximum(self.away_goals_model.predict(X), self.config.model.min_lambda)
+        home_lambdas = np.maximum(
+            self.home_goals_model.predict(X), self.config.model.min_lambda
+        )
+        away_lambdas = np.maximum(
+            self.away_goals_model.predict(X), self.config.model.min_lambda
+        )
 
-        scorelines = self._compute_scorelines(outcomes, home_lambdas, away_lambdas, workers)
+        scorelines = self._compute_scorelines(
+            outcomes, home_lambdas, away_lambdas, workers
+        )
 
-        final_probs = self._derive_final_probabilities(classifier_probs, home_lambdas, away_lambdas)
+        final_probs = self._derive_final_probabilities(
+            classifier_probs, home_lambdas, away_lambdas
+        )
 
-        return self._format_predictions(features_df, outcomes, scorelines, final_probs, home_lambdas, away_lambdas)
+        return self._format_predictions(
+            features_df, outcomes, scorelines, final_probs, home_lambdas, away_lambdas
+        )
 
     def _prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Aligns DataFrame columns with the model's feature schema."""
@@ -286,12 +347,19 @@ class MatchPredictor:
         n = len(outcomes)
         if workers and workers > 1 and n > 0:
             with ProcessPoolExecutor(max_workers=workers) as executor:
-                return list(executor.map(
-                    compute_scoreline_for_outcome,
-                    outcomes, home_lambdas, away_lambdas, itertools.repeat(max_goals, n)
-                ))
+                return list(
+                    executor.map(
+                        compute_scoreline_for_outcome,
+                        outcomes,
+                        home_lambdas,
+                        away_lambdas,
+                        itertools.repeat(max_goals, n),
+                    )
+                )
         return [
-            compute_scoreline_for_outcome(outcomes[i], home_lambdas[i], away_lambdas[i], max_goals)
+            compute_scoreline_for_outcome(
+                outcomes[i], home_lambdas[i], away_lambdas[i], max_goals
+            )
             for i in range(n)
         ]
 
@@ -301,7 +369,9 @@ class MatchPredictor:
         if prob_source == "classifier":
             return classifier_probs
 
-        poisson_probs = self._calculate_poisson_outcome_probs(home_lambdas, away_lambdas)
+        poisson_probs = self._calculate_poisson_outcome_probs(
+            home_lambdas, away_lambdas
+        )
         if prob_source == "poisson":
             return poisson_probs
 
@@ -331,10 +401,12 @@ class MatchPredictor:
         probs = np.stack([pH, pD, pA], axis=1)
         return probs / np.sum(probs, axis=1, keepdims=True)
 
-    def _format_predictions(self, df, outcomes, scorelines, final_probs, home_lambdas, away_lambdas):
+    def _format_predictions(
+        self, df, outcomes, scorelines, final_probs, home_lambdas, away_lambdas
+    ):
         """Assembles the final list of prediction dictionaries."""
         predictions = []
-        prob_map = {label: i for i, label in self.label_encoder.classes_}
+        prob_map = {label: i for i, label in enumerate(self.label_encoder.classes_)}
 
         for i in range(len(df)):
             probs_sorted = sorted(final_probs[i], reverse=True)
@@ -366,7 +438,10 @@ class MatchPredictor:
         joblib.dump(self.home_goals_model, self.config.paths.home_goals_model_path)
         joblib.dump(self.away_goals_model, self.config.paths.away_goals_model_path)
 
-        metadata = {"feature_columns": self.feature_columns, "label_encoder": self.label_encoder}
+        metadata = {
+            "feature_columns": self.feature_columns,
+            "label_encoder": self.label_encoder,
+        }
         joblib.dump(metadata, self.config.paths.models_dir / "metadata.joblib")
         self._log("Models saved successfully.")
 
@@ -374,7 +449,9 @@ class MatchPredictor:
         """Loads trained models and metadata from disk."""
         self._log(f"Loading models from {self.config.paths.models_dir}")
         if not self.config.paths.outcome_model_path.exists():
-            raise FileNotFoundError(f"Model not found: {self.config.paths.outcome_model_path}")
+            raise FileNotFoundError(
+                f"Model not found: {self.config.paths.outcome_model_path}"
+            )
 
         self.outcome_model = joblib.load(self.config.paths.outcome_model_path)
         self.home_goals_model = joblib.load(self.config.paths.home_goals_model_path)
@@ -395,4 +472,5 @@ class MatchPredictor:
             A dictionary of evaluation metrics.
         """
         from .evaluate import evaluate_predictor
+
         return evaluate_predictor(self, test_df)
