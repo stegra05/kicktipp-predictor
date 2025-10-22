@@ -53,7 +53,8 @@
 
         let featuresHtml = '<ul>';
         for (const [key, value] of Object.entries(pred.features)) {
-            featuresHtml += `<li><strong>${key}:</strong> ${value.toFixed(4)}</li>`;
+            const displayValue = (typeof value === 'number' && value !== null) ? value.toFixed(4) : 'N/A';
+            featuresHtml += `<li><strong>${key}:</strong> ${displayValue}</li>`;
         }
         featuresHtml += '</ul>';
 
