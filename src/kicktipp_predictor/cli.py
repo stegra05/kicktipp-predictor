@@ -500,7 +500,6 @@ def tune(
             p.wait()
             if p.returncode != 0 and exit_code == 0:
                 exit_code = p.returncode
-        raise typer.Exit(code=exit_code)
 
 
 @app.command()
@@ -672,14 +671,140 @@ def tune_baseline(
         p = subprocess.Popen(cmd, cwd=str(pkg_root), env=worker_env)
         procs.append(p)
 
-    # 4) Wait for all workers
+    # 4) Central progress bar and summary
     exit_code = 0
-    for p in procs:
-        p.wait()
-        if p.returncode != 0 and exit_code == 0:
-            exit_code = p.returncode
+    try:
+        import time as _time
 
-    raise typer.Exit(code=exit_code)
+        import optuna as _optuna
+        from optuna.importance import get_param_importances as _get_param_importances
+        from optuna.visualization import (
+            plot_param_importances as _plot_param_importances,
+        )
+        from rich.progress import (
+            BarColumn,
+            Progress,
+            SpinnerColumn,
+            TextColumn,
+            TimeElapsedColumn,
+            TimeRemainingColumn,
+        )
+
+        # Silence Optuna logs for a cleaner console
+        try:
+            _optuna.logging.disable_default_handler()
+            _optuna.logging.set_verbosity(_optuna.logging.WARNING)
+        except Exception:
+            pass
+
+        # Determine study name used by workers (defaults to tune_baseline.py default)
+        study_name_local = study_name or "baseline-ppg"
+        total_trials = n_trials
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total} trials"),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+            transient=False,
+        ) as progress:
+            task_id = progress.add_task("Baseline tuning (PPG)", total=total_trials)
+            # Poll study storage until all workers finish
+            while True:
+                # Update completed count
+                try:
+                    study = _optuna.load_study(study_name=study_name_local, storage=url)
+                    trials = study.get_trials(deepcopy=False)
+                    completed = sum(
+                        1
+                        for t in trials
+                        if t.state == _optuna.trial.TrialState.COMPLETE
+                    )
+                    progress.update(task_id, completed=min(completed, total_trials))
+                except Exception:
+                    # If storage not ready yet, just keep spinner spinning
+                    pass
+                # Check workers
+                alive = any(p.poll() is None for p in procs)
+                if not alive:
+                    break
+                _time.sleep(0.5)
+
+        # Finalize and compute exit code
+        for p in procs:
+            p.wait()
+            if p.returncode != 0 and exit_code == 0:
+                exit_code = p.returncode
+
+        # Central best params and importances logging
+        try:
+            study = _optuna.load_study(study_name=study_name_local, storage=url)
+            trials = study.get_trials(deepcopy=False)
+            completed = sum(
+                1 for t in trials if t.state == _optuna.trial.TrialState.COMPLETE
+            )
+            if completed == 0:
+                typer.echo("No completed trials; skipping best params and importances.")
+            else:
+                # Save best params
+                best_params = dict(study.best_params)
+                cfg_dir = pkg_root / "config"
+                cfg_dir.mkdir(parents=True, exist_ok=True)
+                out_yaml = cfg_dir / "best_params_baseline.yaml"
+                try:
+                    import yaml as _yaml  # type: ignore
+                except Exception:
+                    _yaml = None
+                if _yaml is not None:
+                    with open(out_yaml, "w", encoding="utf-8") as f:
+                        _yaml.safe_dump(best_params, f, sort_keys=True)
+                    typer.echo(f"Best parameters saved to {out_yaml}")
+                else:
+                    import json as _json
+
+                    with open(
+                        out_yaml.with_suffix(".json"), "w", encoding="utf-8"
+                    ) as f:
+                        _json.dump(best_params, f, indent=2)
+                    typer.echo(
+                        f"Best parameters saved to {out_yaml.with_suffix('.json')}"
+                    )
+
+                # Save importances plot if enough trials
+                if completed >= 2:
+                    try:
+                        _ = _get_param_importances(study)  # validate availability
+                        fig = _plot_param_importances(study)
+                        out_dir = pkg_root / "data" / "optuna"
+                        out_dir.mkdir(parents=True, exist_ok=True)
+                        plot_path = (
+                            Path(save_plot)
+                            if save_plot
+                            else (out_dir / "baseline_param_importances.html")
+                        )
+                        fig.write_html(str(plot_path))
+                        typer.echo(f"Param importances saved to {plot_path}")
+                    except Exception as e:
+                        typer.echo(
+                            f"Warning: Could not compute/save param importances: {e}"
+                        )
+                else:
+                    typer.echo("Not enough trials to compute importances (need ≥2).")
+        except Exception:
+            # Swallow central save errors; users will still have worker outputs
+            pass
+
+        raise typer.Exit(code=exit_code)
+    except Exception:
+        # Fallback: no rich/optuna available; just wait for workers
+        exit_code = 0
+        for p in procs:
+            p.wait()
+            if p.returncode != 0 and exit_code == 0:
+                exit_code = p.returncode
+        raise typer.Exit(code=exit_code)
 
 
 @app.command()
