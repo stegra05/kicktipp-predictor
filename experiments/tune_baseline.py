@@ -411,6 +411,13 @@ def main():
         print("Optuna not installed. Install optuna to run tuning.")
         sys.exit(1)
 
+    # Silence Optuna logs unless explicitly debugging
+    try:
+        optuna.logging.disable_default_handler()
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+    except Exception:
+        pass
+
     # Limit threads
     if args.omp_threads and args.omp_threads > 0:
         for var in (
