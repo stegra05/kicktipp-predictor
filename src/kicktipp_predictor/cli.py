@@ -313,276 +313,72 @@ def tune(
     env = os.environ.copy()
     # tell worker not to delete DB when coordinated by CLI
     env["KTP_TUNE_COORDINATED"] = "1"
-
-    # Determine objectives list
-    objectives = (
-        [o.strip() for o in compare.split(",") if o.strip()] if compare else [objective]
-    )
+    # Propagate BLAS/OMP thread caps to subprocesses to prevent OpenBLAS oversubscription
+    env["OMP_NUM_THREADS"] = "1"
+    env["OPENBLAS_NUM_THREADS"] = "1"
+    env["MKL_NUM_THREADS"] = "1"
+    env["NUMEXPR_NUM_THREADS"] = "1"
+    env["XGBOOST_NUM_THREADS"] = "1"
 
     # Serial execution (workers==1)
     if workers == 1:
-        procs: list[subprocess.Popen] = []
-        exit_code = 0
-        for obj in objectives:
-            cmd = base_args(n_trials) + ["--objective", obj]
-            # storage handling
-            url = sqlite_url_for(obj)
-            if url:
-                cmd += ["--storage", url]
-            if study_name:
-                cmd += [
-                    "--study-name",
-                    f"{study_name}-{obj}" if compare else study_name,
-                ]
-            p = subprocess.Popen(cmd, cwd=str(pkg_root), env=env)
-            procs.append(p)
-            p.wait()
-            if p.returncode != 0 and exit_code == 0:
-                exit_code = p.returncode
-        raise typer.Exit(code=exit_code)
-
-    # Multi-worker execution requires storage; for compare we iterate objectives
-    if workers > 1 and compare:
-        # For each objective, run a full multi-worker round using per-objective sqlite
-        for obj in objectives:
-            url = sqlite_url_for(obj)
-            if not url:
-                typer.echo(
-                    "When --workers > 1, a storage URL is required (sqlite or RDBMS)"
-                )
-                raise typer.Exit(code=2)
-            # 1) Initialize the study/db with a 0-trial run
-            init_cmd = base_args(0) + ["--objective", obj, "--storage", url]
-            if study_name:
-                init_cmd += ["--study-name", f"{study_name}-{obj}"]
-            init_proc = subprocess.Popen(init_cmd, cwd=str(pkg_root), env=env)
-            init_proc.wait()
-            if init_proc.returncode != 0:
-                typer.echo(
-                    f"Failed to initialize storage for objective {obj}. Aborting."
-                )
-                raise typer.Exit(code=init_proc.returncode)
-
-            # 2) Split total trials evenly across workers
-            base = n_trials // workers
-            rem = n_trials % workers
-            allocations = [base + (1 if i < rem else 0) for i in range(workers)]
-
-        # 3) Launch worker subprocesses
-        procs: list[subprocess.Popen] = []
-        for worker_idx, trials in enumerate(allocations):
-            if trials <= 0:
-                continue
-            cmd = base_args(trials) + ["--objective", obj, "--storage", url]
-            if study_name:
-                cmd += ["--study-name", f"{study_name}-{obj}"]
-
-            # Set worker environment variables for coordination
-            worker_env = env.copy()
-            worker_env["OPTUNA_WORKER_ID"] = str(worker_idx)
-            worker_env["OPTUNA_TOTAL_WORKERS"] = str(workers)
-
-            p = subprocess.Popen(cmd, cwd=str(pkg_root), env=worker_env)
-            procs.append(p)
-
-            # 4) Wait for all workers
-            exit_code = 0
-            for p in procs:
-                p.wait()
-                if p.returncode != 0 and exit_code == 0:
-                    exit_code = p.returncode
-            if exit_code != 0:
-                raise typer.Exit(code=exit_code)
-        raise typer.Exit(code=0)
-
-    # Multi-worker single objective
-    if workers > 1:
-        if not storage:
-            typer.echo(
-                "When --workers > 1, a storage URL is required (sqlite or RDBMS)"
-            )
-            raise typer.Exit(code=2)
-
-        # Import progress monitoring dependencies
-        try:
-            import threading
-            import time
-
-            import optuna
-            from rich.console import Console
-            from rich.panel import Panel
-            from rich.progress import (
-                BarColumn,
-                Progress,
-                TextColumn,
-                TimeElapsedColumn,
-                TimeRemainingColumn,
-            )
-        except ImportError:
-            typer.echo(
-                "Rich or Optuna not available for progress monitoring. Running without progress display."
-            )
-            progress_monitoring = False
-        else:
-            progress_monitoring = True
-            console = Console()
-
-        # 1) Initialize the study/db with a 0-trial run
-        init_cmd = base_args(0) + ["--objective", objectives[0], "--storage", storage]
+        cmd = base_args(n_trials)
+        url = sqlite_url_for(objective)
+        if url:
+            cmd += ["--storage", url]
         if study_name:
-            init_cmd += ["--study-name", study_name]
-        init_proc = subprocess.Popen(init_cmd, cwd=str(pkg_root), env=env)
-        init_proc.wait()
-        if init_proc.returncode != 0:
-            typer.echo("Failed to initialize study/storage. Aborting.")
-            raise typer.Exit(code=init_proc.returncode)
+            cmd += ["--study-name", study_name]
+        p = subprocess.Popen(cmd, cwd=str(pkg_root), env=env)
+        p.wait()
+        raise typer.Exit(code=p.returncode or 0)
 
-        # 2) Split total trials evenly across workers
-        base = n_trials // workers
-        rem = n_trials % workers
-        allocations = [base + (1 if i < rem else 0) for i in range(workers)]
+    # Multi-worker execution requires storage
+    url = sqlite_url_for(objective)
+    if not url:
+        typer.echo("When --workers > 1, a storage URL is required (sqlite or RDBMS)")
+        raise typer.Exit(code=2)
 
-        # 3) Launch worker subprocesses
-        procs: list[subprocess.Popen] = []
-        for worker_idx, trials in enumerate(allocations):
-            if trials <= 0:
-                continue
-            cmd = base_args(trials) + [
-                "--objective",
-                objectives[0],
-                "--storage",
-                storage,
-            ]
-            if study_name:
-                cmd += ["--study-name", study_name]
+    # 1) Initialize the study/db with a 0-trial run
+    init_cmd = base_args(0)
+    init_cmd += ["--storage", url]
+    if study_name:
+        init_cmd += ["--study-name", study_name]
+    init_proc = subprocess.Popen(init_cmd, cwd=str(pkg_root), env=env)
+    init_proc.wait()
+    if init_proc.returncode != 0:
+        typer.echo("Failed to initialize study/storage. Aborting.")
+        raise typer.Exit(code=init_proc.returncode)
 
-            # Set worker environment variables for coordination
-            worker_env = env.copy()
-            worker_env["OPTUNA_WORKER_ID"] = str(worker_idx)
-            worker_env["OPTUNA_TOTAL_WORKERS"] = str(workers)
+    # 2) Split total trials evenly across workers
+    base = n_trials // workers
+    rem = n_trials % workers
+    allocations = [base + (1 if i < rem else 0) for i in range(workers)]
 
-            p = subprocess.Popen(cmd, cwd=str(pkg_root), env=worker_env)
-            procs.append(p)
+    # 3) Launch worker subprocesses
+    procs: list[subprocess.Popen] = []
+    for worker_idx, trials in enumerate(allocations):
+        if trials <= 0:
+            continue
+        cmd = base_args(trials) + ["--storage", url]
+        if study_name:
+            cmd += ["--study-name", study_name]
 
-        # 4) Progress monitoring and wait for all workers
-        if progress_monitoring:
+        # Set worker environment variables for coordination
+        worker_env = env.copy()
+        worker_env["OPTUNA_WORKER_ID"] = str(worker_idx)
+        worker_env["OPTUNA_TOTAL_WORKERS"] = str(workers)
 
-            def monitor_progress():
-                """Monitor progress by polling the Optuna study database."""
-                study_name_full = (study_name or "kicktipp-tune") + f"-{objectives[0]}"
+        p = subprocess.Popen(cmd, cwd=str(pkg_root), env=worker_env)
+        procs.append(p)
 
-                with Progress(
-                    TextColumn("[bold blue]Tuning Progress"),
-                    BarColumn(),
-                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                    TextColumn("•"),
-                    TextColumn("[bold green]{task.completed}/{task.total} trials"),
-                    TextColumn("•"),
-                    TextColumn("[bold cyan]Best: {task.fields[best_value]:.4f}"),
-                    TextColumn("•"),
-                    TimeElapsedColumn(),
-                    TextColumn("•"),
-                    TimeRemainingColumn(),
-                    console=console,
-                    transient=False,
-                ) as progress:
-                    task = progress.add_task(
-                        "Optimizing...", total=n_trials, completed=0, best_value=0.0
-                    )
+    # 4) Wait for all workers
+    exit_code = 0
+    for p in procs:
+        p.wait()
+        if p.returncode != 0 and exit_code == 0:
+            exit_code = p.returncode
 
-                    while any(p.poll() is None for p in procs):
-                        try:
-                            # Load study to get current progress
-                            study = optuna.load_study(
-                                study_name=study_name_full, storage=storage
-                            )
-
-                            completed_trials = len(
-                                [
-                                    t
-                                    for t in study.trials
-                                    if t.state == optuna.trial.TrialState.COMPLETE
-                                ]
-                            )
-
-                            best_value = study.best_value if study.best_trials else 0.0
-
-                            progress.update(
-                                task, completed=completed_trials, best_value=best_value
-                            )
-
-                        except Exception:
-                            # Study might not be ready yet, continue monitoring
-                            pass
-
-                        time.sleep(2)  # Poll every 2 seconds
-
-                    # Final update
-                    try:
-                        study = optuna.load_study(
-                            study_name=study_name_full, storage=storage
-                        )
-                        completed_trials = len(
-                            [
-                                t
-                                for t in study.trials
-                                if t.state == optuna.trial.TrialState.COMPLETE
-                            ]
-                        )
-                        best_value = study.best_value if study.best_trials else 0.0
-                        progress.update(
-                            task, completed=completed_trials, best_value=best_value
-                        )
-                    except Exception:
-                        pass
-
-            # Start progress monitoring in a separate thread
-            monitor_thread = threading.Thread(target=monitor_progress, daemon=True)
-            monitor_thread.start()
-
-        # Wait for all workers
-        exit_code = 0
-        for p in procs:
-            p.wait()
-            if p.returncode != 0 and exit_code == 0:
-                exit_code = p.returncode
-
-        # Show final results if progress monitoring was enabled
-        if progress_monitoring:
-            try:
-                study_name_full = (study_name or "kicktipp-tune") + f"-{objectives[0]}"
-                study = optuna.load_study(study_name=study_name_full, storage=storage)
-
-                completed_trials = len(
-                    [
-                        t
-                        for t in study.trials
-                        if t.state == optuna.trial.TrialState.COMPLETE
-                    ]
-                )
-
-                if completed_trials > 0:
-                    console.print(
-                        Panel.fit(
-                            f"[bold green]✅ Tuning Complete![/bold green]\n"
-                            f"[bold]Completed Trials:[/bold] {completed_trials}/{n_trials}\n"
-                            f"[bold]Best Value:[/bold] {study.best_value:.6f}\n"
-                            f"[bold]Best Trial:[/bold] #{study.best_trial.number}",
-                            border_style="green",
-                        )
-                    )
-                else:
-                    console.print(
-                        Panel.fit(
-                            "[bold red]❌ No trials completed[/bold red]\n"
-                            "Check worker processes for errors",
-                            border_style="red",
-                        )
-                    )
-            except Exception as e:
-                console.print(f"[red]Warning: Could not load final results: {e}[/red]")
-
-        raise typer.Exit(code=exit_code)
+    raise typer.Exit(code=exit_code)
 
 
 @app.command()
@@ -696,6 +492,12 @@ def tune_baseline(
     env = os.environ.copy()
     # tell worker not to delete DB when coordinated by CLI
     env["KTP_TUNE_COORDINATED"] = "1"
+    # Propagate BLAS/OMP thread caps to subprocesses to prevent OpenBLAS oversubscription
+    env["OMP_NUM_THREADS"] = str(omp_threads)
+    env["OPENBLAS_NUM_THREADS"] = str(omp_threads)
+    env["MKL_NUM_THREADS"] = str(omp_threads)
+    env["NUMEXPR_NUM_THREADS"] = str(omp_threads)
+    env["XGBOOST_NUM_THREADS"] = str(omp_threads)
 
     # Serial execution (workers==1)
     if workers == 1:

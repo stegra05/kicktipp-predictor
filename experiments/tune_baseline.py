@@ -418,8 +418,9 @@ def main():
             "OPENBLAS_NUM_THREADS",
             "MKL_NUM_THREADS",
             "NUMEXPR_NUM_THREADS",
+            "XGBOOST_NUM_THREADS",
         ):
-            os.environ.setdefault(var, str(args.omp_threads))
+            os.environ[var] = str(args.omp_threads)
 
     # Build initial fixed split features cache holder
     features_cache: dict[tuple[int, float], object] = {}
