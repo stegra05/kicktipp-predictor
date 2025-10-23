@@ -586,6 +586,179 @@ def tune(
 
 
 @app.command()
+def tune_baseline(
+    n_trials: int = typer.Option(100, help="Total Optuna trials across all workers"),
+    seasons_back: int = typer.Option(
+        5, help="Number of seasons back for training window"
+    ),
+    workers: int = typer.Option(1, help="Number of parallel worker processes"),
+    storage: str | None = typer.Option(
+        None,
+        help="Optuna storage URL for multi-process tuning (e.g., sqlite:////abs/path/study.db?timeout=60)",
+    ),
+    study_name: str | None = typer.Option(
+        None, help="Optuna study name when using storage"
+    ),
+    pruner: str = typer.Option("median", help="Pruner: none|median|hyperband"),
+    pruner_startup_trials: int = typer.Option(
+        15, help="Trials before enabling pruning (median)"
+    ),
+    omp_threads: int = typer.Option(1, help="Threads per worker for BLAS/OMP"),
+    verbose: bool = typer.Option(False, help="Enable verbose inner logs during tuning"),
+    save_plot: str | None = typer.Option(
+        None, help="Path to save param importances plot (HTML)"
+    ),
+):
+    """Run baseline Optuna tuning on a fixed train/test split (PPG objective).
+
+    When workers > 1, a shared storage is required. Trials are evenly split across
+    workers and coordinated via storage, similar to the 'tune' command.
+    """
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    # Locate experiments/tune_baseline.py relative to this file
+    pkg_root = Path(__file__).resolve().parents[2]
+    baseline_path = pkg_root / "experiments" / "tune_baseline.py"
+    if not baseline_path.exists():
+        typer.echo(
+            f"Could not find {baseline_path}. Run from a checkout with experiments present."
+        )
+        raise typer.Exit(code=1)
+
+    if workers < 1:
+        workers = 1
+
+    # Require storage for multi-worker coordination
+    if workers > 1 and not storage:
+        typer.echo(
+            "When --workers > 1, you must provide --storage (e.g., sqlite:////abs/path/study.db?timeout=60)"
+        )
+        raise typer.Exit(code=2)
+
+    # Warn about SQLite limitations with high worker counts
+    if workers > 1 and storage and storage.startswith("sqlite:"):
+        if workers > 20:
+            typer.echo(
+                f"⚠️  Warning: Using {workers} workers with SQLite may cause database lock errors. "
+                "Consider using fewer workers (≤20) or a PostgreSQL/MySQL database for better concurrency."
+            )
+        elif workers > 10:
+            typer.echo(
+                f"ℹ️  Note: Using {workers} workers with SQLite. For optimal performance, consider using ≤10 workers or a PostgreSQL database."
+            )
+
+    def base_args(trials: int) -> list[str]:
+        args = [
+            sys.executable,
+            str(baseline_path),
+            "--n-trials",
+            str(max(0, int(trials))),
+            "--seasons-back",
+            str(seasons_back),
+            "--omp-threads",
+            str(omp_threads),
+            "--verbose" if verbose else None,
+        ]
+        args = [a for a in args if a is not None]
+        # propagate inner options
+        if pruner:
+            args += ["--pruner", pruner]
+        if pruner_startup_trials is not None:
+            args += ["--pruner-startup-trials", str(pruner_startup_trials)]
+        if save_plot:
+            args += ["--save-plot", str(save_plot)]
+        return args
+
+    # Helper: build sqlite URL with concurrency parameters
+    def sqlite_url() -> str | None:
+        if not storage:
+            return None
+        if not storage.startswith("sqlite:"):
+            return storage
+        base, *q = storage.split("?", 1)
+        query = ("?" + q[0]) if q else ""
+
+        # Ensure optimal parameters are set for SQLite URLs to handle database locks
+        if query:
+            if "timeout=" not in query:
+                query += "&timeout=300"  # 5 minutes timeout
+            if "check_same_thread=" not in query:
+                query += "&check_same_thread=false"
+            if "isolation_level=" not in query:
+                query += "&isolation_level=IMMEDIATE"
+        else:
+            query = "?timeout=300&check_same_thread=false&isolation_level=IMMEDIATE"
+        return base + query
+
+    env = os.environ.copy()
+    # tell worker not to delete DB when coordinated by CLI
+    env["KTP_TUNE_COORDINATED"] = "1"
+
+    # Serial execution (workers==1)
+    if workers == 1:
+        cmd = base_args(n_trials)
+        url = sqlite_url()
+        if url:
+            cmd += ["--storage", url]
+        if study_name:
+            cmd += ["--study-name", study_name]
+        p = subprocess.Popen(cmd, cwd=str(pkg_root), env=env)
+        p.wait()
+        raise typer.Exit(code=p.returncode or 0)
+
+    # Multi-worker execution requires storage
+    url = sqlite_url()
+    if not url:
+        typer.echo("When --workers > 1, a storage URL is required (sqlite or RDBMS)")
+        raise typer.Exit(code=2)
+
+    # 1) Initialize the study/db with a 0-trial run
+    init_cmd = base_args(0)
+    init_cmd += ["--storage", url]
+    if study_name:
+        init_cmd += ["--study-name", study_name]
+    init_proc = subprocess.Popen(init_cmd, cwd=str(pkg_root), env=env)
+    init_proc.wait()
+    if init_proc.returncode != 0:
+        typer.echo("Failed to initialize study/storage. Aborting.")
+        raise typer.Exit(code=init_proc.returncode)
+
+    # 2) Split total trials evenly across workers
+    base = n_trials // workers
+    rem = n_trials % workers
+    allocations = [base + (1 if i < rem else 0) for i in range(workers)]
+
+    # 3) Launch worker subprocesses
+    procs: list[subprocess.Popen] = []
+    for worker_idx, trials in enumerate(allocations):
+        if trials <= 0:
+            continue
+        cmd = base_args(trials) + ["--storage", url]
+        if study_name:
+            cmd += ["--study-name", study_name]
+
+        # Set worker environment variables for coordination
+        worker_env = env.copy()
+        worker_env["OPTUNA_WORKER_ID"] = str(worker_idx)
+        worker_env["OPTUNA_TOTAL_WORKERS"] = str(workers)
+
+        p = subprocess.Popen(cmd, cwd=str(pkg_root), env=worker_env)
+        procs.append(p)
+
+    # 4) Wait for all workers
+    exit_code = 0
+    for p in procs:
+        p.wait()
+        if p.returncode != 0 and exit_code == 0:
+            exit_code = p.returncode
+
+    raise typer.Exit(code=exit_code)
+
+
+@app.command()
 def shap(
     seasons_back: int = typer.Option(
         5, help="Number of seasons back to sample training-like data"
