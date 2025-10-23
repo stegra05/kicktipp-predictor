@@ -1,7 +1,7 @@
 # --- Engineered/Derived Features (The High-Value Signals) ---
 
 # ELO: Tamed Elo to control for bias and incorporate uncertainty scale factor
-- normalized_elo_diff
+- tanh_tamed_elo
 
 # DIFFERENCES: Simple differences/ratios that proved robust in SHAP/ablation
 - abs_form_points_diff

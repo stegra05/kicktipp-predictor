@@ -1,4 +1,4 @@
-draw_boost: 2.5
+draw_boost: 4.0
 form_last_n: 6
 goals_colsample_bytree: 1.0
 goals_gamma: 0.9

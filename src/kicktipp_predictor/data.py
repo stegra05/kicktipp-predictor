@@ -495,6 +495,39 @@ class DataLoader:
                 features_df["elo_diff"] = features_df.get(
                     "home_elo", 0.0
                 ) - features_df.get("away_elo", 0.0)
+                # Compute normalized Elo diff (scaled by matches played) and drop raw Elo
+                home_mp = (
+                    features_df.get(
+                        "home_matches_played",
+                        features_df.get("home_matches_played_prior", 0),
+                    )
+                    .fillna(0)
+                    .astype(float)
+                )
+                away_mp = (
+                    features_df.get(
+                        "away_matches_played",
+                        features_df.get("away_matches_played_prior", 0),
+                    )
+                    .fillna(0)
+                    .astype(float)
+                )
+                avg_matches = (home_mp + away_mp) / 2.0
+                scale_factor = 1.0 + avg_matches * 0.01
+                features_df["normalized_elo_diff"] = (
+                    features_df["elo_diff"].fillna(0).astype(float) / scale_factor
+                )
+                features_df.drop(
+                    columns=["home_elo", "away_elo", "elo_diff"],
+                    errors="ignore",
+                    inplace=True,
+                )
+                # Scaled tanh tamer for Elo difference (C=100)
+                if "normalized_elo_diff" in features_df.columns:
+                    with np.errstate(over="ignore"):
+                        features_df["tanh_tamed_elo"] = np.tanh(
+                            features_df["normalized_elo_diff"].astype(float) / 100.0
+                        )
             except Exception:
                 pass
 
@@ -527,6 +560,12 @@ class DataLoader:
                 errors="ignore",
                 inplace=True,
             )
+            # Scaled tanh tamer for Elo difference (C=100)
+            if "normalized_elo_diff" in features_df.columns:
+                with np.errstate(over="ignore"):
+                    features_df["tanh_tamed_elo"] = np.tanh(
+                        features_df["normalized_elo_diff"].astype(float) / 100.0
+                    )
 
         # Compute normalized Elo diff and drop raw Elo columns
         if "elo_diff" in features_df.columns:

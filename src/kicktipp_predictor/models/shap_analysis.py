@@ -4,6 +4,8 @@ import csv
 import json
 import math
 import os
+import re
+import sys
 from collections.abc import Iterable
 from contextlib import contextmanager
 from typing import Any
@@ -60,6 +62,64 @@ def _status(message: str):
     else:
         _print(message)
         yield
+
+
+class _TqdmSuppressor:
+    """Suppress typical tqdm progress bar lines to avoid noisy logs.
+
+    This intercepts writes that look like tqdm progress updates and drops them,
+    letting our own rich progress handle in-place updates cleanly.
+    """
+
+    def __init__(self, original):
+        self._orig = original
+        # Match tqdm-style bars like:
+        # "PermutationExplainer explainer:  63%|#####6   | 546/869 [00:33<00:18, 17.33it/s]"
+        # and other generic progress bar patterns with percentage and counts.
+        self._pattern = re.compile(
+            r"(PermutationExplainer\s+explainer:.*)|(\d+%\|#+.*\|\s*\d+/\d+.*it/s)"
+        )
+
+    def write(self, s: str):
+        try:
+            if not isinstance(s, str):
+                s = str(s)
+            # Drop pure carriage returns or tqdm-style updates
+            if s == "\r" or s.endswith("\r") or self._pattern.search(s):
+                return
+        except Exception:
+            # If anything goes wrong, fall back to original write
+            pass
+        return self._orig.write(s)
+
+    def flush(self):
+        try:
+            self._orig.flush()
+        except Exception:
+            pass
+
+    def isatty(self):
+        # Present as non-tty to discourage interactive bar behavior
+        try:
+            return False
+        except Exception:
+            return False
+
+
+@contextmanager
+def _suppress_tqdm_output():
+    """Temporarily suppress tqdm progress output on stderr/stdout."""
+    orig_err = sys.stderr
+    orig_out = sys.stdout
+    err_sup = _TqdmSuppressor(orig_err)
+    out_sup = _TqdmSuppressor(orig_out)
+    sys.stderr = err_sup
+    sys.stdout = out_sup
+    try:
+        yield
+    finally:
+        sys.stderr = orig_err
+        sys.stdout = orig_out
 
 
 def _ensure_shap_matplotlib_loaded() -> tuple[bool, str]:
@@ -748,7 +808,9 @@ def run_shap_for_predictor(
 
         with _status(f"Computing SHAP values for {display_name}..."):
             try:
-                shap_values = _compute_shap_values(explainer, X)
+                # Suppress tqdm's verbose progress bars and rely on rich spinner
+                with _suppress_tqdm_output():
+                    shap_values = _compute_shap_values(explainer, X)
             except Exception as e:  # pragma: no cover
                 if model_table is not None:
                     model_table.add_row(

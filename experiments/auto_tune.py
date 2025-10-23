@@ -357,8 +357,8 @@ def _objective_builder(
             return {
                 # Class weighting - Widen range slightly
                 "draw_boost": trial.suggest_float(
-                    "draw_boost", 1.2, 2.5, step=0.1
-                ),  # Default 1.5
+                    "draw_boost", 1.2, 6.0, step=0.1
+                ),  # Default 1.5 (expanded upper bound)
                 # Outcome XGB - Reduce upper bounds for regularization
                 "outcome_n_estimators": trial.suggest_int(
                     "outcome_n_estimators", 100, 800, step=50
