@@ -233,71 +233,71 @@ def build_objective(
         # Suggest parameter space focused on big levers
         params = {
             # Class weighting & time-decay
-            "draw_boost": trial.suggest_float("draw_boost", 1.0, 3.0, step=0.1),
+            "draw_boost": trial.suggest_float("draw_boost", 0.8, 5.0, step=0.1),
             "time_decay_half_life_days": trial.suggest_float(
-                "time_decay_half_life_days", 45.0, 180.0
+                "time_decay_half_life_days", 15.0, 365.0
             ),
             # Outcome XGB
             "outcome_n_estimators": trial.suggest_int(
-                "outcome_n_estimators", 200, 900, step=50
+                "outcome_n_estimators", 100, 1500, step=50
             ),
-            "outcome_max_depth": trial.suggest_int("outcome_max_depth", 3, 8),
+            "outcome_max_depth": trial.suggest_int("outcome_max_depth", 2, 12),
             "outcome_learning_rate": trial.suggest_float(
-                "outcome_learning_rate", 0.02, 0.2, log=True
+                "outcome_learning_rate", 0.005, 0.5, log=True
             ),
             "outcome_subsample": trial.suggest_float(
-                "outcome_subsample", 0.6, 1.0, step=0.1
+                "outcome_subsample", 0.4, 1.0, step=0.1
             ),
             "outcome_colsample_bytree": trial.suggest_float(
-                "outcome_colsample_bytree", 0.6, 1.0, step=0.1
+                "outcome_colsample_bytree", 0.4, 1.0, step=0.1
             ),
             "outcome_reg_alpha": trial.suggest_float(
-                "outcome_reg_alpha", 1e-6, 0.5, log=True
+                "outcome_reg_alpha", 1e-8, 1.0, log=True
             ),
             "outcome_reg_lambda": trial.suggest_float(
-                "outcome_reg_lambda", 0.5, 5.0, log=True
+                "outcome_reg_lambda", 1e-3, 20.0, log=True
             ),
-            "outcome_gamma": trial.suggest_float("outcome_gamma", 1e-6, 2.0, log=True),
+            "outcome_gamma": trial.suggest_float("outcome_gamma", 1e-8, 10.0, log=True),
             "outcome_min_child_weight": trial.suggest_float(
-                "outcome_min_child_weight", 1.0, 6.0, log=True
+                "outcome_min_child_weight", 0.1, 10.0, log=True
             ),
             # Goals XGB
             "goals_n_estimators": trial.suggest_int(
-                "goals_n_estimators", 100, 600, step=50
+                "goals_n_estimators", 50, 1200, step=50
             ),
-            "goals_max_depth": trial.suggest_int("goals_max_depth", 2, 7),
+            "goals_max_depth": trial.suggest_int("goals_max_depth", 2, 10),
             "goals_learning_rate": trial.suggest_float(
-                "goals_learning_rate", 0.02, 0.3, log=True
+                "goals_learning_rate", 0.005, 0.5, log=True
             ),
             "goals_subsample": trial.suggest_float(
-                "goals_subsample", 0.6, 1.0, step=0.1
+                "goals_subsample", 0.4, 1.0, step=0.1
             ),
             "goals_colsample_bytree": trial.suggest_float(
-                "goals_colsample_bytree", 0.6, 1.0, step=0.1
+                "goals_colsample_bytree", 0.4, 1.0, step=0.1
             ),
             "goals_reg_alpha": trial.suggest_float(
-                "goals_reg_alpha", 1e-6, 0.5, log=True
+                "goals_reg_alpha", 1e-8, 1.0, log=True
             ),
             "goals_reg_lambda": trial.suggest_float(
-                "goals_reg_lambda", 0.5, 10.0, log=True
+                "goals_reg_lambda", 1e-3, 30.0, log=True
             ),
-            "goals_gamma": trial.suggest_float("goals_gamma", 1e-6, 2.0, log=True),
+            "goals_gamma": trial.suggest_float("goals_gamma", 1e-8, 10.0, log=True),
             "goals_min_child_weight": trial.suggest_float(
-                "goals_min_child_weight", 1.0, 6.0, log=True
+                "goals_min_child_weight", 0.1, 10.0, log=True
             ),
             # Scoreline/Poisson and probability shaping
-            "min_lambda": trial.suggest_float("min_lambda", 0.05, 0.6, step=0.05),
-            "max_goals": trial.suggest_int("max_goals", 6, 12),
+            "min_lambda": trial.suggest_float("min_lambda", 0.01, 1.0, step=0.05),
+            "max_goals": trial.suggest_int("max_goals", 6, 16),
             "proba_temperature": trial.suggest_float(
-                "proba_temperature", 0.6, 1.4, step=0.05
+                "proba_temperature", 0.5, 2.0, step=0.05
             ),
             "prior_blend_alpha": trial.suggest_float(
-                "prior_blend_alpha", 0.0, 0.2, step=0.02
+                "prior_blend_alpha", 0.0, 0.5, step=0.02
             ),
             # Feature engineering knobs
-            "form_last_n": trial.suggest_int("form_last_n", 3, 12),
+            "form_last_n": trial.suggest_int("form_last_n", 2, 20),
             "momentum_decay": trial.suggest_float(
-                "momentum_decay", 0.70, 0.99, step=0.01
+                "momentum_decay", 0.50, 0.99, step=0.01
             ),
         }
 
