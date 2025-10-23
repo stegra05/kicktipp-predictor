@@ -210,9 +210,9 @@ class MatchPredictor:
             # Fallback to prior permissive behavior if selection file isn't available
             self.feature_columns = candidate_cols
 
-        if "normalized_elo_diff" not in self.feature_columns:
+        if "tanh_tamed_elo" not in self.feature_columns:
             self._log(
-                "WARNING: 'normalized_elo_diff' not found in feature columns; verify feature engineering and YAML selection."
+                "WARNING: 'tanh_tamed_elo' not found in feature columns; verify feature engineering and YAML selection."
             )
         if len(self.feature_columns) < 10:
             self._log(

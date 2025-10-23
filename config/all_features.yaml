@@ -101,3 +101,4 @@ features:
   - home_elo
   - away_elo
   - elo_diff
+  - tanh_tamed_elo

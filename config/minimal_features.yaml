@@ -1,6 +1,4 @@
-home_elo
-away_elo
-elo_diff
+tanh_tamed_elo
 home_avg_goals_for
 home_avg_goals_against
 away_avg_goals_for
