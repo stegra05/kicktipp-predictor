@@ -588,7 +588,7 @@ def tune(
 @app.command()
 def shap(
     seasons_back: int = typer.Option(
-        3, help="Number of seasons back to sample training-like data"
+        5, help="Number of seasons back to sample training-like data"
     ),
     sample: int = typer.Option(2000, help="Max samples for SHAP computation"),
 ):
