@@ -294,6 +294,8 @@ def _apply_params_to_config(params: dict[str, float]) -> None:
         cfg.model.hybrid_entropy_w_max = float(params["hybrid_entropy_w_max"])
     if "calibrator_enabled" in params:
         cfg.model.calibrator_enabled = bool(params["calibrator_enabled"])
+    if "calibrator_method" in params:
+        cfg.model.calibrator_method = str(params["calibrator_method"]).strip().lower()
     if "calibrator_C" in params:
         cfg.model.calibrator_C = float(params["calibrator_C"])
     if "prior_anchor_enabled" in params:
@@ -357,7 +359,7 @@ def _objective_builder(
             return {
                 # Class weighting - Widen range slightly
                 "draw_boost": trial.suggest_float(
-                    "draw_boost", 1.2, 6.0, step=0.1
+                    "draw_boost", 10, 30, step=0.1
                 ),  # Default 1.5 (expanded upper bound)
                 # Outcome XGB - Reduce upper bounds for regularization
                 "outcome_n_estimators": trial.suggest_int(
@@ -437,7 +439,7 @@ def _objective_builder(
                     "hybrid_scheme", ["entropy"]
                 ),
                 "hybrid_poisson_weight": trial.suggest_float(
-                    "hybrid_poisson_weight", 0.0, 1.0, step=0.05
+                    "hybrid_poisson_weight", 0.1, 0.9, step=0.05
                 ),
                 # Entropy bounds suggested with safeguard applied later
                 "hybrid_entropy_w_min": trial.suggest_float(
@@ -492,6 +494,9 @@ def _objective_builder(
                 "calibrator_enabled": trial.suggest_categorical(
                     "calibrator_enabled", [True]
                 ),
+                "calibrator_method": trial.suggest_categorical(
+                    "calibrator_method", ["dirichlet"]
+                ),
                 "calibrator_C": trial.suggest_float(
                     "calibrator_C", 0.1, 10.0, log=True
                 ),
@@ -504,6 +509,10 @@ def _objective_builder(
             }
 
         params: dict[str, float] = suggest_params()
+        # Objective-aware gating: fix calibrator for PPG-focused objectives
+        if objective_name in ("ppg", "ppg_unweighted"):
+            params["calibrator_C"] = 1.0
+            params["prior_anchor_enabled"] = False
         # Safeguard: ensure entropy bounds valid and consistent with scheme
         if params.get("hybrid_scheme") == "fixed":
             # When fixed, hybrid_poisson_weight is used; bounds are irrelevant but keep valid
