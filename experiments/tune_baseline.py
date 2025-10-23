@@ -458,7 +458,30 @@ def main():
     run_opt()
 
     dur = int(time.time() - start)
-    print(f"✅ Completed {len(study.trials)} trials in {dur // 60}m {dur % 60}s")
+    # Count only completed trials for summaries/guards
+    try:
+        completed_trials = len(
+            [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+        )
+    except Exception:
+        completed_trials = len(study.trials)
+
+    print(f"✅ Completed {completed_trials} trials in {dur // 60}m {dur % 60}s")
+
+    # If no trials ran (e.g., CLI initialization run), skip best/importance outputs
+    if completed_trials == 0:
+        print("ℹ️ No trials executed; skipping best metrics and importances.")
+        # Clean up storage when not coordinated by CLI
+        fs_path = _sqlite_fs_path(args.storage)
+        try:
+            coordinated = os.environ.get("KTP_TUNE_COORDINATED", "0") == "1"
+            if (not coordinated) and fs_path and os.path.exists(fs_path):
+                os.remove(fs_path)
+                print("🧹 Removed Optuna SQLite storage file")
+        except Exception:
+            pass
+        return
+
     print(f"Best PPG: {study.best_value:.6f} | Trial #{study.best_trial.number}")
 
     # Save importances
