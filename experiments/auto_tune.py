@@ -251,12 +251,6 @@ def _apply_params_to_config(params: dict[str, float]) -> None:
         cfg.model.confidence_shift_prob_ratio = float(
             params["confidence_shift_prob_ratio"]
         )
-    if "force_draw_enabled" in params:
-        cfg.model.force_draw_enabled = bool(params["force_draw_enabled"])
-    if "force_draw_entropy_threshold" in params:
-        cfg.model.force_draw_entropy_threshold = float(
-            params["force_draw_entropy_threshold"]
-        )
     # Outcome classifier
     if "outcome_n_estimators" in params:
         cfg.model.outcome_n_estimators = int(params["outcome_n_estimators"])
@@ -477,13 +471,6 @@ def _objective_builder(
                 ),
                 "confidence_shift_prob_ratio": trial.suggest_float(
                     "confidence_shift_prob_ratio", 0.40, 0.80, step=0.05
-                ),
-                # Entropy-guided draw forcing knobs
-                "force_draw_enabled": trial.suggest_categorical(
-                    "force_draw_enabled", [True, False]
-                ),
-                "force_draw_entropy_threshold": trial.suggest_float(
-                    "force_draw_entropy_threshold", 0.85, 0.98, step=0.01
                 ),
                 # Feature-engineering knobs (optional) - Keep as is
                 "form_last_n": trial.suggest_int("form_last_n", 3, 12),  # Default 5

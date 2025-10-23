@@ -420,19 +420,6 @@ class MatchPredictor:
         prob_map = {label: i for i, label in enumerate(self.label_encoder.classes_)}
         outcomes_idx = np.argmax(final_probs, axis=1)
 
-        # Entropy-guided draw forcing
-        if bool(getattr(self.config.model, "force_draw_enabled", False)):
-            thr = float(
-                getattr(self.config.model, "force_draw_entropy_threshold", 0.95)
-            )
-            entropy = np.asarray(
-                diag.get("entropy", np.zeros(len(final_probs))), dtype=float
-            )
-            d_idx = int(prob_map.get("D", 1))
-            for i in range(len(outcomes_idx)):
-                if float(entropy[i]) >= thr and int(outcomes_idx[i]) != d_idx:
-                    outcomes_idx[i] = d_idx
-
         outcomes = self.label_encoder.inverse_transform(outcomes_idx)
 
         # Compute scorelines strictly matching predicted outcomes using Poisson grid
@@ -642,30 +629,8 @@ class MatchPredictor:
             return grid
 
     def _apply_calibration_and_anchoring(self, probs: np.ndarray) -> np.ndarray:
-        calibrated = np.array(probs, copy=True)
-        if self.config.model.calibrator_enabled and self.calibrator is not None:
-            try:
-                method = getattr(self.config.model, "calibrator_method", "dirichlet")
-                if method == "multinomial_logistic":
-                    X_cal = np.log(np.clip(calibrated, 1e-15, 1.0))
-                    calibrated = self.calibrator.predict_proba(X_cal)
-                else:
-                    calibrated = self.calibrator.transform(calibrated)
-            except Exception:
-                pass
-        if (
-            self.config.model.prior_anchor_enabled
-            and self.train_class_prior is not None
-        ):
-            s = float(self.config.model.prior_anchor_strength)
-            prior = np.clip(self.train_class_prior, 1e-8, 1.0)
-            anchored = (np.clip(calibrated, 1e-15, 1.0) ** (1.0 - s)) * (
-                prior.reshape(1, -1) ** s
-            )
-            anchored = np.clip(anchored, 1e-15, 1.0)
-            anchored /= anchored.sum(axis=1, keepdims=True)
-            return anchored
-        return calibrated
+        # Temporarily disabled: return input probabilities unchanged
+        return np.array(probs, copy=True)
 
     def _fit_calibrator(self, probs: np.ndarray, y_enc: np.ndarray) -> None:
         method = getattr(self.config.model, "calibrator_method", "dirichlet")

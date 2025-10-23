@@ -146,13 +146,6 @@ class ModelConfig:
     # Dixon–Coles low-score correlation parameter (small magnitude, e.g., -0.05..0.05)
     dixon_coles_rho: float = 0.0
 
-    # Decision logic enhancements
-    # EP weighting and confidence-based scoreline shift removed
-    # Entropy-guided draw forcing
-    force_draw_enabled: bool = True
-    force_draw_entropy_threshold: float = 0.95
-
-    # Feature selection list filename under config/ (default kept_features.yaml)
     selected_features_file: str = "kept_features.yaml"
 
     # Calibration of final blended probabilities
@@ -293,16 +286,6 @@ class Config:
                         )
                     if "dixon_coles_rho" in params:
                         config.model.dixon_coles_rho = float(params["dixon_coles_rho"])
-
-                    # Decision logic knobs removed: EP weighting and confidence shift no longer used
-                    if "force_draw_enabled" in params:
-                        config.model.force_draw_enabled = bool(
-                            params["force_draw_enabled"]
-                        )
-                    if "force_draw_entropy_threshold" in params:
-                        config.model.force_draw_entropy_threshold = float(
-                            params["force_draw_entropy_threshold"]
-                        )
 
                     # Outcome classifier hyperparameters
                     if "outcome_n_estimators" in params:

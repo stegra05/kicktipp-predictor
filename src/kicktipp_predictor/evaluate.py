@@ -669,3 +669,65 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
 
     console.rule("Evaluation Complete")
     console.print(Text(f"Artifacts written to {out_dir}", style="bold"))
+
+
+def evaluate_predictor(predictor: MatchPredictor, test_df: pd.DataFrame) -> dict:
+    """Evaluate a predictor on a static test set and return metrics.
+
+    This is a lightweight wrapper used by MatchPredictor.evaluate(). It does not
+    perform any retraining or rich console output; it simply runs predictions on
+    the provided test dataframe and computes core metrics.
+    """
+    # Run predictions
+    preds = predictor.predict(test_df)
+
+    # Actual results from the test DataFrame if available, else fallback to preds
+    if "home_score" in test_df.columns and "away_score" in test_df.columns:
+        ah = test_df["home_score"].astype(int).to_numpy()
+        aa = test_df["away_score"].astype(int).to_numpy()
+    else:
+        ah = np.asarray([int(p.get("actual_home_score", 0)) for p in preds], dtype=int)
+        aa = np.asarray([int(p.get("actual_away_score", 0)) for p in preds], dtype=int)
+
+    # True outcome labels
+    y_true = np.where(ah > aa, "H", np.where(aa > ah, "A", "D")).tolist()
+
+    # Probability matrix (H, D, A)
+    P = np.array(
+        [
+            [
+                float(p.get("home_win_probability", 1 / 3)),
+                float(p.get("draw_probability", 1 / 3)),
+                float(p.get("away_win_probability", 1 / 3)),
+            ]
+            for p in preds
+        ],
+        dtype=float,
+    )
+    P = np.clip(P, 1e-15, 1.0)
+    P = P / P.sum(axis=1, keepdims=True)
+
+    # Predicted and actual scores for Kicktipp points
+    ph = np.asarray([int(p.get("predicted_home_score", 0)) for p in preds], dtype=int)
+    pa = np.asarray([int(p.get("predicted_away_score", 0)) for p in preds], dtype=int)
+
+    pts = compute_points(ph, pa, ah, aa)
+
+    # Core metrics
+    metrics = {
+        "brier": float(brier_score_multiclass(y_true, P)),
+        "log_loss": float(log_loss_multiclass(y_true, P)),
+        "rps": float(ranked_probability_score_3c(y_true, P)),
+        "ece": expected_calibration_error(y_true, P, n_bins=10),
+        "avg_points": float(np.mean(pts)) if len(pts) else 0.0,
+        "total_points": int(np.sum(pts)),
+        "accuracy": float(
+            np.mean(
+                np.argmax(P, axis=1)
+                == np.array([{"H": 0, "D": 1, "A": 2}[t] for t in y_true])
+            )
+        ),
+        "n": int(len(preds)),
+    }
+
+    return metrics
