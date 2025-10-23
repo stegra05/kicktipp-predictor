@@ -24,6 +24,12 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.utils.class_weight import compute_sample_weight
 from xgboost import XGBClassifier, XGBRegressor
 
+# Optional YAML import for feature selection file
+try:
+    import yaml  # type: ignore
+except Exception:
+    yaml = None
+
 from .config import get_config
 from .metrics import log_loss_multiclass
 
@@ -126,6 +132,40 @@ class MatchPredictor:
         if not self.quiet:
             print(*args, **kwargs)
 
+    def _load_selected_features(self) -> list[str] | None:
+        """Load selected feature names from YAML (config/selected_features_file)."""
+        try:
+            sel_filename = getattr(
+                self.config.model, "selected_features_file", "kept_features.yaml"
+            )
+            sel_path = self.config.paths.config_dir / sel_filename
+            if not sel_path.exists():
+                return None
+            if yaml is not None:
+                with open(sel_path, encoding="utf-8") as f:
+                    loaded = yaml.safe_load(f)
+                if isinstance(loaded, list):
+                    return [str(c) for c in loaded]
+                if isinstance(loaded, dict) and "features" in loaded:
+                    val = loaded.get("features")
+                    if isinstance(val, list):
+                        return [str(c) for c in val]
+                    if isinstance(val, str):
+                        return [s.strip() for s in val.splitlines() if s.strip()]
+                if isinstance(loaded, str):
+                    return [s.strip() for s in loaded.splitlines() if s.strip()]
+            else:
+                txt_path = sel_path.with_suffix(".txt")
+                if txt_path.exists():
+                    return [
+                        line.strip()
+                        for line in txt_path.read_text(encoding="utf-8").splitlines()
+                        if line.strip()
+                    ]
+        except Exception:
+            return None
+        return None
+
     def train(self, matches_df: pd.DataFrame):
         """Trains the outcome classifier and goal regressors.
 
@@ -151,11 +191,33 @@ class MatchPredictor:
             "result",
             "is_finished",
         ]
-        self.feature_columns = (
-            training_data.drop(columns=exclude_cols, errors="ignore")
-            .select_dtypes(include=[np.number, bool])
-            .columns.tolist()
-        )
+        # Strict feature selection: only use features listed in kept_features.yaml
+        selected = self._load_selected_features() or []
+        feature_df = training_data.drop(columns=exclude_cols, errors="ignore")
+        # Candidate numeric/bool columns
+        candidate_cols = feature_df.select_dtypes(
+            include=[np.number, bool]
+        ).columns.tolist()
+        if selected:
+            self.feature_columns = [c for c in candidate_cols if c in set(selected)]
+            missing = [c for c in selected if c not in self.feature_columns]
+            if missing:
+                self._log(
+                    f"Warning: {len(missing)} selected features missing from training data: "
+                    f"{missing[:10]}{'...' if len(missing) > 10 else ''}"
+                )
+        else:
+            # Fallback to prior permissive behavior if selection file isn't available
+            self.feature_columns = candidate_cols
+
+        if "normalized_elo_diff" not in self.feature_columns:
+            self._log(
+                "WARNING: 'normalized_elo_diff' not found in feature columns; verify feature engineering and YAML selection."
+            )
+        if len(self.feature_columns) < 10:
+            self._log(
+                f"WARNING: Very few features selected ({len(self.feature_columns)}). Check kept_features.yaml wiring and data completeness."
+            )
 
         X = training_data[self.feature_columns].fillna(0)
         y_home = training_data["home_score"]
