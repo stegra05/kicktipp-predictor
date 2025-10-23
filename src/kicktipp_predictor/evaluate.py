@@ -91,9 +91,6 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
         console.print(Panel.fit(f"Processing Matchday {matchday}", style="cyan"))
 
         if (matchday - first_matchday) % max(1, int(retrain_every)) == 0:
-            console.print(
-                f"Retraining with [bold]{len(cumulative_training_matches)}[/bold] total matches..."
-            )
             train_df = data_loader.create_features_from_matches(
                 cumulative_training_matches
             )
@@ -245,14 +242,13 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
                 "pois_p_H": p.get("pois_p_H"),
                 "pois_p_D": p.get("pois_p_D"),
                 "pois_p_A": p.get("pois_p_A"),
-                "expected_points_pick": p.get("expected_points_pick"),
                 "actual_home_score": p.get("actual_home_score"),
                 "actual_away_score": p.get("actual_away_score"),
                 "points_earned": p.get("points_earned"),
-                +"winner_true": p.get("winner_true"),
-                +"winner_pred": p.get("winner_pred"),
-                +"winner_correct": p.get("winner_correct"),
-                +"winner_pred_prob": p.get("winner_pred_prob"),
+                "winner_true": p.get("winner_true"),
+                "winner_pred": p.get("winner_pred"),
+                "winner_correct": p.get("winner_correct"),
+                "winner_pred_prob": p.get("winner_pred_prob"),
             }
             debug_rows.append(row)
         if len(debug_rows) > 0:

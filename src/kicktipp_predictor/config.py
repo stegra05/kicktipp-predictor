@@ -147,13 +147,7 @@ class ModelConfig:
     dixon_coles_rho: float = 0.0
 
     # Decision logic enhancements
-    # Aggressive value weighting multipliers for 2/3/4-point components
-    value_weight_2pt: float = 1.0
-    value_weight_3pt: float = 1.2
-    value_weight_4pt: float = 1.3
-    # Confidence-based scoreline shift (for 'H' outcome only)
-    confidence_shift_threshold: float = 0.15
-    confidence_shift_prob_ratio: float = 0.5
+    # EP weighting and confidence-based scoreline shift removed
     # Entropy-guided draw forcing
     force_draw_enabled: bool = True
     force_draw_entropy_threshold: float = 0.95
@@ -300,27 +294,7 @@ class Config:
                     if "dixon_coles_rho" in params:
                         config.model.dixon_coles_rho = float(params["dixon_coles_rho"])
 
-                    # New decision logic knobs
-                    if "value_weight_2pt" in params:
-                        config.model.value_weight_2pt = float(
-                            params["value_weight_2pt"]
-                        )
-                    if "value_weight_3pt" in params:
-                        config.model.value_weight_3pt = float(
-                            params["value_weight_3pt"]
-                        )
-                    if "value_weight_4pt" in params:
-                        config.model.value_weight_4pt = float(
-                            params["value_weight_4pt"]
-                        )
-                    if "confidence_shift_threshold" in params:
-                        config.model.confidence_shift_threshold = float(
-                            params["confidence_shift_threshold"]
-                        )
-                    if "confidence_shift_prob_ratio" in params:
-                        config.model.confidence_shift_prob_ratio = float(
-                            params["confidence_shift_prob_ratio"]
-                        )
+                    # Decision logic knobs removed: EP weighting and confidence shift no longer used
                     if "force_draw_enabled" in params:
                         config.model.force_draw_enabled = bool(
                             params["force_draw_enabled"]

@@ -17,6 +17,7 @@ from concurrent.futures import ProcessPoolExecutor
 import joblib
 import numpy as np
 import pandas as pd
+from rich.console import Console
 from scipy.stats import poisson
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
@@ -126,11 +127,11 @@ class MatchPredictor:
         self.label_encoder = LabelEncoder()
         self.calibrator: LogisticRegression | None = None
         self.train_class_prior: np.ndarray | None = None
-        self._log(f"[MatchPredictor] Initialized with config: {self.config}")
+        self.console = Console()
 
     def _log(self, *args, **kwargs) -> None:
         if not self.quiet:
-            print(*args, **kwargs)
+            self.console.log(*args, **kwargs)
 
     def _load_selected_features(self) -> list[str] | None:
         """Load selected feature names from YAML (config/selected_features_file)."""
@@ -231,20 +232,18 @@ class MatchPredictor:
         self._log(
             f"Training on {len(training_data)} matches with {len(self.feature_columns)} features."
         )
-        self._log(
-            "Outcome distribution:",
-            {k: f"{v} ({v / len(y_result):.1%})" for k, v in counts.items()},
-        )
 
         dates = (
             pd.to_datetime(training_data["date"], errors="coerce")
             if "date" in training_data.columns
             else None
         )
-        self._train_goal_models(
-            X, y_home, y_away, sample_weights=time_weights, dates=dates
-        )
-        val_ctx = self._train_outcome_model(X, y_result_encoded, time_weights)
+        with self.console.status("Training goal regressors...", spinner="dots"):
+            self._train_goal_models(
+                X, y_home, y_away, sample_weights=time_weights, dates=dates
+            )
+        with self.console.status("Training outcome classifier...", spinner="dots"):
+            val_ctx = self._train_outcome_model(X, y_result_encoded, time_weights)
 
         # Store class prior from full training labels (for optional prior anchoring)
         prior = np.zeros(3, dtype=float)
@@ -259,9 +258,6 @@ class MatchPredictor:
                     # This path is for the advanced time-series CV tuning
                     self._tune_entropy_and_fit_calibrator_ts(training_data)
                 else:
-                    # This is the corrected path for simple holdout calibration
-                    self._log("Fitting calibrator on holdout set...")
-
                     # Use the validation context from outcome model training
                     X_val = val_ctx.get("X_val")
                     y_val_enc = val_ctx.get("y_val_enc")
@@ -285,7 +281,6 @@ class MatchPredictor:
 
                         # 3. Now, fit the calibrator using these probabilities and true labels
                         self._fit_calibrator(final_val_probs, y_val_enc)
-                        self._log("Calibrator fitted successfully.")
                     else:
                         self._log(
                             "[Warning] Could not fit calibrator: validation context not found."
@@ -316,7 +311,6 @@ class MatchPredictor:
         dates: pd.Series | None,
     ):
         """Trains the home and away goal regression models."""
-        self._log("Training goal regressors...")
         start = time.perf_counter()
 
         self.home_goals_model = XGBRegressor(**self.config.model.goals_params)
@@ -359,7 +353,6 @@ class MatchPredictor:
         self, X: pd.DataFrame, y_result_encoded: np.ndarray, time_weights: np.ndarray
     ):
         """Trains the outcome classification model."""
-        self._log("Training outcome classifier...")
         start = time.perf_counter()
 
         X_train, X_val, y_train, y_val, tw_train, tw_val = train_test_split(
@@ -387,9 +380,6 @@ class MatchPredictor:
         )
 
         self._log(f"Outcome classifier trained in {time.perf_counter() - start:.2f}s")
-        self._log(
-            f"Applied balanced class weights, draw_boost={draw_boost}, and time-decay weighting."
-        )
         # Return validation context for calibrator fitting
         try:
             cls_val_probs = self.outcome_model.predict_proba(X_val)
@@ -426,9 +416,6 @@ class MatchPredictor:
             classifier_probs, home_lambdas, away_lambdas
         )
 
-        # Choose scoreline via weighted value (aggressive 4/3/2 weighting)
-        scorelines, ep_values = self._compute_ep_scorelines(home_lambdas, away_lambdas)
-
         # Base outcomes: argmax over final probabilities
         prob_map = {label: i for i, label in enumerate(self.label_encoder.classes_)}
         outcomes_idx = np.argmax(final_probs, axis=1)
@@ -448,60 +435,10 @@ class MatchPredictor:
 
         outcomes = self.label_encoder.inverse_transform(outcomes_idx)
 
-        # If outcome is forced to draw, ensure the scoreline is a draw
-        max_goals = int(self.config.model.max_goals)
-        for i in range(len(outcomes)):
-            if outcomes[i] == "D":
-                h, a = int(scorelines[i][0]), int(scorelines[i][1])
-                if h != a:
-                    scorelines[i] = compute_scoreline_for_outcome(
-                        "D", float(home_lambdas[i]), float(away_lambdas[i]), max_goals
-                    )
-
-        # Confidence-based shift toward higher H goal differences
-        shift_thr = float(
-            getattr(self.config.model, "confidence_shift_threshold", 0.15)
+        # Compute scorelines strictly matching predicted outcomes using Poisson grid
+        scorelines = self._compute_scorelines(
+            outcomes, home_lambdas, away_lambdas, workers
         )
-        ratio = float(getattr(self.config.model, "confidence_shift_prob_ratio", 0.5))
-        for i in range(len(outcomes)):
-            if outcomes[i] != "H":
-                continue
-            # confidence = top - second
-            probs = np.asarray(final_probs[i], dtype=float)
-            ps = np.sort(probs)[::-1]
-            conf = float(ps[0] - ps[1])
-            if conf < shift_thr:
-                continue
-            # Build Poisson grid to compare scoreline probabilities
-            lam_h = float(home_lambdas[i])
-            lam_a = float(away_lambdas[i])
-            G = int(min(max_goals, int(np.ceil(max(lam_h, lam_a) + 4))))
-            x = np.arange(G + 1)
-            ph = poisson.pmf(x, lam_h)
-            pa = poisson.pmf(x, lam_a)
-            grid = np.outer(ph, pa)
-            # Prefer higher differences if probability is within ratio of current pick
-            cur_h, cur_a = int(scorelines[i][0]), int(scorelines[i][1])
-            if cur_h <= cur_a or cur_h > G or cur_a > G:
-                continue
-            ref_p = float(grid[cur_h, cur_a])
-            if ref_p <= 0:
-                continue
-            best_h, best_a = cur_h, cur_a
-            best_diff = cur_h - cur_a
-            for h in range(G + 1):
-                for a in range(G + 1):
-                    if h <= a:
-                        continue
-                    p = float(grid[h, a])
-                    if p >= ratio * ref_p:
-                        d = h - a
-                        if d > best_diff or (
-                            d == best_diff and p > float(grid[best_h, best_a]) + 1e-12
-                        ):
-                            best_h, best_a = h, a
-                            best_diff = d
-            scorelines[i] = (best_h, best_a)
 
         return self._format_predictions(
             features_df,
@@ -511,7 +448,6 @@ class MatchPredictor:
             home_lambdas,
             away_lambdas,
             diag,
-            ep_values,
         )
 
     def _prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -674,89 +610,7 @@ class MatchPredictor:
         probs = np.clip(probs, 1e-15, 1.0)
         return probs / probs.sum(axis=1, keepdims=True)
 
-    def _compute_ep_scorelines(
-        self, home_lambdas: np.ndarray, away_lambdas: np.ndarray
-    ) -> tuple[list[tuple[int, int]], np.ndarray]:
-        """Choose scorelines maximizing expected KickTipp points for each match."""
-        n = len(home_lambdas)
-        picks: list[tuple[int, int]] = []
-        ep_values = np.zeros(n, dtype=float)
-        max_cap = int(self.config.model.max_goals)
-        rho = float(self.config.model.poisson_draw_rho)
-        # Aggressive value weights for 2/3/4-point components
-        w2 = float(self.config.model.value_weight_2pt)
-        w3 = float(self.config.model.value_weight_3pt)
-        w4 = float(self.config.model.value_weight_4pt)
-        common_order = [
-            (2, 1),
-            (1, 0),
-            (1, 1),
-            (0, 1),
-            (2, 0),
-            (0, 0),
-            (2, 2),
-            (3, 1),
-            (1, 2),
-            (3, 0),
-            (0, 3),
-            (3, 2),
-            (2, 3),
-        ]
-        for i in range(n):
-            lam_h = float(home_lambdas[i])
-            lam_a = float(away_lambdas[i])
-            G = int(min(max_cap, int(np.ceil(max(lam_h, lam_a) + 4))))
-            x = np.arange(G + 1)
-            ph = poisson.pmf(x, lam_h)
-            pa = poisson.pmf(x, lam_a)
-            grid = np.outer(ph, pa)
-            # Optional Dixon–Coles
-            grid = self._maybe_apply_dixon_coles(grid, lam_h, lam_a)
-            if rho != 0.0:
-                idx = np.arange(G + 1)
-                grid[idx, idx] *= np.exp(rho)
-            total = np.sum(grid)
-            if total <= 0:
-                picks.append((2, 1))
-                ep_values[i] = 0.0
-                continue
-            grid /= total
-            # Precompute sums for same outcome categories and same goal-difference
-            pH = float(np.sum(np.triu(grid, k=1)))
-            pD = float(np.sum(np.diag(grid)))
-            pA = float(np.sum(np.tril(grid, k=-1)))
-            # Precompute sum of each diagonal (goal diff d = h - a)
-            sum_by_diff = {}
-            for d in range(-G, G + 1):
-                sum_by_diff[d] = float(np.sum(np.diagonal(grid, offset=d)))
-
-            best_ev = -1.0
-            best = (2, 1)
-            # Evaluate weighted expected value: 4*e*w4 + 3*(s-e)*w3 + 2*(outcome_p - s)*w2
-            for h in range(G + 1):
-                for a in range(G + 1):
-                    e = float(grid[h, a])
-                    d = h - a
-                    s = sum_by_diff.get(d, 0.0)
-                    outcome_p = pD if d == 0 else (pH if d > 0 else pA)
-                    ev = (
-                        (4.0 * w4) * e
-                        + (3.0 * w3) * max(0.0, s - e)
-                        + (2.0 * w2) * max(0.0, outcome_p - s)
-                    )
-                    if ev > best_ev + 1e-12:
-                        best_ev = ev
-                        best = (h, a)
-                    elif abs(ev - best_ev) <= 1e-12:
-                        # Tie-break with common scoreline preference
-                        if best not in common_order and (h, a) in common_order:
-                            best = (h, a)
-                        elif best in common_order and (h, a) in common_order:
-                            if common_order.index((h, a)) < common_order.index(best):
-                                best = (h, a)
-            picks.append(best)
-            ep_values[i] = best_ev
-        return picks, ep_values
+    # _compute_ep_scorelines removed: using compute_scoreline_for_outcome via _compute_scorelines
 
     def _maybe_apply_dixon_coles(
         self, grid: np.ndarray, lam_h: float, lam_a: float
@@ -974,7 +828,6 @@ class MatchPredictor:
         home_lambdas,
         away_lambdas,
         diag: dict,
-        ep_values: np.ndarray,
     ):
         """Assembles the final list of prediction dictionaries."""
         predictions = []
@@ -1033,7 +886,6 @@ class MatchPredictor:
                         prob_map.get("A", 2)
                     ]
                 ),
-                "expected_points_pick": float(ep_values[i]),
             }
             predictions.append(pred)
         return predictions

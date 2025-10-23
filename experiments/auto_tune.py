@@ -557,6 +557,8 @@ def _objective_builder(
                     f"[dim][FEATS] Building features for knobs form_last_n={key[0]} momentum_decay={key[1]}...[/dim]",
                 )
             feats_df = dl.create_features_from_matches(all_matches)
+            if "date" in feats_df.columns:
+                feats_df = feats_df.sort_values("date").reset_index(drop=True)
             features_cache[key] = feats_df
         features_df = features_cache[key]
 
@@ -861,6 +863,9 @@ def main():
     # Verbosity reflects CLI flag only (quiet by default, even with multiple jobs)
     effective_verbose = bool(args.verbose) and not is_multiworker
 
+    # Ensure chronological order for time-series CV
+    if "date" in features_df.columns:
+        features_df = features_df.sort_values("date").reset_index(drop=True)
     # Precompute CV folds once to ensure identical splits across objectives
     tscv = TimeSeriesSplit(n_splits=args.n_splits)
     folds: list[tuple[np.ndarray, np.ndarray]] = list(tscv.split(features_df))
@@ -1084,6 +1089,8 @@ def main():
             # Recompute features for this params combo (ensures feature knobs take effect)
             dl = DataLoader()
             feats_df = dl.create_features_from_matches(all_matches)
+            if "date" in feats_df.columns:
+                feats_df = feats_df.sort_values("date").reset_index(drop=True)
 
             ppg_w_list: list[float] = []
             ppg_u_list: list[float] = []
