@@ -6,7 +6,7 @@ app = typer.Typer(help="Kicktipp Predictor CLI")
 @app.command()
 def train(
     seasons_back: int = typer.Option(
-        3, help="Number of past seasons to use for training"
+        5, help="Number of past seasons to use for training"
     ),
 ):
     """Train the match predictor on historical data."""

@@ -80,7 +80,7 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
 
     console.print("Preparing historical warm start (previous seasons)...")
     all_historical_matches = data_loader.fetch_historical_seasons(
-        current_season - 3, current_season - 1
+        current_season - 5, current_season - 1
     )
     cumulative_training_matches = list(all_historical_matches)
     console.print(

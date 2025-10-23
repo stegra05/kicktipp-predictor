@@ -1,14 +1,38 @@
-# Home Team Base History
+# --- Engineered/Derived Features (The High-Value Signals) ---
+
+# ELO: Tamed Elo to control for bias and incorporate uncertainty scale factor
+- normalized_elo_diff
+
+# DIFFERENCES: Simple differences/ratios that proved robust in SHAP/ablation
+- abs_form_points_diff
+- form_points_difference
+- abs_momentum_score_diff
+- momentum_score_difference
+
+# VENUE DELTAS: Capture comparative home/away strength
+- venue_points_delta
+- venue_goals_delta
+- venue_conceded_delta
+
+
+# --- Base Averages / Long-Term Strength (The Stable Signals) ---
+
+# HOME TEAM BASE
 - home_avg_goals_for
 - home_avg_goals_against
 - home_avg_points
 
-# Away Team Base History
+# AWAY TEAM BASE
 - away_avg_goals_for
 - away_avg_goals_against
 - away_avg_points
 
-# Home Team Form (Last N Matches)
+
+# --- Form Metrics (Retained the essentials that passed initial scrutiny) ---
+# Note: All rolling features (L5/L10/etc.) are automatically managed by the 
+# Data pipeline if not explicitly set to a single window here.
+
+# HOME TEAM FORM
 - home_form_points
 - home_form_points_per_game
 - home_form_wins
@@ -20,7 +44,7 @@
 - home_form_avg_goals_scored
 - home_form_avg_goals_conceded
 
-# Away Team Form (Last N Matches)
+# AWAY TEAM FORM
 - away_form_points
 - away_form_points_per_game
 - away_form_wins
@@ -32,67 +56,5 @@
 - away_form_avg_goals_scored
 - away_form_avg_goals_conceded
 
-# Home Team Momentum
-- home_momentum_points
-- home_momentum_goals
-- home_momentum_conceded
-- home_momentum_score
-
-# Away Team Momentum
-- away_momentum_points
-- away_momentum_goals
-- away_momentum_conceded
-- away_momentum_score
-
-# Home Team Venue-Specific History
-- home_points_pg_at_home
-- home_goals_pg_at_home
-- home_goals_conceded_pg_at_home
-- home_points_pg_away
-- home_goals_pg_away
-- home_goals_conceded_pg_away
-
-# Away Team Venue-Specific History
-- away_points_pg_at_home
-- away_goals_pg_at_home
-- away_goals_conceded_pg_at_home
-- away_points_pg_away
-- away_goals_pg_away
-- away_goals_conceded_pg_away
-
-# Home Team EWMA Recency Features
-- home_goals_for_ewm5
-- home_goals_against_ewm5
-- home_goal_diff_ewm5
-- home_points_ewm5
-
-# Away Team EWMA Recency Features
-- away_goals_for_ewm5
-- away_goals_against_ewm5
-- away_goal_diff_ewm5
-- away_points_ewm5
-
-# Derived Differences
-- abs_form_points_diff
-- form_points_difference
-- abs_momentum_score_diff
-- momentum_score_difference
-
-# Venue Deltas
-- venue_points_delta
-- venue_goals_delta
-- venue_conceded_delta
-
-# Interaction Ratios
-- attack_defense_form_ratio_home
-- attack_defense_form_ratio_away
-- attack_defense_long_ratio_home
-- attack_defense_long_ratio_away
-- form_points_pg_ratio
-- momentum_score_ratio
-- ewm_points_ratio
-
-# Elo Ratings
-- home_elo
-- away_elo
-- elo_diff
+# --- Contextual Feature ---
+- matchday

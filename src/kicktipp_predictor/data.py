@@ -257,6 +257,10 @@ class DataLoader:
         long_df = long_df.sort_values(["team", "date", "match_id"]).reset_index(
             drop=True
         )
+        grp = long_df.groupby("team", group_keys=False)
+
+        # Prior matches played per team (leakage-safe count)
+        long_df["matches_played_prior"] = grp.cumcount()
 
         long_df = self._compute_team_history_features(long_df)
 
@@ -293,6 +297,8 @@ class DataLoader:
             "points_pg_away",
             "goals_pg_away",
             "goals_conceded_pg_away",
+            # matches played prior (leakage-safe count)
+            "matches_played_prior",
         ]
         right_cols = ["match_id", "team"] + hist_cols
         home_merge = long_df[right_cols].rename(columns={"team": "home_team"})
@@ -314,18 +320,18 @@ class DataLoader:
             how="left",
         )
 
+        # Normalize column names for match counts
+        if "home_matches_played_prior" in features_df.columns:
+            features_df.rename(
+                columns={"home_matches_played_prior": "home_matches_played"},
+                inplace=True,
+            )
+        if "away_matches_played_prior" in features_df.columns:
+            features_df.rename(
+                columns={"away_matches_played_prior": "away_matches_played"},
+                inplace=True,
+            )
         # Drop merge helper columns
-        drop_cols = [
-            "home_match_id",
-            "home_home_team",
-            "away_match_id",
-            "away_away_team",
-        ]
-        for c in drop_cols:
-            if c in features_df.columns:
-                features_df.drop(columns=[c], inplace=True)
-
-        # Attach EWMA recency features via vectorized merges
         if ewma_long_df is not None and not ewma_long_df.empty:
             # Home EWMA
             home_ewm = ewma_long_df.rename(
@@ -492,6 +498,66 @@ class DataLoader:
             except Exception:
                 pass
 
+        # Compute normalized Elo diff and drop raw Elo columns
+        if "elo_diff" in features_df.columns:
+            home_mp = (
+                features_df.get(
+                    "home_matches_played",
+                    features_df.get("home_matches_played_prior", 0),
+                )
+                .fillna(0)
+                .astype(float)
+            )
+            away_mp = (
+                features_df.get(
+                    "away_matches_played",
+                    features_df.get("away_matches_played_prior", 0),
+                )
+                .fillna(0)
+                .astype(float)
+            )
+            avg_matches = (home_mp + away_mp) / 2.0
+            scale_factor = 1.0 + avg_matches * 0.01
+            features_df["normalized_elo_diff"] = (
+                features_df["elo_diff"].fillna(0).astype(float) / scale_factor
+            )
+            # Remove raw Elo features to prevent leakage/bias
+            features_df.drop(
+                columns=["home_elo", "away_elo", "elo_diff"],
+                errors="ignore",
+                inplace=True,
+            )
+
+        # Compute normalized Elo diff and drop raw Elo columns
+        if "elo_diff" in features_df.columns:
+            home_mp = (
+                features_df.get(
+                    "home_matches_played",
+                    features_df.get("home_matches_played_prior", 0),
+                )
+                .fillna(0)
+                .astype(float)
+            )
+            away_mp = (
+                features_df.get(
+                    "away_matches_played",
+                    features_df.get("away_matches_played_prior", 0),
+                )
+                .fillna(0)
+                .astype(float)
+            )
+            avg_matches = (home_mp + away_mp) / 2.0
+            scale_factor = 1.0 + avg_matches * 0.01
+            features_df["normalized_elo_diff"] = (
+                features_df["elo_diff"].fillna(0).astype(float) / scale_factor
+            )
+            # Remove raw Elo features to prevent leakage/bias
+            features_df.drop(
+                columns=["home_elo", "away_elo", "elo_diff"],
+                errors="ignore",
+                inplace=True,
+            )
+
         # Targets
         features_df["goal_difference"] = (
             features_df["home_score"] - features_df["away_score"]
@@ -566,7 +632,11 @@ class DataLoader:
             "points_pg_away",
             "goals_pg_away",
             "goals_conceded_pg_away",
+            # matches played prior (leakage-safe count)
+            "matches_played_prior",
         ]
+        # Compute per-team prior match count for upcoming features
+        long_hist["matches_played_prior"] = long_hist.groupby("team").cumcount()
         hist_merge = long_hist[["team", "date"] + hist_cols].copy()
 
         # Prepare per-side frames for asof merge (requires sorting by date)
@@ -590,31 +660,17 @@ class DataLoader:
             if col in features_df.columns:
                 features_df.rename(columns={col: f"home_{col}"}, inplace=True)
 
-        # Away side merge
-        away_hist = hist_merge.rename(columns={"team": "away_team"})
-        # Ensure global sort by 'date' for merge_asof
-        away_hist = away_hist.sort_values(["date"])
-        features_df = pd.merge_asof(
-            features_df.sort_values("date"),
-            away_hist,
-            left_on="date",
-            right_on="date",
-            left_by="away_team",
-            right_by="away_team",
-            direction="backward",
-            suffixes=("", "_away"),
-        )
-        # Prefix away columns
-        for col in hist_cols:
-            away_src = f"{col}_away"
-            if away_src in features_df.columns:
-                features_df.rename(columns={away_src: f"away_{col}"}, inplace=True)
-        # If no name collision occurred during merge_asof, pandas will not add the
-        # '_away' suffix and the right-hand columns keep their base names. Ensure
-        # those get prefixed as away_* so they match the trained feature schema.
-        for col in hist_cols:
-            if f"away_{col}" not in features_df.columns and col in features_df.columns:
-                features_df.rename(columns={col: f"away_{col}"}, inplace=True)
+        # Normalize column names for match counts (home)
+        if "home_matches_played_prior" in features_df.columns:
+            features_df.rename(
+                columns={"home_matches_played_prior": "home_matches_played"},
+                inplace=True,
+            )
+        if "away_matches_played_prior" in features_df.columns:
+            features_df.rename(
+                columns={"away_matches_played_prior": "away_matches_played"},
+                inplace=True,
+            )
 
         # Attach EWMA recency features from historical via asof
         try:
