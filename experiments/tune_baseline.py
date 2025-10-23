@@ -47,6 +47,21 @@ from kicktipp_predictor.data import DataLoader
 from kicktipp_predictor.predictor import MatchPredictor
 
 
+def _is_primary_worker() -> bool:
+    wid = os.environ.get("OPTUNA_WORKER_ID")
+    if wid is None:
+        return True
+    try:
+        return int(wid) == 0
+    except Exception:
+        return str(wid).strip() in ("0", "primary")
+
+
+def _log(msg: str) -> None:
+    if _is_primary_worker():
+        print(msg)
+
+
 # --- SQLite concurrency helpers (lightweight copies from auto_tune) ---
 def _retry_on_database_lock(max_retries: int = 8, delay: float = 0.2):
     def decorator(func):
@@ -444,8 +459,8 @@ def main():
     study = create_study()
 
     start = time.time()
-    print(
-        f"🎯 Objective: avg_points (PPG) | Trials: {args.n_trials} | Fixed split baseline"
+    _log(
+        f"Objective: avg_points (PPG) | Trials: {args.n_trials} | Fixed split baseline"
     )
 
     # Run optimization
@@ -466,66 +481,68 @@ def main():
     except Exception:
         completed_trials = len(study.trials)
 
-    print(f"✅ Completed {completed_trials} trials in {dur // 60}m {dur % 60}s")
+    _log(f"Completed {completed_trials} trials in {dur // 60}m {dur % 60}s")
 
     # If no trials ran (e.g., CLI initialization run), skip best/importance outputs
     if completed_trials == 0:
-        print("ℹ️ No trials executed; skipping best metrics and importances.")
+        _log("No trials executed; skipping best metrics and importances.")
         # Clean up storage when not coordinated by CLI
         fs_path = _sqlite_fs_path(args.storage)
         try:
             coordinated = os.environ.get("KTP_TUNE_COORDINATED", "0") == "1"
             if (not coordinated) and fs_path and os.path.exists(fs_path):
                 os.remove(fs_path)
-                print("🧹 Removed Optuna SQLite storage file")
+                _log("Removed Optuna SQLite storage file")
         except Exception:
             pass
         return
 
-    print(f"Best PPG: {study.best_value:.6f} | Trial #{study.best_trial.number}")
+    _log(f"Best PPG: {study.best_value:.6f} | Trial #{study.best_trial.number}")
 
-    # Save importances
-    try:
-        from optuna.importance import get_param_importances
-
-        importances = get_param_importances(study)
-        # Rank and print top 5–7
-        ranked = sorted(importances.items(), key=lambda kv: kv[1], reverse=True)
-        topk = ranked[:7]
-        print("\n🔧 Top Hyperparameters by Importance:")
-        for i, (p, imp) in enumerate(topk, 1):
-            print(f"{i}. {p}: {imp:.4f}")
-        # Plot
-        fig = plot_param_importances(study)
-        out_dir = PROJECT_ROOT / "data" / "optuna"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = (
-            Path(args.save_plot)
-            if args.save_plot
-            else out_dir / "baseline_param_importances.html"
-        )
+    # Save importances (primary worker only)
+    if _is_primary_worker():
         try:
-            fig.write_html(str(out_path))
-            print(f"📊 Param importances saved to {out_path}")
-        except Exception:
-            print("Warning: Failed to save Plotly HTML for importances.")
-    except Exception as e:
-        print(f"Warning: Could not compute/save param importances: {e}")
+            from optuna.importance import get_param_importances
 
-    # Save best params for reproducibility
-    try:
-        import yaml  # type: ignore
+            importances = get_param_importances(study)
+            # Rank and print top 5–7
+            ranked = sorted(importances.items(), key=lambda kv: kv[1], reverse=True)
+            topk = ranked[:7]
+            _log("Top Hyperparameters by Importance:")
+            for i, (p, imp) in enumerate(topk, 1):
+                _log(f"{i}. {p}: {imp:.4f}")
+            # Plot
+            fig = plot_param_importances(study)
+            out_dir = PROJECT_ROOT / "data" / "optuna"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = (
+                Path(args.save_plot)
+                if args.save_plot
+                else out_dir / "baseline_param_importances.html"
+            )
+            try:
+                fig.write_html(str(out_path))
+                _log(f"Param importances saved to {out_path}")
+            except Exception:
+                _log("Warning: Failed to save Plotly HTML for importances.")
+        except Exception as e:
+            _log(f"Warning: Could not compute/save param importances: {e}")
 
-        cfg_dir = PROJECT_ROOT / "src" / "kicktipp_predictor" / "config_dir"
-        # Fallback to repo-level config dir inside project paths
-        cfg_dir = PROJECT_ROOT / "config"
-        cfg_dir.mkdir(parents=True, exist_ok=True)
-        best = study.best_trial.params
-        with open(cfg_dir / "best_params_baseline.yaml", "w", encoding="utf-8") as f:
-            yaml.safe_dump(best, f, sort_keys=True)
-        print(f"💾 Best parameters saved to {cfg_dir / 'best_params_baseline.yaml'}")
-    except Exception as e:
-        print(f"Warning: Failed to save best params: {e}")
+    # Save best params for reproducibility (primary worker only, end of run)
+    if _is_primary_worker():
+        try:
+            import yaml  # type: ignore
+
+            cfg_dir = PROJECT_ROOT / "config"
+            cfg_dir.mkdir(parents=True, exist_ok=True)
+            best = study.best_trial.params
+            with open(
+                cfg_dir / "best_params_baseline.yaml", "w", encoding="utf-8"
+            ) as f:
+                yaml.safe_dump(best, f, sort_keys=True)
+            _log(f"Best parameters saved to {cfg_dir / 'best_params_baseline.yaml'}")
+        except Exception as e:
+            _log(f"Warning: Failed to save best params: {e}")
 
     # Clean up storage when not coordinated by CLI
     fs_path = _sqlite_fs_path(args.storage)
@@ -533,7 +550,7 @@ def main():
         coordinated = os.environ.get("KTP_TUNE_COORDINATED", "0") == "1"
         if (not coordinated) and fs_path and os.path.exists(fs_path):
             os.remove(fs_path)
-            print("🧹 Removed Optuna SQLite storage file")
+            _log("Removed Optuna SQLite storage file")
     except Exception:
         pass
 
