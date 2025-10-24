@@ -4,8 +4,8 @@
 - tanh_tamed_elo
 
 # DIFFERENCES: Simple differences/ratios that proved robust in SHAP/ablation
-- abs_form_points_diff
-- form_points_difference
+- abs_weighted_form_points_diff
+- weighted_form_points_difference
 - abs_momentum_score_diff
 - momentum_score_difference
 
@@ -33,7 +33,7 @@
 # Data pipeline if not explicitly set to a single window here.
 
 # HOME TEAM FORM
-- home_form_points
+- home_form_points_weighted_by_opponent_rank
 - home_form_points_per_game
 - home_form_wins
 - home_form_draws
@@ -45,7 +45,7 @@
 - home_form_avg_goals_conceded
 
 # AWAY TEAM FORM
-- away_form_points
+- away_form_points_weighted_by_opponent_rank
 - away_form_points_per_game
 - away_form_wins
 - away_form_draws

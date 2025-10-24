@@ -14,7 +14,7 @@ features:
   - away_avg_points
 
   # Home Team Form (Last N Matches)
-  - home_form_points
+  - home_form_points_weighted_by_opponent_rank
   - home_form_points_per_game
   - home_form_wins
   - home_form_draws
@@ -26,7 +26,7 @@ features:
   - home_form_avg_goals_conceded
 
   # Away Team Form (Last N Matches)
-  - away_form_points
+  - away_form_points_weighted_by_opponent_rank
   - away_form_points_per_game
   - away_form_wins
   - away_form_draws
@@ -78,8 +78,8 @@ features:
   - away_points_ewm5
 
   # Derived Differences
-  - abs_form_points_diff
-  - form_points_difference
+  - abs_weighted_form_points_diff
+  - weighted_form_points_difference
   - abs_momentum_score_diff
   - momentum_score_difference
 

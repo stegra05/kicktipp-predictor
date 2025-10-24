@@ -262,6 +262,8 @@ class DataLoader:
         # Prior matches played per team (leakage-safe count)
         long_df["matches_played_prior"] = grp.cumcount()
 
+        # Cache current standings for opponent rank weighting
+        self._current_table = self._calculate_table(matches)
         long_df = self._compute_team_history_features(long_df)
 
         # Precompute EWMA recency features once across the dataset and merge
@@ -276,7 +278,7 @@ class DataLoader:
             "avg_goals_for",
             "avg_goals_against",
             "avg_points",
-            "form_points",
+            "form_points_weighted_by_opponent_rank",
             "form_points_per_game",
             "form_wins",
             "form_draws",
@@ -381,13 +383,13 @@ class DataLoader:
                     features_df[acol] = 0.0
 
         # Compute simple derived differences
-        features_df["abs_form_points_diff"] = (
-            features_df.get("home_form_points", 0)
-            - features_df.get("away_form_points", 0)
+        features_df["abs_weighted_form_points_diff"] = (
+            features_df.get("home_form_points_weighted_by_opponent_rank", 0)
+            - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
         ).abs()
-        features_df["form_points_difference"] = features_df.get(
-            "home_form_points", 0
-        ) - features_df.get("away_form_points", 0)
+        features_df["weighted_form_points_difference"] = features_df.get(
+            "home_form_points_weighted_by_opponent_rank", 0
+        ) - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
         features_df["abs_momentum_score_diff"] = (
             features_df.get("home_momentum_score", 0.0)
             - features_df.get("away_momentum_score", 0.0)
@@ -643,6 +645,8 @@ class DataLoader:
             drop=True
         )
 
+        # Cache current standings for opponent rank weighting
+        self._current_table = self._calculate_table(historical_matches)
         long_hist = self._compute_team_history_features(long_hist)
 
         # Columns to use for asof merge
@@ -650,7 +654,7 @@ class DataLoader:
             "avg_goals_for",
             "avg_goals_against",
             "avg_points",
-            "form_points",
+            "form_points_weighted_by_opponent_rank",
             "form_points_per_game",
             "form_wins",
             "form_draws",
@@ -817,13 +821,13 @@ class DataLoader:
                 pass
 
         # Derived diffs
-        features_df["abs_form_points_diff"] = (
-            features_df.get("home_form_points", 0)
-            - features_df.get("away_form_points", 0)
+        features_df["abs_weighted_form_points_diff"] = (
+            features_df.get("home_form_points_weighted_by_opponent_rank", 0)
+            - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
         ).abs()
-        features_df["form_points_difference"] = features_df.get(
-            "home_form_points", 0
-        ) - features_df.get("away_form_points", 0)
+        features_df["weighted_form_points_difference"] = features_df.get(
+            "home_form_points_weighted_by_opponent_rank", 0
+        ) - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
         features_df["abs_momentum_score_diff"] = (
             features_df.get("home_momentum_score", 0.0)
             - features_df.get("away_momentum_score", 0.0)
@@ -1003,6 +1007,7 @@ class DataLoader:
                         "match_id": m.get("match_id"),
                         "date": date,
                         "team": m.get("home_team"),
+                        "opponent_team": m.get("away_team"),
                         "goals_for": hs,
                         "goals_against": as_,
                         "at_home": True,
@@ -1014,6 +1019,7 @@ class DataLoader:
                         "match_id": m.get("match_id"),
                         "date": date,
                         "team": m.get("away_team"),
+                        "opponent_team": m.get("home_team"),
                         "goals_for": as_,
                         "goals_against": hs,
                         "at_home": False,
@@ -1133,14 +1139,29 @@ class DataLoader:
             float
         )
 
-        long_df["form_points"] = (
-            pts_prior.rolling(window=N, min_periods=1)
+        # Strength-of-Schedule: weight prior points by opponent rank
+        try:
+            table = getattr(self, "_current_table", {}) or {}
+        except Exception:
+            table = {}
+        # Map opponent rank (position) from current table; fallback to 10 if unknown
+        opponent_rank = long_df.get(
+            "opponent_team", pd.Series(index=long_df.index)
+        ).map(lambda t: (table.get(t, {}) or {}).get("position", np.nan))
+        opponent_rank = opponent_rank.fillna(10.0).astype(float)
+        opponent_weight = ((21.0 - opponent_rank) / 10.0).clip(lower=0.1, upper=2.0)
+
+        weight_prior = opponent_weight.groupby(long_df["team"]).shift(1)
+        weighted_pts_prior = pts_prior * weight_prior
+
+        long_df["form_points_weighted_by_opponent_rank"] = (
+            weighted_pts_prior.rolling(window=N, min_periods=1)
             .sum()
             .reset_index(level=0, drop=True)
         )
-        long_df["form_points_per_game"] = long_df["form_points"] / np.minimum(
-            N, grp.cumcount() + 1
-        )
+        long_df["form_points_per_game"] = long_df[
+            "form_points_weighted_by_opponent_rank"
+        ] / np.minimum(N, grp.cumcount() + 1)
         long_df["form_wins"] = (
             win_prior.rolling(window=N, min_periods=1)
             .sum()
@@ -1390,6 +1411,9 @@ class DataLoader:
             away = match["away_team"]
             home_score = match["home_score"]
             away_score = match["away_score"]
+            # Skip if scores are missing to avoid NoneType operations
+            if home_score is None or away_score is None:
+                continue
 
             table[home]["played"] += 1
             table[away]["played"] += 1
