@@ -73,11 +73,8 @@ class ModelConfig:
     outcome_max_depth: int = 6
     outcome_learning_rate: float = 0.1
     outcome_subsample: float = 0.8
-    outcome_colsample_bytree: float = 0.8
     # Regularization and constraints
-    outcome_reg_alpha: float = 0.0
     outcome_reg_lambda: float = 1.0
-    outcome_gamma: float = 4.57e-07
     outcome_min_child_weight: float = 0.1587
 
     # XGBoost Goal Regressors
@@ -85,11 +82,8 @@ class ModelConfig:
     goals_max_depth: int = 6
     goals_learning_rate: float = 0.1
     goals_subsample: float = 0.8
-    goals_colsample_bytree: float = 0.8
     # Regularization and constraints
-    goals_reg_alpha: float = 0.0
     goals_reg_lambda: float = 1.0
-    goals_gamma: float = 0.0
     goals_min_child_weight: float = 1.6919
 
     # Early stopping
@@ -97,7 +91,6 @@ class ModelConfig:
 
     # Poisson grid for scoreline selection
     max_goals: int = 8
-    min_lambda: float = 0.2  # Minimum expected goals to avoid degenerate predictions
 
     # Training
     random_state: int = 42
@@ -158,10 +151,7 @@ class ModelConfig:
             "max_depth": self.goals_max_depth,
             "learning_rate": self.goals_learning_rate,
             "subsample": self.goals_subsample,
-            "colsample_bytree": self.goals_colsample_bytree,
-            "reg_alpha": self.goals_reg_alpha,
             "reg_lambda": self.goals_reg_lambda,
-            "gamma": self.goals_gamma,
             "min_child_weight": self.goals_min_child_weight,
             "random_state": self.random_state,
             "n_jobs": self.n_jobs,
@@ -175,10 +165,7 @@ class ModelConfig:
             "max_depth": self.outcome_max_depth,
             "learning_rate": self.outcome_learning_rate,
             "subsample": self.outcome_subsample,
-            "colsample_bytree": self.outcome_colsample_bytree,
-            "reg_alpha": self.outcome_reg_alpha,
             "reg_lambda": self.outcome_reg_lambda,
-            "gamma": self.outcome_gamma,
             "min_child_weight": self.outcome_min_child_weight,
             "random_state": self.random_state,
             "n_jobs": self.n_jobs,
@@ -223,8 +210,7 @@ class Config:
                     # Load model parameters if present
                     if "max_goals" in params:
                         config.model.max_goals = int(params["max_goals"])
-                    if "min_lambda" in params:
-                        config.model.min_lambda = float(params["min_lambda"])
+
                     if "draw_boost" in params:
                         config.model.draw_boost = float(params["draw_boost"])
                     if "proba_temperature" in params:
@@ -290,20 +276,10 @@ class Config:
                         config.model.outcome_subsample = float(
                             params["outcome_subsample"]
                         )
-                    if "outcome_colsample_bytree" in params:
-                        config.model.outcome_colsample_bytree = float(
-                            params["outcome_colsample_bytree"]
-                        )
-                    if "outcome_reg_alpha" in params:
-                        config.model.outcome_reg_alpha = float(
-                            params["outcome_reg_alpha"]
-                        )
                     if "outcome_reg_lambda" in params:
                         config.model.outcome_reg_lambda = float(
                             params["outcome_reg_lambda"]
                         )
-                    if "outcome_gamma" in params:
-                        config.model.outcome_gamma = float(params["outcome_gamma"])
                     if "outcome_min_child_weight" in params:
                         config.model.outcome_min_child_weight = float(
                             params["outcome_min_child_weight"]
@@ -322,18 +298,10 @@ class Config:
                         )
                     if "goals_subsample" in params:
                         config.model.goals_subsample = float(params["goals_subsample"])
-                    if "goals_colsample_bytree" in params:
-                        config.model.goals_colsample_bytree = float(
-                            params["goals_colsample_bytree"]
-                        )
-                    if "goals_reg_alpha" in params:
-                        config.model.goals_reg_alpha = float(params["goals_reg_alpha"])
                     if "goals_reg_lambda" in params:
                         config.model.goals_reg_lambda = float(
                             params["goals_reg_lambda"]
                         )
-                    if "goals_gamma" in params:
-                        config.model.goals_gamma = float(params["goals_gamma"])
                     if "goals_min_child_weight" in params:
                         config.model.goals_min_child_weight = float(
                             params["goals_min_child_weight"]
@@ -353,7 +321,6 @@ class Config:
             f"  cache_dir={self.paths.cache_dir}\n"
             f"  league={self.api.league_code}\n"
             f"  max_goals={self.model.max_goals}\n"
-            f"  min_lambda={self.model.min_lambda}\n"
             f"  n_jobs={self.model.n_jobs}\n"
             f")"
         )

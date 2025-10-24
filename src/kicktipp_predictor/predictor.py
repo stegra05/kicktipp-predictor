@@ -378,8 +378,10 @@ class MatchPredictor:
         """Trains the home and away goal regression models."""
         start = time.perf_counter()
 
-        self.home_goals_model = XGBRegressor(**self.config.model.goals_params)
-        self.away_goals_model = XGBRegressor(**self.config.model.goals_params)
+        # Hardcode low-impact params to defaults for simplicity
+        goals_params = {**self.config.model.goals_params, "reg_alpha": 0.0, "gamma": 0.0, "colsample_bytree": 0.8}
+        self.home_goals_model = XGBRegressor(**goals_params)
+        self.away_goals_model = XGBRegressor(**goals_params)
 
         train_mask = self._get_train_validation_split(X, dates)
         X_tr, X_val = X[train_mask], X[~train_mask]
@@ -439,7 +441,9 @@ class MatchPredictor:
 
         sample_weights = balanced_weights * tw_train * boost_weights
 
-        self.outcome_model = XGBClassifier(**self.config.model.outcome_params)
+        # Hardcode low-impact params to defaults for simplicity
+        outcome_params = {**self.config.model.outcome_params, "reg_alpha": 0.0, "gamma": 0.0, "colsample_bytree": 0.8}
+        self.outcome_model = XGBClassifier(**outcome_params)
         self.outcome_model.fit(
             X_train, y_train, sample_weight=sample_weights, verbose=False
         )
@@ -451,6 +455,8 @@ class MatchPredictor:
         except Exception:
             cls_val_probs = None
         return {"X_val": X_val, "y_val_enc": y_val, "cls_val_probs": cls_val_probs}
+
+    MIN_LAMBDA: float = 0.2  # clamp for expected goals to avoid degenerate predictions
 
     def predict(
         self, features_df: pd.DataFrame, workers: int | None = None
@@ -470,10 +476,10 @@ class MatchPredictor:
         X = self._prepare_features(features_df)
         classifier_probs = self._get_calibrated_probabilities(X)
         home_lambdas = np.maximum(
-            self.home_goals_model.predict(X), self.config.model.min_lambda
+            self.home_goals_model.predict(X), self.MIN_LAMBDA
         )
         away_lambdas = np.maximum(
-            self.away_goals_model.predict(X), self.config.model.min_lambda
+            self.away_goals_model.predict(X), self.MIN_LAMBDA
         )
 
         # Final blended probabilities (with optional calibration & anchoring)

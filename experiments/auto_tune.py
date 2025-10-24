@@ -223,8 +223,6 @@ def _apply_params_to_config(params: dict[str, float]) -> None:
     # Core
     if "draw_boost" in params:
         cfg.model.draw_boost = float(params["draw_boost"])
-    if "min_lambda" in params:
-        cfg.model.min_lambda = float(params["min_lambda"])
     if "time_decay_half_life_days" in params:
         cfg.model.time_decay_half_life_days = float(params["time_decay_half_life_days"])
         cfg.model.use_time_decay = True
@@ -252,14 +250,8 @@ def _apply_params_to_config(params: dict[str, float]) -> None:
         cfg.model.outcome_learning_rate = float(params["outcome_learning_rate"])
     if "outcome_subsample" in params:
         cfg.model.outcome_subsample = float(params["outcome_subsample"])
-    if "outcome_colsample_bytree" in params:
-        cfg.model.outcome_colsample_bytree = float(params["outcome_colsample_bytree"])
-    if "outcome_reg_alpha" in params:
-        cfg.model.outcome_reg_alpha = float(params["outcome_reg_alpha"])
     if "outcome_reg_lambda" in params:
         cfg.model.outcome_reg_lambda = float(params["outcome_reg_lambda"])
-    if "outcome_gamma" in params:
-        cfg.model.outcome_gamma = float(params["outcome_gamma"])
     if "outcome_min_child_weight" in params:
         cfg.model.outcome_min_child_weight = float(params["outcome_min_child_weight"])
 
@@ -290,14 +282,8 @@ def _apply_params_to_config(params: dict[str, float]) -> None:
         cfg.model.goals_learning_rate = float(params["goals_learning_rate"])
     if "goals_subsample" in params:
         cfg.model.goals_subsample = float(params["goals_subsample"])
-    if "goals_colsample_bytree" in params:
-        cfg.model.goals_colsample_bytree = float(params["goals_colsample_bytree"])
-    if "goals_reg_alpha" in params:
-        cfg.model.goals_reg_alpha = float(params["goals_reg_alpha"])
     if "goals_reg_lambda" in params:
         cfg.model.goals_reg_lambda = float(params["goals_reg_lambda"])
-    if "goals_gamma" in params:
-        cfg.model.goals_gamma = float(params["goals_gamma"])
     if "goals_min_child_weight" in params:
         cfg.model.goals_min_child_weight = float(params["goals_min_child_weight"])
 
@@ -339,7 +325,6 @@ def _objective_builder(
                 "outcome_n_estimators": trial.suggest_int(
                     "outcome_n_estimators", 100, 1500, step=50
                 ),
-                "outcome_gamma": trial.suggest_float("outcome_gamma", 1e-8, 10.0, log=True),
                 "outcome_min_child_weight": trial.suggest_float(
                     "outcome_min_child_weight", 0.1, 10.0, log=True
                 ),

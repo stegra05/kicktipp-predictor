@@ -195,9 +195,9 @@ kicktipp-predictor/
 The model's behavior is controlled by parameters in `config/best_params.yaml`. These are simple, transparent settings:
 
 ### Key Parameters
-- **`max_goals`**: Maximum goals to consider in Poisson grid for scoreline selection (default: 8)
-- **`proba_grid_max_goals`**: Grid cap for Poisson-derived probabilities (default: 12)
-- **`min_lambda`**: Minimum expected goals to prevent degenerate predictions (default: 0.2)
+- `max_goals`: Maximum goals considered in Poisson scoreline selection (default: 8)
+- `proba_grid_max_goals`: Grid cap for Poisson-derived probabilities (default: 12)
+- Note: Expected goals clamp uses an internal constant `MIN_LAMBDA=0.2` and is not tunable via config.
 - **`prob_source`**: Outcome probability source: `classifier` | `poisson` | `hybrid` (default: `hybrid`)
 - **`hybrid_poisson_weight`**: When `prob_source=hybrid`, fixed weight of Poisson probabilities in [0,1] (default: 0.0525).
 - **`proba_temperature`**: Temperature scaling for classifier probabilities (default: 1.0)

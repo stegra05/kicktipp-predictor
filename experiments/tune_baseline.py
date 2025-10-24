@@ -176,8 +176,7 @@ def _apply_params_to_config(params: dict) -> None:
         cfg.model.draw_boost = float(
             params["draw_boost"]
         )  # class weight boost for draws
-    if "min_lambda" in params:
-        cfg.model.min_lambda = float(params["min_lambda"])  # clamp lambdas
+
     if "max_goals" in params:
         cfg.model.max_goals = int(params["max_goals"])  # scoreline search grid
     if "time_decay_half_life_days" in params:
@@ -194,10 +193,7 @@ def _apply_params_to_config(params: dict) -> None:
         "outcome_max_depth",
         "outcome_learning_rate",
         "outcome_subsample",
-        "outcome_colsample_bytree",
-        "outcome_reg_alpha",
         "outcome_reg_lambda",
-        "outcome_gamma",
         "outcome_min_child_weight",
     ):
         if k in params:
@@ -209,10 +205,7 @@ def _apply_params_to_config(params: dict) -> None:
         "goals_max_depth",
         "goals_learning_rate",
         "goals_subsample",
-        "goals_colsample_bytree",
-        "goals_reg_alpha",
         "goals_reg_lambda",
-        "goals_gamma",
         "goals_min_child_weight",
     ):
         if k in params:
@@ -259,7 +252,6 @@ def build_objective(
             "outcome_n_estimators": trial.suggest_int(
                 "outcome_n_estimators", 100, 1500, step=50
             ),
-            "outcome_gamma": trial.suggest_float("outcome_gamma", 1e-8, 10.0, log=True),
             "outcome_min_child_weight": trial.suggest_float(
                 "outcome_min_child_weight", 0.1, 10.0, log=True
             ),
