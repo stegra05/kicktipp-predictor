@@ -351,174 +351,25 @@ def _objective_builder(
         @_retry_on_database_lock(max_retries=3, delay=0.5)
         def suggest_params():
             return {
-                # Class weighting - Widen range slightly
-                "draw_boost": trial.suggest_float(
-                    "draw_boost", 10, 30, step=0.1
-                ),  # Default 1.5 (expanded upper bound)
-                # Outcome XGB - Reduce upper bounds for regularization
-                "outcome_n_estimators": trial.suggest_int(
-                    "outcome_n_estimators", 100, 800, step=50
-                ),  # Default 800
-                "outcome_max_depth": trial.suggest_int(
-                    "outcome_max_depth", 3, 8
-                ),  # Default 6
-                "outcome_learning_rate": trial.suggest_float(
-                    "outcome_learning_rate", 0.01, 0.2, log=True
-                ),  # Default 0.1
-                "outcome_subsample": trial.suggest_float(
-                    "outcome_subsample", 0.5, 1.0, step=0.1
-                ),  # Default 0.8
-                "outcome_colsample_bytree": trial.suggest_float(
-                    "outcome_colsample_bytree", 0.5, 1.0, step=0.1
-                ),  # Default 0.8
-                "outcome_reg_alpha": trial.suggest_float(
-                    "outcome_reg_alpha", 1e-5, 0.5, log=True
-                ),  # Was 0-1, Default 0.0
-                "outcome_reg_lambda": trial.suggest_float(
-                    "outcome_reg_lambda", 0.5, 5.0, log=True
-                ),  # Was 0.5-3, Default 1.0
-                "outcome_gamma": trial.suggest_float(
-                    "outcome_gamma", 1e-5, 2.0, log=True
-                ),  # Was 0-5, Default 0.0
-                "outcome_min_child_weight": trial.suggest_float(
-                    "outcome_min_child_weight", 1.0, 7.0, log=True
-                ),  # Was 1-10, Default 1.0
-                # Goals XGB - Make these DIFFERENT
-                "goals_n_estimators": trial.suggest_int(
-                    "goals_n_estimators", 50, 500, step=25
-                ),  # Default 800
-                "goals_max_depth": trial.suggest_int(
-                    "goals_max_depth", 2, 7
-                ),  # Default 6
-                "goals_learning_rate": trial.suggest_float(
-                    "goals_learning_rate", 0.01, 0.3, log=True
-                ),  # Default 0.1
-                "goals_subsample": trial.suggest_float(
-                    "goals_subsample", 0.5, 1.0, step=0.1
-                ),  # Default 0.8
-                "goals_colsample_bytree": trial.suggest_float(
-                    "goals_colsample_bytree", 0.5, 1.0, step=0.1
-                ),  # Default 0.8
-                "goals_reg_alpha": trial.suggest_float(
-                    "goals_reg_alpha", 1e-5, 0.5, log=True
-                ),  # Was 0-1, Default 0.0
-                "goals_reg_lambda": trial.suggest_float(
-                    "goals_reg_lambda", 0.1, 10.0, log=True
-                ),  # Was 0.5-3, Default 1.0
-                "goals_gamma": trial.suggest_float(
-                    "goals_gamma", 1e-5, 2.0, log=True
-                ),  # Was 0-5, Default 0.0
-                "goals_min_child_weight": trial.suggest_float(
-                    "goals_min_child_weight", 1.0, 20.0, log=True
-                ),  # Was 1-10, Default 1.0
-                # Scoreline selection floor
-                "min_lambda": trial.suggest_float(
-                    "min_lambda", 0.10, 0.35, step=0.01
-                ),  # Was 0.05-0.40, Default 0.2
-                # Time-decay half-life - Keep broad
+                "draw_boost": trial.suggest_float("draw_boost", 0.8, 5.0, step=0.1),
                 "time_decay_half_life_days": trial.suggest_float(
-                    "time_decay_half_life_days", 45.0, 360.0, step=15.0
-                ),  # Default 90
-                # Outcome proba post-processing - Limit prior blending, narrow temp
-                "proba_temperature": trial.suggest_float(
-                    "proba_temperature", 0.85, 1.15, step=0.05
-                ),  # Was 0.7-1.3, Default 1.0
-                "prior_blend_alpha": trial.suggest_float(
-                    "prior_blend_alpha", 0.0, 0.14, step=0.02
-                ),  # Was 0-0.3, Default 0.0
-                # Probability source and blending
-                "prob_source": trial.suggest_categorical("prob_source", ["hybrid"]),
-                # Hybrid scheme and entropy bounds
-                "hybrid_scheme": trial.suggest_categorical(
-                    "hybrid_scheme", ["entropy"]
+                    "time_decay_half_life_days", 15.0, 365.0
                 ),
-                "hybrid_poisson_weight": trial.suggest_float(
-                    "hybrid_poisson_weight", 0.1, 0.9, step=0.05
+                "outcome_n_estimators": trial.suggest_int(
+                    "outcome_n_estimators", 100, 1500, step=50
                 ),
-                # Entropy bounds suggested with safeguard applied later
-                "hybrid_entropy_w_min": trial.suggest_float(
-                    "hybrid_entropy_w_min", 0.0, 0.5, step=0.05
+                "outcome_gamma": trial.suggest_float("outcome_gamma", 1e-8, 10.0, log=True),
+                "outcome_min_child_weight": trial.suggest_float(
+                    "outcome_min_child_weight", 0.1, 10.0, log=True
                 ),
-                "hybrid_entropy_w_max": trial.suggest_float(
-                    "hybrid_entropy_w_max", 0.5, 1.0, step=0.05
+                "goals_min_child_weight": trial.suggest_float(
+                    "goals_min_child_weight", 0.1, 10.0, log=True
                 ),
-                "proba_grid_max_goals": trial.suggest_int(
-                    "proba_grid_max_goals", 10, 14, step=2
-                ),
-                # Dixon–Coles low-score dependence and diagonal bump
-                "poisson_joint": trial.suggest_categorical(
-                    "poisson_joint", ["independent", "dixon_coles"]
-                ),
-                "dixon_coles_rho": trial.suggest_float(
-                    "dixon_coles_rho", -0.10, 0.10, step=0.01
-                ),
-                "poisson_draw_rho": trial.suggest_float(
-                    "poisson_draw_rho", 0.0, 0.20, step=0.01
-                ),
-                # Value weighting for EV-based scoreline selection
-                "value_weight_2pt": trial.suggest_float(
-                    "value_weight_2pt", 0.90, 1.20, step=0.05
-                ),
-                "value_weight_3pt": trial.suggest_float(
-                    "value_weight_3pt", 1.05, 1.35, step=0.05
-                ),
-                "value_weight_4pt": trial.suggest_float(
-                    "value_weight_4pt", 1.10, 1.50, step=0.05
-                ),
-                # Confidence-based H scoreline shift knobs
-                "confidence_shift_threshold": trial.suggest_float(
-                    "confidence_shift_threshold", 0.10, 0.30, step=0.01
-                ),
-                "confidence_shift_prob_ratio": trial.suggest_float(
-                    "confidence_shift_prob_ratio", 0.40, 0.80, step=0.05
-                ),
-                # Feature-engineering knobs (optional) - Keep as is
-                "form_last_n": trial.suggest_int("form_last_n", 3, 12),  # Default 5
-                "momentum_decay": trial.suggest_float(
-                    "momentum_decay", 0.70, 0.99, step=0.01
-                ),  # Default 0.9
-                # Calibration and prior anchoring
-                "calibrator_enabled": trial.suggest_categorical(
-                    "calibrator_enabled", [True]
-                ),
-                "calibrator_method": trial.suggest_categorical(
-                    "calibrator_method", ["dirichlet"]
-                ),
-                "calibrator_C": trial.suggest_float(
-                    "calibrator_C", 0.1, 10.0, log=True
-                ),
-                "prior_anchor_enabled": trial.suggest_categorical(
-                    "prior_anchor_enabled", [False, True]
-                ),
-                "prior_anchor_strength": trial.suggest_float(
-                    "prior_anchor_strength", 0.05, 0.30, step=0.05
-                ),
+                "momentum_decay": trial.suggest_float("momentum_decay", 0.50, 0.99, step=0.01),
+                "hybrid_poisson_weight": trial.suggest_float("hybrid_poisson_weight", 0.0, 0.25),
             }
 
         params: dict[str, float] = suggest_params()
-        # Objective-aware gating: fix calibrator for PPG-focused objectives
-        if objective_name in ("ppg", "ppg_unweighted"):
-            params["calibrator_C"] = 1.0
-            params["prior_anchor_enabled"] = False
-        # Safeguard: ensure entropy bounds valid and consistent with scheme
-        if params.get("hybrid_scheme") == "fixed":
-            # When fixed, hybrid_poisson_weight is used; bounds are irrelevant but keep valid
-            lo = float(params.get("hybrid_entropy_w_min", 0.2))
-            hi = float(params.get("hybrid_entropy_w_max", 1.0))
-            if not (0.0 <= lo < hi <= 1.0):
-                params["hybrid_entropy_w_min"], params["hybrid_entropy_w_max"] = (
-                    0.2,
-                    1.0,
-                )
-        else:
-            lo = float(params.get("hybrid_entropy_w_min", 0.2))
-            hi = float(params.get("hybrid_entropy_w_max", 1.0))
-            if not (0.0 <= lo < hi <= 1.0):
-                # If invalid, nudge to a sane default ordering
-                lo, hi = min(max(0.0, lo), 0.4), max(min(1.0, hi), 0.6)
-                if lo >= hi:
-                    lo, hi = 0.2, 1.0
-                params["hybrid_entropy_w_min"], params["hybrid_entropy_w_max"] = lo, hi
 
         fold_metrics: list[float] = []
 

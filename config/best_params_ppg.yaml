@@ -1,0 +1,8 @@
+draw_boost: 2.2
+goals_min_child_weight: 7.97639784347624
+hybrid_poisson_weight: 0.01882572282053166
+momentum_decay: 0.8
+outcome_gamma: 0.00015601905687697811
+outcome_min_child_weight: 0.34569632518971116
+outcome_n_estimators: 550
+time_decay_half_life_days: 184.48242831816015
