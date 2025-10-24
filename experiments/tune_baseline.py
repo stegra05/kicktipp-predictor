@@ -245,72 +245,26 @@ def build_objective(
         os.environ["MKL_NUM_THREADS"] = os.environ.get("MKL_NUM_THREADS", "1")
         os.environ["NUMEXPR_NUM_THREADS"] = os.environ.get("NUMEXPR_NUM_THREADS", "1")
 
-        # Suggest parameter space focused on big levers
+        # Suggest parameter space focused on top-7 high-impact levers
         params = {
             # Class weighting & time-decay
             "draw_boost": trial.suggest_float("draw_boost", 0.8, 5.0, step=0.1),
             "time_decay_half_life_days": trial.suggest_float(
                 "time_decay_half_life_days", 15.0, 365.0
             ),
-            # Outcome XGB
+            # Outcome XGB (selected levers)
             "outcome_n_estimators": trial.suggest_int(
                 "outcome_n_estimators", 100, 1500, step=50
-            ),
-            "outcome_max_depth": trial.suggest_int("outcome_max_depth", 2, 12),
-            "outcome_learning_rate": trial.suggest_float(
-                "outcome_learning_rate", 0.005, 0.5, log=True
-            ),
-            "outcome_subsample": trial.suggest_float(
-                "outcome_subsample", 0.4, 1.0, step=0.1
-            ),
-            "outcome_colsample_bytree": trial.suggest_float(
-                "outcome_colsample_bytree", 0.4, 1.0, step=0.1
-            ),
-            "outcome_reg_alpha": trial.suggest_float(
-                "outcome_reg_alpha", 1e-8, 1.0, log=True
-            ),
-            "outcome_reg_lambda": trial.suggest_float(
-                "outcome_reg_lambda", 1e-3, 20.0, log=True
             ),
             "outcome_gamma": trial.suggest_float("outcome_gamma", 1e-8, 10.0, log=True),
             "outcome_min_child_weight": trial.suggest_float(
                 "outcome_min_child_weight", 0.1, 10.0, log=True
             ),
-            # Goals XGB
-            "goals_n_estimators": trial.suggest_int(
-                "goals_n_estimators", 50, 1200, step=50
-            ),
-            "goals_max_depth": trial.suggest_int("goals_max_depth", 2, 10),
-            "goals_learning_rate": trial.suggest_float(
-                "goals_learning_rate", 0.005, 0.5, log=True
-            ),
-            "goals_subsample": trial.suggest_float(
-                "goals_subsample", 0.4, 1.0, step=0.1
-            ),
-            "goals_colsample_bytree": trial.suggest_float(
-                "goals_colsample_bytree", 0.4, 1.0, step=0.1
-            ),
-            "goals_reg_alpha": trial.suggest_float(
-                "goals_reg_alpha", 1e-8, 1.0, log=True
-            ),
-            "goals_reg_lambda": trial.suggest_float(
-                "goals_reg_lambda", 1e-3, 30.0, log=True
-            ),
-            "goals_gamma": trial.suggest_float("goals_gamma", 1e-8, 10.0, log=True),
+            # Goals XGB (selected representative lever)
             "goals_min_child_weight": trial.suggest_float(
                 "goals_min_child_weight", 0.1, 10.0, log=True
             ),
-            # Scoreline/Poisson and probability shaping
-            "min_lambda": trial.suggest_float("min_lambda", 0.01, 0.96, step=0.05),
-            "max_goals": trial.suggest_int("max_goals", 6, 16),
-            "proba_temperature": trial.suggest_float(
-                "proba_temperature", 0.5, 2.0, step=0.05
-            ),
-            "prior_blend_alpha": trial.suggest_float(
-                "prior_blend_alpha", 0.0, 0.5, step=0.02
-            ),
-            # Feature engineering knobs
-            "form_last_n": trial.suggest_int("form_last_n", 2, 20),
+            # Feature engineering knob
             "momentum_decay": trial.suggest_float(
                 "momentum_decay", 0.50, 0.99, step=0.01
             ),
@@ -544,11 +498,9 @@ def main():
             cfg_dir = PROJECT_ROOT / "config"
             cfg_dir.mkdir(parents=True, exist_ok=True)
             best = study.best_trial.params
-            with open(
-                cfg_dir / "best_params_baseline.yaml", "w", encoding="utf-8"
-            ) as f:
+            with open(cfg_dir / "best_params.yaml", "w", encoding="utf-8") as f:
                 yaml.safe_dump(best, f, sort_keys=True)
-            _log(f"Best parameters saved to {cfg_dir / 'best_params_baseline.yaml'}")
+            _log(f"Best parameters saved to {cfg_dir / 'best_params.yaml'}")
         except Exception as e:
             _log(f"Warning: Failed to save best params: {e}")
 
