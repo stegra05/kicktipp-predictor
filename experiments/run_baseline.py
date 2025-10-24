@@ -33,7 +33,13 @@ from kicktipp_predictor.metrics import LABELS_ORDER, confusion_matrix_stats
 from kicktipp_predictor.predictor import MatchPredictor
 
 
-def run_baseline(seasons_back: int = 5, quiet: bool = False) -> None:
+def run_baseline(
+    seasons_back: int = 5,
+    quiet: bool = False,
+    prob_source: str = "classifier",
+    hybrid_poisson_weight: float = 0.5,
+    use_ep_selection: bool = False,
+) -> None:
     console = Console()
 
     # Initialize loader and determine seasons
@@ -52,11 +58,17 @@ def run_baseline(seasons_back: int = 5, quiet: bool = False) -> None:
         f"[bold]Fixed Split[/bold] — Train: {start_season}–{train_end_season}, Test: {test_season}"
     )
 
-    # Configure baseline: classifier-only, no calibration, no prior anchoring
+    # Configure baseline: probability source from args, no calibration, no prior anchoring
     cfg = get_config()
-    cfg.model.prob_source = "classifier"
     cfg.model.calibrator_enabled = False
     cfg.model.prior_anchor_enabled = False
+    cfg.model.prob_source = str(prob_source).strip().lower()
+    if cfg.model.prob_source == "hybrid":
+        # Use fixed weighting to respect hybrid_poisson_weight
+        cfg.model.hybrid_scheme = "fixed"
+        cfg.model.hybrid_poisson_weight = float(hybrid_poisson_weight)
+    # Wire EP scoreline selection
+    cfg.model.use_ep_selection = bool(use_ep_selection)
 
     # Load data
     console.status("Loading historical training seasons...")
@@ -200,6 +212,30 @@ if __name__ == "__main__":
         action="store_true",
         help="Reduce training/evaluation logging.",
     )
+    parser.add_argument(
+        "--prob-source",
+        type=str,
+        default="classifier",
+        choices=["classifier", "poisson", "hybrid"],
+        help="Outcome probability source.",
+    )
+    parser.add_argument(
+        "--hybrid-poisson-weight",
+        type=float,
+        default=0.5,
+        help="When prob_source=hybrid, weight of Poisson probabilities in [0,1].",
+    )
+    parser.add_argument(
+        "--use-ep-selection",
+        action="store_true",
+        help="Enable EP scoreline selection (maximize expected Kicktipp points).",
+    )
     args = parser.parse_args()
 
-    run_baseline(seasons_back=args.seasons_back, quiet=args.quiet)
+    run_baseline(
+        seasons_back=args.seasons_back,
+        quiet=args.quiet,
+        prob_source=args.prob_source,
+        hybrid_poisson_weight=args.hybrid_poisson_weight,
+        use_ep_selection=args.use_ep_selection,
+    )

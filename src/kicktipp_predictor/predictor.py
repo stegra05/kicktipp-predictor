@@ -96,6 +96,109 @@ def compute_scoreline_for_outcome(
     return int(candidates[0][0]), int(candidates[0][1])
 
 
+# --- New: Expected Points scoreline selection (top-level for parallelism) ---
+
+
+def compute_ep_scoreline(
+    home_lambda: float,
+    away_lambda: float,
+    max_goals: int,
+    draw_rho: float = 0.0,
+    joint: str = "independent",
+    dixon_rho: float = 0.0,
+) -> tuple[int, int]:
+    """Select the scoreline maximizing expected Kicktipp points under a Poisson grid.
+
+    Builds a joint score grid up to `max_goals`, optionally applies Dixon–Coles
+    low-score adjustments and a diagonal draw bump, then evaluates expected points
+    for every candidate predicted scoreline and returns the argmax.
+    """
+    max_goals = int(max(0, max_goals))
+    G = max_goals
+    lam_h = float(home_lambda)
+    lam_a = float(away_lambda)
+
+    x = np.arange(G + 1)
+    ph = poisson.pmf(x, lam_h)
+    pa = poisson.pmf(x, lam_a)
+    grid = np.outer(ph, pa)
+
+    if str(joint).lower() == "dixon_coles" and abs(float(dixon_rho)) > 1e-12:
+        rho = float(dixon_rho)
+        P = np.array(grid, copy=True)
+        P[0, 0] *= max(0.0, 1.0 - lam_h * lam_a * rho)
+        if G >= 1:
+            P[0, 1] *= max(0.0, 1.0 + lam_h * rho)
+            P[1, 0] *= max(0.0, 1.0 + lam_a * rho)
+            P[1, 1] *= max(0.0, 1.0 - rho)
+        grid = P
+
+    if float(draw_rho) != 0.0:
+        idx = np.arange(G + 1)
+        grid[idx, idx] *= np.exp(float(draw_rho))
+
+    total = float(np.sum(grid))
+    if total <= 0.0:
+        return (1, 1)
+    grid = grid / total
+
+    EP = np.zeros_like(grid, dtype=float)
+    for ph_pred in range(G + 1):
+        for pa_pred in range(G + 1):
+            exp_pts = 0.0
+            for h in range(G + 1):
+                for a in range(G + 1):
+                    if ph_pred == h and pa_pred == a:
+                        pts = 4
+                    elif (ph_pred - pa_pred) == (h - a):
+                        pts = 3
+                    elif (
+                        (ph_pred > pa_pred and h > a)
+                        or (ph_pred == pa_pred and h == a)
+                        or (ph_pred < pa_pred and h < a)
+                    ):
+                        pts = 2
+                    else:
+                        pts = 0
+                    exp_pts += grid[h, a] * pts
+            EP[ph_pred, pa_pred] = exp_pts
+
+    mx = float(np.max(EP))
+    cand = np.argwhere(EP == mx)
+    if len(cand) == 1:
+        return int(cand[0][0]), int(cand[0][1])
+
+    # Tie-break by grid probability, then by common scorelines
+    best = (int(cand[0][0]), int(cand[0][1]))
+    best_p = float(grid[best[0], best[1]])
+    for c in cand[1:]:
+        p = float(grid[int(c[0]), int(c[1])])
+        if p > best_p + 1e-12:
+            best = (int(c[0]), int(c[1]))
+            best_p = p
+
+    common_scorelines = [
+        (2, 1),
+        (1, 0),
+        (1, 1),
+        (0, 1),
+        (2, 0),
+        (0, 0),
+        (2, 2),
+        (3, 1),
+        (1, 2),
+        (3, 0),
+        (0, 3),
+        (3, 2),
+        (2, 3),
+    ]
+    candidates_set = {(int(c[0]), int(c[1])) for c in cand}
+    for h, a in common_scorelines:
+        if (h, a) in candidates_set and h <= G and a <= G:
+            return h, a
+    return best
+
+
 class MatchPredictor:
     """A two-step predictor for match outcomes and scorelines.
 
@@ -422,10 +525,16 @@ class MatchPredictor:
 
         outcomes = self.label_encoder.inverse_transform(outcomes_idx)
 
-        # Compute scorelines strictly matching predicted outcomes using Poisson grid
-        scorelines = self._compute_scorelines(
-            outcomes, home_lambdas, away_lambdas, workers
-        )
+        # Compute scorelines: EP selection if enabled, otherwise outcome-constrained
+        use_ep = bool(getattr(self.config.model, "use_ep_selection", False))
+        if use_ep:
+            scorelines = self._compute_ep_scorelines(
+                home_lambdas, away_lambdas, workers
+            )
+        else:
+            scorelines = self._compute_scorelines(
+                outcomes, home_lambdas, away_lambdas, workers
+            )
 
         return self._format_predictions(
             features_df,
@@ -479,6 +588,34 @@ class MatchPredictor:
         return [
             compute_scoreline_for_outcome(
                 outcomes[i], home_lambdas[i], away_lambdas[i], max_goals
+            )
+            for i in range(n)
+        ]
+
+    # --- New: EP scoreline computation ---
+    def _compute_ep_scorelines(self, home_lambdas, away_lambdas, workers):
+        """Computes EP-maximizing scorelines for each match in parallel."""
+        G = int(self.config.model.max_goals)
+        rho = float(getattr(self.config.model, "poisson_draw_rho", 0.0))
+        joint = str(getattr(self.config.model, "poisson_joint", "independent")).lower()
+        dc_rho = float(getattr(self.config.model, "dixon_coles_rho", 0.0))
+        n = len(home_lambdas)
+        if workers and workers > 1 and n > 0:
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                return list(
+                    executor.map(
+                        compute_ep_scoreline,
+                        home_lambdas,
+                        away_lambdas,
+                        itertools.repeat(G, n),
+                        itertools.repeat(rho, n),
+                        itertools.repeat(joint, n),
+                        itertools.repeat(dc_rho, n),
+                    )
+                )
+        return [
+            compute_ep_scoreline(
+                home_lambdas[i], away_lambdas[i], G, rho, joint, dc_rho
             )
             for i in range(n)
         ]

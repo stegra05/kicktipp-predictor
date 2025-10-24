@@ -131,9 +131,9 @@ class ModelConfig:
     # One of: 'classifier' (default), 'poisson', 'hybrid'
     prob_source: str = "hybrid"
     # When prob_source='hybrid', weight of Poisson-derived probabilities in [0,1]
-    hybrid_poisson_weight: float = 0.5
+    hybrid_poisson_weight: float = 0.1
     # Hybrid weighting scheme: 'fixed' uses hybrid_poisson_weight, 'entropy' adapts per-match
-    hybrid_scheme: str = "entropy"
+    hybrid_scheme: str = "fixed"
     # Entropy-based hybrid weight bounds (in [0,1])
     hybrid_entropy_w_min: float = 0.2
     hybrid_entropy_w_max: float = 1.0
@@ -146,10 +146,13 @@ class ModelConfig:
     # Dixon–Coles low-score correlation parameter (small magnitude, e.g., -0.05..0.05)
     dixon_coles_rho: float = 0.0
 
+    # --- New: EP scoreline selection toggle ---
+    use_ep_selection: bool = True
+
     selected_features_file: str = "kept_features.yaml"
 
     # Calibration of final blended probabilities
-    calibrator_enabled: bool = True
+    calibrator_enabled: bool = False
     calibrator_method: str = (
         "dirichlet"  # or 'multinomial_logistic' fallback if external lib unavailable
     )
@@ -286,6 +289,9 @@ class Config:
                         )
                     if "dixon_coles_rho" in params:
                         config.model.dixon_coles_rho = float(params["dixon_coles_rho"])
+                    # New: EP selection toggle from YAML
+                    if "use_ep_selection" in params:
+                        config.model.use_ep_selection = bool(params["use_ep_selection"])
 
                     # Outcome classifier hyperparameters
                     if "outcome_n_estimators" in params:
