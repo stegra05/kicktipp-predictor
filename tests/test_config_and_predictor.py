@@ -38,7 +38,6 @@ def test_hybrid_blending_fixed_weight_extremes():
 
     # Configure deterministic blending behavior
     cfg.model.prob_source = "hybrid"
-    cfg.model.hybrid_scheme = "fixed"
     cfg.model.hybrid_poisson_weight = 1.0  # test Poisson-only first
     cfg.model.proba_temperature = 1.0
     cfg.model.draw_boost = 1.0
@@ -60,6 +59,41 @@ def test_hybrid_blending_fixed_weight_extremes():
     cfg.model.hybrid_poisson_weight = 0.0
     p0, _ = predictor._derive_final_probabilities(clf, hg, ag)
     assert np.allclose(p0, clf, atol=1e-8)
+
+
+def test_hybrid_blending_fixed_weight_mid():
+    reset_config()
+    cfg = get_config()
+
+    cfg.model.prob_source = "hybrid"
+    cfg.model.hybrid_poisson_weight = 0.25
+    predictor = MatchPredictor(cfg)
+
+    clf = np.array([[0.2, 0.5, 0.3]])
+    hg = np.array([1.0])
+    ag = np.array([1.0])
+
+    p_blend, _ = predictor._derive_final_probabilities(clf, hg, ag)
+    p_pois = predictor._calculate_poisson_outcome_probs(hg, ag)
+
+    expected = (1.0 - 0.25) * clf + 0.25 * p_pois
+    assert np.allclose(p_blend, expected, atol=1e-8)
+
+
+def test_hybrid_weight_out_of_range_raises():
+    reset_config()
+    cfg = get_config()
+
+    cfg.model.prob_source = "hybrid"
+    cfg.model.hybrid_poisson_weight = 1.5  # invalid
+    predictor = MatchPredictor(cfg)
+
+    clf = np.array([[0.3, 0.4, 0.3]])
+    hg = np.array([1.0])
+    ag = np.array([1.0])
+
+    with pytest.raises(ValueError):
+        predictor._derive_final_probabilities(clf, hg, ag)
 
 
 def test_calibration_and_anchoring_identity():

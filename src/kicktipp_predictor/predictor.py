@@ -604,8 +604,11 @@ class MatchPredictor:
                 axis=1,
             ) / np.log(3.0)
         else:
-            # Hybrid
-            weights = self._compute_entropy_weights(classifier_probs)
+            # Hybrid (fixed-weight blending only)
+            w = float(self.config.model.hybrid_poisson_weight)
+            if not (0.0 <= w <= 1.0):
+                raise ValueError(f"hybrid_poisson_weight must be in [0,1], got {w}")
+            weights = np.full(len(classifier_probs), w)
             blend = self._blend_probs(classifier_probs, pois_probs, weights)
             entropy = -np.sum(
                 np.clip(classifier_probs, 1e-15, 1.0)
@@ -625,22 +628,6 @@ class MatchPredictor:
         }
         return calibrated, diag
 
-    def _compute_entropy_weights(self, classifier_probs: np.ndarray) -> np.ndarray:
-        scheme = getattr(self.config.model, "hybrid_scheme", "entropy").lower()
-        if scheme != "entropy":
-            return np.full(
-                len(classifier_probs), float(self.config.model.hybrid_poisson_weight)
-            )
-        h = -np.sum(
-            np.clip(classifier_probs, 1e-15, 1.0)
-            * np.log(np.clip(classifier_probs, 1e-15, 1.0)),
-            axis=1,
-        )
-        h_norm = h / np.log(3.0)
-        w_min = float(self.config.model.hybrid_entropy_w_min)
-        w_max = float(self.config.model.hybrid_entropy_w_max)
-        w = w_min + (w_max - w_min) * np.clip(h_norm, 0.0, 1.0)
-        return np.clip(w, 0.0, 1.0)
 
     def _blend_probs(
         self,

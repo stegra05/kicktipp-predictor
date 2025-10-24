@@ -199,7 +199,7 @@ The model's behavior is controlled by parameters in `config/best_params.yaml`. T
 - **`proba_grid_max_goals`**: Grid cap for Poisson-derived probabilities (default: 12)
 - **`min_lambda`**: Minimum expected goals to prevent degenerate predictions (default: 0.2)
 - **`prob_source`**: Outcome probability source: `classifier` | `poisson` | `hybrid` (default: `hybrid`)
-- **`hybrid_poisson_weight`**: When `prob_source=hybrid`, weight of Poisson probabilities in [0,1] (default: 0.1). Scheme can be `fixed` or `entropy`.
+- **`hybrid_poisson_weight`**: When `prob_source=hybrid`, fixed weight of Poisson probabilities in [0,1] (default: 0.1).
 - **`proba_temperature`**: Temperature scaling for classifier probabilities (default: 1.0)
 - **`prior_blend_alpha`**: Empirical-prior blending (applies when `prob_source` is `classifier` or `hybrid`)
 - **`draw_boost`**: Class weight multiplier for draws during classifier training

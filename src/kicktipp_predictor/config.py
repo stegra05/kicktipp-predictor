@@ -131,12 +131,8 @@ class ModelConfig:
     # One of: 'classifier' (default), 'poisson', 'hybrid'
     prob_source: str = "hybrid"
     # When prob_source='hybrid', weight of Poisson-derived probabilities in [0,1]
+    # Note: only fixed-weight blending is supported.
     hybrid_poisson_weight: float = 0.1
-    # Hybrid weighting scheme: 'fixed' uses hybrid_poisson_weight, 'entropy' adapts per-match
-    hybrid_scheme: str = "fixed"
-    # Entropy-based hybrid weight bounds (in [0,1])
-    hybrid_entropy_w_min: float = 0.2
-    hybrid_entropy_w_max: float = 1.0
     # Max goals for Poisson probability grid used to derive P(H/D/A) (separate from scoreline grid)
     proba_grid_max_goals: int = 12
     # Draw bump for Poisson-derived probabilities: multiply diagonal cells by exp(rho) before normalization
@@ -244,18 +240,6 @@ class Config:
                     if "hybrid_poisson_weight" in params:
                         config.model.hybrid_poisson_weight = float(
                             params["hybrid_poisson_weight"]
-                        )
-                    if "hybrid_scheme" in params:
-                        config.model.hybrid_scheme = (
-                            str(params["hybrid_scheme"]).strip().lower()
-                        )
-                    if "hybrid_entropy_w_min" in params:
-                        config.model.hybrid_entropy_w_min = float(
-                            params["hybrid_entropy_w_min"]
-                        )
-                    if "hybrid_entropy_w_max" in params:
-                        config.model.hybrid_entropy_w_max = float(
-                            params["hybrid_entropy_w_max"]
                         )
                     if "proba_grid_max_goals" in params:
                         config.model.proba_grid_max_goals = int(

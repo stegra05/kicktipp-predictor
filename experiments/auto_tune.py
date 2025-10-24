@@ -243,14 +243,6 @@ def _apply_params_to_config(params: dict[str, float]) -> None:
         cfg.model.value_weight_3pt = float(params["value_weight_3pt"])
     if "value_weight_4pt" in params:
         cfg.model.value_weight_4pt = float(params["value_weight_4pt"])
-    if "confidence_shift_threshold" in params:
-        cfg.model.confidence_shift_threshold = float(
-            params["confidence_shift_threshold"]
-        )
-    if "confidence_shift_prob_ratio" in params:
-        cfg.model.confidence_shift_prob_ratio = float(
-            params["confidence_shift_prob_ratio"]
-        )
     # Outcome classifier
     if "outcome_n_estimators" in params:
         cfg.model.outcome_n_estimators = int(params["outcome_n_estimators"])
@@ -280,12 +272,6 @@ def _apply_params_to_config(params: dict[str, float]) -> None:
         cfg.model.prob_source = str(params["prob_source"]).strip().lower()
     if "hybrid_poisson_weight" in params:
         cfg.model.hybrid_poisson_weight = float(params["hybrid_poisson_weight"])
-    if "hybrid_scheme" in params:
-        cfg.model.hybrid_scheme = str(params["hybrid_scheme"]).strip().lower()
-    if "hybrid_entropy_w_min" in params:
-        cfg.model.hybrid_entropy_w_min = float(params["hybrid_entropy_w_min"])
-    if "hybrid_entropy_w_max" in params:
-        cfg.model.hybrid_entropy_w_max = float(params["hybrid_entropy_w_max"])
     if "poisson_joint" in params:
         cfg.model.poisson_joint = str(params["poisson_joint"]).strip().lower()
     if "dixon_coles_rho" in params:

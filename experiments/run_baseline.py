@@ -62,8 +62,7 @@ def run_baseline(
     cfg = get_config()
     cfg.model.prob_source = str(prob_source).strip().lower()
     if cfg.model.prob_source == "hybrid":
-        # Use fixed weighting to respect hybrid_poisson_weight
-        cfg.model.hybrid_scheme = "fixed"
+        # Fixed-weight blending uses hybrid_poisson_weight
         cfg.model.hybrid_poisson_weight = float(hybrid_poisson_weight)
     # Wire EP scoreline selection
     cfg.model.use_ep_selection = bool(use_ep_selection)
