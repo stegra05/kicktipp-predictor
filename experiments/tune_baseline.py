@@ -301,7 +301,7 @@ def build_objective(
                 "goals_min_child_weight", 0.1, 10.0, log=True
             ),
             # Scoreline/Poisson and probability shaping
-            "min_lambda": trial.suggest_float("min_lambda", 0.01, 1.0, step=0.05),
+            "min_lambda": trial.suggest_float("min_lambda", 0.01, 0.96, step=0.05),
             "max_goals": trial.suggest_int("max_goals", 6, 16),
             "proba_temperature": trial.suggest_float(
                 "proba_temperature", 0.5, 2.0, step=0.05
