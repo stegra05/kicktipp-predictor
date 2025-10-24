@@ -1,5 +1,11 @@
 # Changelog
 
+## 2025-10-24 (v3.0)
+
+- **BREAKING CHANGE**: Removed deprecated Poisson model parameters (`poisson_joint`, `dixon_coles_rho`, `poisson_draw_rho`) from `config.py`. These parameters were found to have a negligible impact on model performance.
+- Formalized the "winning" architecture in `architecture.md`.
+- Simplified the codebase by removing scaffolding code related to failed experiments.
+
 ## 2025-10-24
 
 - Update default hyperparameters in `ModelConfig` to tuned values:

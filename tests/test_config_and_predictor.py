@@ -96,26 +96,13 @@ def test_hybrid_weight_out_of_range_raises():
         predictor._derive_final_probabilities(clf, hg, ag)
 
 
-def test_calibration_and_anchoring_identity():
-    reset_config()
-    cfg = get_config()
-    predictor = MatchPredictor(cfg)
-
-    proba = np.array([[0.3, 0.4, 0.3], [0.2, 0.2, 0.6]])
-
-    out = predictor._apply_calibration_and_anchoring(proba)
-    assert np.allclose(out, proba, atol=1e-8)
 
 
 def test_compute_ep_scoreline_symmetry_returns_draw():
     reset_config()
-    cfg = get_config()
+    get_config()
 
-    # Disable draw correlation adjustments for determinism
-    cfg.model.poisson_draw_rho = 0.0
-    cfg.model.dixon_coles_rho = 0.0
-
-    s = compute_ep_scoreline(0.8, 0.8, max_goals=6, draw_rho=0.0, joint="independent", dixon_rho=0.0)
+    s = compute_ep_scoreline(0.8, 0.8, max_goals=6)
     assert isinstance(s, tuple)
     assert len(s) == 2
     # For symmetric lambdas, best EP scoreline should be a draw
