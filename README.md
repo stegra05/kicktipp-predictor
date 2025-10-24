@@ -199,7 +199,7 @@ The model's behavior is controlled by parameters in `config/best_params.yaml`. T
 - **`proba_grid_max_goals`**: Grid cap for Poisson-derived probabilities (default: 12)
 - **`min_lambda`**: Minimum expected goals to prevent degenerate predictions (default: 0.2)
 - **`prob_source`**: Outcome probability source: `classifier` | `poisson` | `hybrid` (default: `hybrid`)
-- **`hybrid_poisson_weight`**: When `prob_source=hybrid`, fixed weight of Poisson probabilities in [0,1] (default: 0.1).
+- **`hybrid_poisson_weight`**: When `prob_source=hybrid`, fixed weight of Poisson probabilities in [0,1] (default: 0.0525).
 - **`proba_temperature`**: Temperature scaling for classifier probabilities (default: 1.0)
 - **`prior_blend_alpha`**: Empirical-prior blending (applies when `prob_source` is `classifier` or `hybrid`)
 - **`draw_boost`**: Class weight multiplier for draws during classifier training
@@ -208,9 +208,9 @@ The model's behavior is controlled by parameters in `config/best_params.yaml`. T
 - **`poisson_joint`**: Joint grid model: `independent` or `dixon_coles` (default: `dixon_coles`)
 - **`dixon_coles_rho`**: Dixon–Coles low-score correlation parameter (default: 0.0)
 - **`use_time_decay`**: Apply recency weighting during training (default: True)
-- **`time_decay_half_life_days`**: Half-life in days for time-decay weights (default: 90, typically overridden via YAML)
+- **`time_decay_half_life_days`**: Half-life in days for time-decay weights (default: 330, typically overridden via YAML)
 - **`form_last_n`**: Window size for last-N form features (default: 5)
-- **`momentum_decay`**: EWMA decay for momentum features (default: 0.9)
+- **`momentum_decay`**: EWMA decay for momentum features (default: 0.83)
 
 ### XGBoost Hyperparameters
 - **Outcome Classifier**: `n_estimators`, `max_depth`, `learning_rate`, `subsample`, `colsample_bytree`

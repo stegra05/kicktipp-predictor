@@ -62,12 +62,14 @@ class APIConfig:
     request_timeout: int = 10  # HTTP request timeout in seconds
 
 
+# Defaults updated per final tuning run (2025-10-24)
+# See README Key Parameters for rationale.
 @dataclass
 class ModelConfig:
     """Model hyperparameters and training configuration."""
 
     # XGBoost Outcome Classifier (H/D/A)
-    outcome_n_estimators: int = 800
+    outcome_n_estimators: int = 1150
     outcome_max_depth: int = 6
     outcome_learning_rate: float = 0.1
     outcome_subsample: float = 0.8
@@ -75,8 +77,8 @@ class ModelConfig:
     # Regularization and constraints
     outcome_reg_alpha: float = 0.0
     outcome_reg_lambda: float = 1.0
-    outcome_gamma: float = 0.0
-    outcome_min_child_weight: float = 1.0
+    outcome_gamma: float = 4.57e-07
+    outcome_min_child_weight: float = 0.1587
 
     # XGBoost Goal Regressors
     goals_n_estimators: int = 800
@@ -88,7 +90,7 @@ class ModelConfig:
     goals_reg_alpha: float = 0.0
     goals_reg_lambda: float = 1.0
     goals_gamma: float = 0.0
-    goals_min_child_weight: float = 1.0
+    goals_min_child_weight: float = 1.6919
 
     # Early stopping
     goals_early_stopping_rounds: int = 25
@@ -104,11 +106,11 @@ class ModelConfig:
 
     # Time-decay weighting (recency)
     use_time_decay: bool = True
-    time_decay_half_life_days: float = 90.0
+    time_decay_half_life_days: float = 330.0
 
     # Feature engineering knobs
     form_last_n: int = 5
-    momentum_decay: float = 0.9
+    momentum_decay: float = 0.83
 
     # Threading
     n_jobs: int = field(
@@ -119,7 +121,7 @@ class ModelConfig:
 
     # Class weights for outcome classifier
     # Boost draw class since it's underrepresented
-    draw_boost: float = 1.1
+    draw_boost: float = 1.7
 
     # Outcome probability post-processing
     # Temperature < 1 sharpens, > 1 softens
@@ -132,7 +134,7 @@ class ModelConfig:
     prob_source: str = "hybrid"
     # When prob_source='hybrid', weight of Poisson-derived probabilities in [0,1]
     # Note: only fixed-weight blending is supported.
-    hybrid_poisson_weight: float = 0.1
+    hybrid_poisson_weight: float = 0.0525
     # Max goals for Poisson probability grid used to derive P(H/D/A) (separate from scoreline grid)
     proba_grid_max_goals: int = 12
     # Draw bump for Poisson-derived probabilities: multiply diagonal cells by exp(rho) before normalization
