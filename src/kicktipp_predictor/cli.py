@@ -413,6 +413,7 @@ def tune(
         # Enhanced multi-worker live dashboard
         from rich.live import Live
         from rich.console import Group
+        from rich.columns import Columns
         from rich.table import Table
         from rich.panel import Panel
 
@@ -427,7 +428,7 @@ def tune(
             refresh_per_second=2,
         )
         task_id = progress.add_task(f"Tuning ({objective.upper()})", total=total_trials)
-        progress.start()
+        # Progress is rendered inside Live; do not start here.
 
         # Track per-worker state and errors
         import threading, queue, datetime
@@ -463,38 +464,46 @@ def tune(
             t = threading.Thread(target=_drain_stderr, args=(p.stderr, i), daemon=True)
             t.start()
 
-        def _build_workers_table():
-            table = Table(title="Workers", show_header=True)
-            table.add_column("Worker", justify="right")
-            table.add_column("PID", justify="right")
-            table.add_column("Status")
-            table.add_column("Completed", justify="right")
-            table.add_column("Rate (t/min)", justify="right")
-            table.add_column("ETA", justify="right")
-            table.add_column("Last Update")
-            table.add_column("Last Error")
-            for i in range(workers):
-                pid = worker_pids.get(i)
-                status = worker_status.get(i, "unknown")
-                done = worker_completed.get(i, 0)
-                rate = worker_rate.get(i, 0.0)
-                alloc = worker_alloc.get(i, 0)
-                eta = "--"
-                if rate > 0 and alloc > 0:
-                    rem = max(0, alloc - done)
-                    eta_min = rem / rate
-                    eta = f"{eta_min:.1f}m"
-                table.add_row(
-                    str(i),
-                    str(pid) if pid else "-",
-                    status,
-                    str(done),
-                    f"{rate:.2f}",
-                    eta,
-                    worker_last_update.get(i, ""),
-                    (worker_last_error.get(i, "")[:80] if worker_last_error.get(i) else ""),
-                )
-            return table
+        def _build_workers_columns(num_cols: int = 2):
+            # Split workers into multiple side-by-side tables to avoid vertical truncation
+            num_cols = max(1, num_cols)
+            per_col = (workers + num_cols - 1) // num_cols
+            tables: list[Table] = []
+            for col in range(num_cols):
+                start = col * per_col
+                end = min(workers, start + per_col)
+                table = Table(title="Workers" if col == 0 else "", show_header=True)
+                table.add_column("Worker", justify="right")
+                table.add_column("PID", justify="right")
+                table.add_column("Status")
+                table.add_column("Completed", justify="right")
+                table.add_column("Rate (t/min)", justify="right")
+                table.add_column("ETA", justify="right")
+                table.add_column("Last Update")
+                table.add_column("Last Error")
+                for i in range(start, end):
+                    pid = worker_pids.get(i)
+                    status = worker_status.get(i, "unknown")
+                    done = worker_completed.get(i, 0)
+                    rate = worker_rate.get(i, 0.0)
+                    alloc = worker_alloc.get(i, 0)
+                    eta = "--"
+                    if rate > 0 and alloc > 0:
+                        rem = max(0, alloc - done)
+                        eta_min = rem / rate
+                        eta = f"{eta_min:.1f}m"
+                    table.add_row(
+                        str(i),
+                        str(pid) if pid else "-",
+                        status,
+                        str(done),
+                        f"{rate:.2f}",
+                        eta,
+                        worker_last_update.get(i, ""),
+                        (worker_last_error.get(i, "")[:80] if worker_last_error.get(i) else ""),
+                    )
+                tables.append(table)
+            return Columns(tables)
 
         def _build_errors_panel():
             lines = []
@@ -505,7 +514,7 @@ def tune(
             content = "\n".join(lines) if lines else "No errors captured"
             return Panel(content, title="Errors", border_style="red")
 
-        with Live(Group(progress, _build_workers_table(), _build_errors_panel()), refresh_per_second=2, transient=True) as live:
+        with Live(Group(progress, _build_workers_columns(), _build_errors_panel()), refresh_per_second=2, transient=True) as live:
             # Poll study storage until all workers finish
             while True:
                 # Drain worker errors
@@ -563,7 +572,7 @@ def tune(
                     else:
                         worker_status[i] = f"error ({rc})"
 
-                live.update(Group(progress, _build_workers_table(), _build_errors_panel()))
+                live.update(Group(progress, _build_workers_columns(), _build_errors_panel()))
 
                 if not alive_any:
                     break

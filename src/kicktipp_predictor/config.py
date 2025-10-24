@@ -293,6 +293,18 @@ class Config:
                     if "use_ep_selection" in params:
                         config.model.use_ep_selection = bool(params["use_ep_selection"])
 
+                    # Time-decay weighting and feature knobs
+                    if "use_time_decay" in params:
+                        config.model.use_time_decay = bool(params["use_time_decay"])
+                    if "time_decay_half_life_days" in params:
+                        config.model.time_decay_half_life_days = float(
+                            params["time_decay_half_life_days"]
+                        )
+                    if "form_last_n" in params:
+                        config.model.form_last_n = int(params["form_last_n"])
+                    if "momentum_decay" in params:
+                        config.model.momentum_decay = float(params["momentum_decay"])
+
                     # Outcome classifier hyperparameters
                     if "outcome_n_estimators" in params:
                         config.model.outcome_n_estimators = int(
