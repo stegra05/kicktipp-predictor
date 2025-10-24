@@ -41,6 +41,7 @@
 - home_form_goals_scored
 - home_form_goals_conceded
 - home_form_goal_diff
+- home_goal_diff_stddev_form
 - home_form_avg_goals_scored
 - home_form_avg_goals_conceded
 
@@ -53,6 +54,7 @@
 - away_form_goals_scored
 - away_form_goals_conceded
 - away_form_goal_diff
+- away_goal_diff_stddev_form
 - away_form_avg_goals_scored
 - away_form_avg_goals_conceded
 

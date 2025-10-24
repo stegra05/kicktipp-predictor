@@ -286,6 +286,7 @@ class DataLoader:
             "form_goals_scored",
             "form_goals_conceded",
             "form_goal_diff",
+            "goal_diff_stddev_form",
             "form_avg_goals_scored",
             "form_avg_goals_conceded",
             "momentum_points",
@@ -662,6 +663,7 @@ class DataLoader:
             "form_goals_scored",
             "form_goals_conceded",
             "form_goal_diff",
+            "goal_diff_stddev_form",
             "form_avg_goals_scored",
             "form_avg_goals_conceded",
             "momentum_points",
@@ -1112,6 +1114,7 @@ class DataLoader:
         gf_prior = grp["goals_for"].shift(1)
         ga_prior = grp["goals_against"].shift(1)
         pts_prior = grp["points"].shift(1)
+        gd_prior = grp["goal_diff"].shift(1)
 
         long_df["avg_goals_for"] = (
             gf_prior.expanding().mean().reset_index(level=0, drop=True)
@@ -1191,6 +1194,12 @@ class DataLoader:
         long_df["form_goals_scored"] = gf_roll
         long_df["form_goals_conceded"] = ga_roll
         long_df["form_goal_diff"] = gf_roll - ga_roll
+        # Volatility: rolling std dev of prior goal difference over last N
+        long_df["goal_diff_stddev_form"] = (
+            gd_prior.rolling(window=N, min_periods=1)
+            .std()
+            .reset_index(level=0, drop=True)
+        )
         long_df["form_avg_goals_scored"] = gf_roll / np.minimum(N, grp.cumcount() + 1)
         long_df["form_avg_goals_conceded"] = ga_roll / np.minimum(N, grp.cumcount() + 1)
 
