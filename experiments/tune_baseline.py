@@ -244,7 +244,12 @@ def build_objective(
         os.environ["OPENBLAS_NUM_THREADS"] = os.environ.get("OPENBLAS_NUM_THREADS", "1")
         os.environ["MKL_NUM_THREADS"] = os.environ.get("MKL_NUM_THREADS", "1")
         os.environ["NUMEXPR_NUM_THREADS"] = os.environ.get("NUMEXPR_NUM_THREADS", "1")
-
+        # Track worker and timing metadata
+        try:
+            wid = int(os.environ.get("OPTUNA_WORKER_ID", "0"))
+        except Exception:
+            wid = 0
+        t_start = time.time()
         # Suggest parameter space focused on top-7 high-impact levers
         params = {
             # Class weighting & time-decay
@@ -299,6 +304,13 @@ def build_objective(
         ppg = float(metrics.get("avg_points", float("nan")))
         if not (ppg == ppg):  # NaN check
             raise optuna.TrialPruned("NaN PPG")
+        # Record per-trial metadata for dashboard
+        try:
+            trial.set_user_attr("worker_id", wid)
+            trial.set_user_attr("duration_sec", max(0.0, time.time() - t_start))
+            trial.set_user_attr("finished_at", int(time.time()))
+        except Exception:
+            pass
         return ppg
 
     # Keep references to matches in closure to avoid recompute per trial

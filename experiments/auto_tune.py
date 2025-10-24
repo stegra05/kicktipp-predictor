@@ -346,7 +346,12 @@ def _objective_builder(
             os.environ["OPENBLAS_NUM_THREADS"] = str(omp_threads)
             os.environ["MKL_NUM_THREADS"] = str(omp_threads)
             os.environ["NUMEXPR_NUM_THREADS"] = str(omp_threads)
-
+        # Track worker and timing for per-trial metadata
+        try:
+            wid = int(os.environ.get("OPTUNA_WORKER_ID", "0"))
+        except Exception:
+            wid = 0
+        t_start = time.time()
         # Search space (with retry logic for database locks)
         @_retry_on_database_lock(max_retries=3, delay=0.5)
         def suggest_params():
@@ -510,7 +515,21 @@ def _objective_builder(
 
         # Objective: average of fold metrics
         if not fold_metrics:
+            # Record trial metadata even on empty folds
+            try:
+                trial.set_user_attr("worker_id", wid)
+                trial.set_user_attr("duration_sec", max(0.0, time.time() - t_start))
+                trial.set_user_attr("finished_at", int(time.time()))
+            except Exception:
+                pass
             return float("inf") if direction == "minimize" else float("-inf")
+        # Record per-trial metadata for dashboard
+        try:
+            trial.set_user_attr("worker_id", wid)
+            trial.set_user_attr("duration_sec", max(0.0, time.time() - t_start))
+            trial.set_user_attr("finished_at", int(time.time()))
+        except Exception:
+            pass
         return float(np.nanmean(fold_metrics))
 
     return obj_fn

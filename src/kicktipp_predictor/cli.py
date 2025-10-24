@@ -368,7 +368,15 @@ def tune(
         worker_env["OPTUNA_WORKER_ID"] = str(worker_idx)
         worker_env["OPTUNA_TOTAL_WORKERS"] = str(workers)
 
-        p = subprocess.Popen(cmd, cwd=str(pkg_root), env=worker_env)
+        p = subprocess.Popen(
+            cmd,
+            cwd=str(pkg_root),
+            env=worker_env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
         procs.append(p)
 
     # 4) Central progress bar and summary
@@ -398,39 +406,170 @@ def tune(
             pass
 
         # Determine study name used by workers (defaults to tune_baseline.py default)
-        study_name_local = study_name or "baseline-ppg"
+        study_name_local = study_name or f"kicktipp-tune-{objective}"
         total_trials = n_trials
 
-        with Progress(
+        # Progress will be managed via Live and a Progress instance below
+        # Enhanced multi-worker live dashboard
+        from rich.live import Live
+        from rich.console import Group
+        from rich.table import Table
+        from rich.panel import Panel
+
+        progress = Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TextColumn("{task.completed}/{task.total} trials"),
             TimeElapsedColumn(),
             TimeRemainingColumn(),
-            transient=False,
-        ) as progress:
-            task_id = progress.add_task("Baseline tuning (PPG)", total=total_trials)
+            transient=True,
+            refresh_per_second=2,
+        )
+        task_id = progress.add_task(f"Tuning ({objective.upper()})", total=total_trials)
+        progress.start()
+
+        # Track per-worker state and errors
+        import threading, queue, datetime
+        worker_status = {i: "running" for i in range(workers)}
+        worker_pids = {i: (procs[i].pid if i < len(procs) else None) for i in range(workers)}
+        worker_alloc = {i: (allocations[i] if i < len(allocations) else 0) for i in range(workers)}
+        worker_completed = {i: 0 for i in range(workers)}
+        worker_rate = {i: 0.0 for i in range(workers)}
+        worker_last_update = {i: "" for i in range(workers)}
+        worker_last_error = {i: "" for i in range(workers)}
+        prev_counts = {i: 0 for i in range(workers)}
+        prev_time = {i: _time.time() for i in range(workers)}
+
+        err_q = queue.Queue(maxsize=200)
+
+        def _drain_stderr(stream, wid: int):
+            try:
+                if stream is None:
+                    return
+                for line in stream:
+                    if not line:
+                        break
+                    ln = line.strip()
+                    if isinstance(ln, bytes):
+                        ln = ln.decode("utf-8", errors="ignore").strip()
+                    if ln:
+                        err_q.put((wid, ln))
+            except Exception:
+                pass
+
+        # Start stderr reader threads
+        for i, p in enumerate(procs):
+            t = threading.Thread(target=_drain_stderr, args=(p.stderr, i), daemon=True)
+            t.start()
+
+        def _build_workers_table():
+            table = Table(title="Workers", show_header=True)
+            table.add_column("Worker", justify="right")
+            table.add_column("PID", justify="right")
+            table.add_column("Status")
+            table.add_column("Completed", justify="right")
+            table.add_column("Rate (t/min)", justify="right")
+            table.add_column("ETA", justify="right")
+            table.add_column("Last Update")
+            table.add_column("Last Error")
+            for i in range(workers):
+                pid = worker_pids.get(i)
+                status = worker_status.get(i, "unknown")
+                done = worker_completed.get(i, 0)
+                rate = worker_rate.get(i, 0.0)
+                alloc = worker_alloc.get(i, 0)
+                eta = "--"
+                if rate > 0 and alloc > 0:
+                    rem = max(0, alloc - done)
+                    eta_min = rem / rate
+                    eta = f"{eta_min:.1f}m"
+                table.add_row(
+                    str(i),
+                    str(pid) if pid else "-",
+                    status,
+                    str(done),
+                    f"{rate:.2f}",
+                    eta,
+                    worker_last_update.get(i, ""),
+                    (worker_last_error.get(i, "")[:80] if worker_last_error.get(i) else ""),
+                )
+            return table
+
+        def _build_errors_panel():
+            lines = []
+            for i in range(workers):
+                err = worker_last_error.get(i)
+                if err:
+                    lines.append(f"[{i}] {err}")
+            content = "\n".join(lines) if lines else "No errors captured"
+            return Panel(content, title="Errors", border_style="red")
+
+        with Live(Group(progress, _build_workers_table(), _build_errors_panel()), refresh_per_second=2, transient=True) as live:
             # Poll study storage until all workers finish
             while True:
-                # Update completed count
+                # Drain worker errors
+                try:
+                    while True:
+                        wid, ln = err_q.get_nowait()
+                        if any(m in ln for m in ("ERROR", "Exception", "Traceback")):
+                            worker_last_error[wid] = ln
+                except queue.Empty:
+                    pass
+
+                # Update completed counts from storage
                 try:
                     study = _optuna.load_study(study_name=study_name_local, storage=url)
                     trials = study.get_trials(deepcopy=False)
-                    completed = sum(
-                        1
-                        for t in trials
-                        if t.state == _optuna.trial.TrialState.COMPLETE
-                    )
+                    # Overall completed
+                    completed = sum(1 for t in trials if t.state == _optuna.trial.TrialState.COMPLETE)
                     progress.update(task_id, completed=min(completed, total_trials))
+                    # Per-worker completed
+                    by_worker: dict[int, int] = {i: 0 for i in range(workers)}
+                    for t in trials:
+                        if t.state == _optuna.trial.TrialState.COMPLETE:
+                            wid = t.user_attrs.get("worker_id")
+                            try:
+                                wid_int = int(wid) if wid is not None else 0
+                            except Exception:
+                                wid_int = 0
+                            if 0 <= wid_int < workers:
+                                by_worker[wid_int] += 1
+                    # Compute rate and timestamps
+                    now = _time.time()
+                    for i in range(workers):
+                        new = by_worker.get(i, 0)
+                        old = prev_counts.get(i, 0)
+                        dt = max(1e-3, now - prev_time.get(i, now))
+                        rate = (new - old) / (dt / 60.0) if new >= old else 0.0
+                        worker_completed[i] = new
+                        worker_rate[i] = max(0.0, rate)
+                        worker_last_update[i] = datetime.datetime.now().strftime("%H:%M:%S") if new != old else worker_last_update.get(i, "")
+                        prev_counts[i] = new
+                        prev_time[i] = now
                 except Exception:
-                    # If storage not ready yet, just keep spinner spinning
+                    # If storage not ready yet, keep spinner spinning
                     pass
-                # Check workers
-                alive = any(p.poll() is None for p in procs)
-                if not alive:
+
+                # Update worker status and liveness
+                alive_any = False
+                for i, p in enumerate(procs):
+                    rc = p.poll()
+                    if rc is None:
+                        worker_status[i] = "running"
+                        alive_any = True
+                    elif rc == 0:
+                        worker_status[i] = "done"
+                    else:
+                        worker_status[i] = f"error ({rc})"
+
+                live.update(Group(progress, _build_workers_table(), _build_errors_panel()))
+
+                if not alive_any:
                     break
                 _time.sleep(0.5)
+
+        progress.stop()
 
         # Finalize and compute exit code
         for p in procs:
@@ -779,11 +918,7 @@ def tune_baseline(
                         fig = _plot_param_importances(study)
                         out_dir = pkg_root / "data" / "optuna"
                         out_dir.mkdir(parents=True, exist_ok=True)
-                        plot_path = (
-                            Path(save_plot)
-                            if save_plot
-                            else (out_dir / "baseline_param_importances.html")
-                        )
+                        plot_path = out_dir / "baseline_param_importances.html"
                         fig.write_html(str(plot_path))
                         typer.echo(f"Param importances saved to {plot_path}")
                     except Exception as e:
