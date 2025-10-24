@@ -876,5 +876,54 @@ def shap(
     print(f"SHAP plots saved to: {out_dir}")
 
 
+@app.command()
+def baseline(
+    seasons_back: int = typer.Option(
+        5, help="Number of seasons back for training window"
+    ),
+    quiet: bool = typer.Option(False, help="Reduce training/evaluation logging"),
+):
+    """Run baseline with fixed train/test split.
+
+    Train on N seasons back up to the season before current,
+    test on the most recent full season (current - 1).
+    """
+    print("=" * 80)
+    print("BASELINE (Fixed Train/Test)")
+    print("=" * 80)
+    print()
+
+    # Resolve experiments/run_baseline.py relative to repo root
+    import importlib.util
+    from pathlib import Path
+
+    pkg_root = Path(__file__).resolve().parents[2]
+    baseline_path = pkg_root / "experiments" / "run_baseline.py"
+    if not baseline_path.exists():
+        typer.echo(
+            f"Could not find {baseline_path}. Run from a checkout with experiments present."
+        )
+        raise typer.Exit(code=1)
+
+    # Dynamically import the script as a module and run
+    spec = importlib.util.spec_from_file_location(
+        "experiments.run_baseline", str(baseline_path)
+    )
+    try:
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)  # type: ignore[attr-defined]
+    except Exception as e:
+        typer.echo(f"Failed to load baseline module: {e}")
+        raise typer.Exit(code=2)
+
+    run_func = getattr(module, "run_baseline", None)
+    if run_func is None:
+        typer.echo("run_baseline() not found in experiments/run_baseline.py")
+        raise typer.Exit(code=2)
+
+    run_func(seasons_back=seasons_back, quiet=quiet)
+
+
 if __name__ == "__main__":
     app()
