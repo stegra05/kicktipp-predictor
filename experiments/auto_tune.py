@@ -286,16 +286,6 @@ def _apply_params_to_config(params: dict[str, float]) -> None:
         cfg.model.hybrid_entropy_w_min = float(params["hybrid_entropy_w_min"])
     if "hybrid_entropy_w_max" in params:
         cfg.model.hybrid_entropy_w_max = float(params["hybrid_entropy_w_max"])
-    if "calibrator_enabled" in params:
-        cfg.model.calibrator_enabled = bool(params["calibrator_enabled"])
-    if "calibrator_method" in params:
-        cfg.model.calibrator_method = str(params["calibrator_method"]).strip().lower()
-    if "calibrator_C" in params:
-        cfg.model.calibrator_C = float(params["calibrator_C"])
-    if "prior_anchor_enabled" in params:
-        cfg.model.prior_anchor_enabled = bool(params["prior_anchor_enabled"])
-    if "prior_anchor_strength" in params:
-        cfg.model.prior_anchor_strength = float(params["prior_anchor_strength"])
     if "poisson_joint" in params:
         cfg.model.poisson_joint = str(params["poisson_joint"]).strip().lower()
     if "dixon_coles_rho" in params:

@@ -42,9 +42,7 @@ def test_hybrid_blending_fixed_weight_extremes():
     cfg.model.hybrid_poisson_weight = 1.0  # test Poisson-only first
     cfg.model.proba_temperature = 1.0
     cfg.model.draw_boost = 1.0
-    cfg.model.prior_anchor_enabled = False
     cfg.model.prior_blend_alpha = 0.0
-    cfg.model.calibrator_enabled = False
 
     predictor = MatchPredictor(cfg)
 
@@ -67,9 +65,6 @@ def test_hybrid_blending_fixed_weight_extremes():
 def test_calibration_and_anchoring_identity():
     reset_config()
     cfg = get_config()
-    cfg.model.calibrator_enabled = False
-    cfg.model.prior_anchor_enabled = False
-
     predictor = MatchPredictor(cfg)
 
     proba = np.array([[0.3, 0.4, 0.3], [0.2, 0.2, 0.6]])

@@ -2,7 +2,7 @@
 
 **Version 2.0** - A clean, transparent machine learning predictor for Germany's 3. Bundesliga football matches, optimized for maximizing prediction points in fantasy football leagues.
 
-> What's New: Dynamic season evaluation only, with a richer console report powered by `rich`. Plots are no longer produced by evaluation; artifacts are concise JSON/CSV.
+> What's New: Dynamic season evaluation only, with a richer console report powered by `rich`. Plots are no longer produced by evaluation; artifacts are concise JSON/CSV. Removed probability calibrator and prior anchoring to simplify the pipeline; metrics still report calibration quality.
 
 ## Architecture: The Predictor-Selector Model
 
@@ -246,7 +246,6 @@ python3 -m kicktipp_predictor tune \
   --workers 8 \
   --storage "sqlite:///data/study_balanced_ppg.db?timeout=120" \
   --objective ppg
-```
 ```
 
 Notes:

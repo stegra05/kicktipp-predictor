@@ -24,7 +24,6 @@ dependencies = [
   "PyYAML>=6.0.2",
   "typer>=0.9.0",
   "rich>=13.7.0",
-  "netcal>=1.3.5",
   "plotly>=5.20.0",
 ]
 
@@ -92,7 +91,7 @@ ignore = [
   "E712",   # Comparison to True/False (can be addressed incrementally)
   "B007",   # Unused loop variable (can be addressed incrementally)
   "F841",   # Unused variable (can be addressed incrementally)
-  "N815",   # Variable in class scope should not be mixedCase (allow calibrator_C)
+  "N815",   # Variable in class scope may be mixedCase for config names
   "UP007",
   "UP038",  # Use X | Y in isinstance call instead of (X, Y)
 ]

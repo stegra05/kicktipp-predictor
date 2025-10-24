@@ -60,8 +60,6 @@ def run_baseline(
 
     # Configure baseline: probability source from args, no calibration, no prior anchoring
     cfg = get_config()
-    cfg.model.calibrator_enabled = False
-    cfg.model.prior_anchor_enabled = False
     cfg.model.prob_source = str(prob_source).strip().lower()
     if cfg.model.prob_source == "hybrid":
         # Use fixed weighting to respect hybrid_poisson_weight

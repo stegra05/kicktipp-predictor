@@ -228,7 +228,6 @@ class MatchPredictor:
         self.away_goals_model: XGBRegressor | None = None
         self.feature_columns: list[str] = []
         self.label_encoder = LabelEncoder()
-        self.calibrator: LogisticRegression | None = None
         self.train_class_prior: np.ndarray | None = None
         self.console = Console()
 
@@ -354,43 +353,6 @@ class MatchPredictor:
             prior[i] = float(np.mean(y_result.values == lab))
         self.train_class_prior = prior / max(1e-15, prior.sum())
 
-        # Strict TS-CV tuning, or simple holdout fitting when tuning disabled (entropy bounds set by Optuna)
-        try:
-            if self.config.model.calibrator_enabled:
-                if bool(getattr(self.config.model, "hybrid_entropy_tune", False)):
-                    # This path is for the advanced time-series CV tuning
-                    self._tune_entropy_and_fit_calibrator_ts(training_data)
-                else:
-                    # Use the validation context from outcome model training
-                    X_val = val_ctx.get("X_val")
-                    y_val_enc = val_ctx.get("y_val_enc")
-
-                    if X_val is not None and y_val_enc is not None:
-                        # 1. Get the pre-calibrated probabilities for the validation set
-                        cls_val_probs = self._get_calibrated_probabilities(X_val)
-                        home_lambdas_val = np.maximum(
-                            self.home_goals_model.predict(X_val),
-                            self.config.model.min_lambda,
-                        )
-                        away_lambdas_val = np.maximum(
-                            self.away_goals_model.predict(X_val),
-                            self.config.model.min_lambda,
-                        )
-
-                        # 2. Derive the final blended probabilities (pre-calibration)
-                        final_val_probs, _ = self._derive_final_probabilities(
-                            cls_val_probs, home_lambdas_val, away_lambdas_val
-                        )
-
-                        # 3. Now, fit the calibrator using these probabilities and true labels
-                        self._fit_calibrator(final_val_probs, y_val_enc)
-                    else:
-                        self._log(
-                            "[Warning] Could not fit calibrator: validation context not found."
-                        )
-
-        except Exception as e:  # pragma: no cover - optional
-            self._log(f"[Calibration] Skipped due to error: {e}")
 
         self._log("Training completed.")
 
@@ -769,157 +731,7 @@ class MatchPredictor:
         # Temporarily disabled: return input probabilities unchanged
         return np.array(probs, copy=True)
 
-    def _fit_calibrator(self, probs: np.ndarray, y_enc: np.ndarray) -> None:
-        method = getattr(self.config.model, "calibrator_method", "dirichlet")
-        if method == "multinomial_logistic":
-            X_cal = np.log(np.clip(probs, 1e-15, 1.0))
-            C = float(getattr(self.config.model, "calibrator_C", 1.0))
-            lr = LogisticRegression(solver="lbfgs", C=C, max_iter=1000)
-            lr.fit(X_cal, y_enc)
-            self.calibrator = lr
-        elif method == "dirichlet":
-            try:
-                from netcal.scaling import DirichletCalibrator  # type: ignore
 
-                C = float(getattr(self.config.model, "calibrator_C", 1.0))
-                self.calibrator = DirichletCalibrator(reg=C)
-                self.calibrator.fit(probs, y_enc)
-            except Exception:
-                # Fallback to multinomial logistic if netcal is unavailable
-                X_cal = np.log(np.clip(probs, 1e-15, 1.0))
-                C = float(getattr(self.config.model, "calibrator_C", 1.0))
-                lr = LogisticRegression(solver="lbfgs", C=C, max_iter=1000)
-                lr.fit(X_cal, y_enc)
-                self.calibrator = lr
-        else:
-            # Unsupported method
-            self.calibrator = None
-
-    def _tune_entropy_and_fit_calibrator_ts(self, training_data: pd.DataFrame) -> None:
-        """Time-series CV to tune entropy bounds and fit calibrator on OOF blends."""
-        df = training_data.copy()
-        if len(df) < max(80, self.config.model.min_training_matches):
-            return
-        X_all = df[self.feature_columns].fillna(0)
-        y_labels = df["result"].astype(str).values
-        y_enc = self.label_encoder.transform(y_labels)
-        dates = pd.to_datetime(df["date"]) if "date" in df.columns else None
-
-        # Build expanding folds
-        n_splits = max(2, int(getattr(self.config.model, "calibrator_cv_folds", 3)))
-        order = (
-            np.argsort(dates.values)
-            if dates is not None and not dates.isnull().all()
-            else np.arange(len(df))
-        )
-        fold_bounds = np.linspace(0, len(order), n_splits + 1, dtype=int)
-        folds: list[tuple[np.ndarray, np.ndarray]] = []
-        for k in range(1, n_splits + 1):
-            tr = order[: fold_bounds[k - 1]]
-            va = order[fold_bounds[k - 1] : fold_bounds[k]]
-            if len(tr) == 0 or len(va) == 0:
-                continue
-            folds.append((tr, va))
-        if not folds:
-            return
-
-        # If tuning disabled, just use current bounds
-        do_tune = bool(getattr(self.config.model, "hybrid_entropy_tune", True))
-        mins = getattr(
-            self.config.model, "hybrid_entropy_w_min_candidates", [0.1, 0.2, 0.3]
-        )
-        maxs = getattr(
-            self.config.model, "hybrid_entropy_w_max_candidates", [0.8, 0.9, 1.0]
-        )
-        pairs = [(float(a), float(b)) for a in mins for b in maxs]
-        # Safeguard: enforce w_min < w_max and valid [0,1]
-        candidates = (
-            [(wm, wx) for (wm, wx) in pairs if 0.0 <= wm < wx <= 1.0]
-            if do_tune
-            else [
-                (
-                    float(self.config.model.hybrid_entropy_w_min),
-                    float(self.config.model.hybrid_entropy_w_max),
-                )
-            ]
-        )
-
-        best_ll = float("inf")
-        best_pair = (
-            float(self.config.model.hybrid_entropy_w_min),
-            float(self.config.model.hybrid_entropy_w_max),
-        )
-        best_oof = None
-
-        for w_min, w_max in candidates:
-            oof = np.full((len(df), 3), np.nan, dtype=float)
-            for tr, va in folds:
-                X_tr, X_va = X_all.iloc[tr], X_all.iloc[va]
-                y_tr = y_enc[tr]
-                # compute time-decay weights on train fold
-                sw = self._compute_time_decay_weights(df.iloc[tr])
-                # outcome model
-                cls = XGBClassifier(**self.config.model.outcome_params)
-                balanced = compute_sample_weight("balanced", y=y_tr)
-                if "D" in self.label_encoder.classes_:
-                    draw_label = np.where(self.label_encoder.classes_ == "D")[0][0]
-                    boost = np.where(
-                        y_tr == draw_label, float(self.config.model.draw_boost), 1.0
-                    )
-                else:
-                    boost = np.ones_like(balanced)
-                cls_sw = balanced * sw * boost
-                cls.fit(X_tr, y_tr, sample_weight=cls_sw, verbose=False)
-                p_cls = cls.predict_proba(X_va)
-                # temperature & prior
-                temp = float(self.config.model.proba_temperature)
-                if temp != 1.0:
-                    logits = np.log(np.clip(p_cls, 1e-15, 1.0)) / max(1e-6, temp)
-                    p_cls = np.exp(logits)
-                    p_cls /= p_cls.sum(axis=1, keepdims=True)
-                alpha = float(self.config.model.prior_blend_alpha)
-                if alpha > 0.0 and self.config.model.prob_source in (
-                    "classifier",
-                    "hybrid",
-                ):
-                    prior = np.full(3, 1.0 / 3.0)
-                    p_cls = (1.0 - alpha) * p_cls + alpha * prior
-                    p_cls /= p_cls.sum(axis=1, keepdims=True)
-                # goals models
-                home_reg = XGBRegressor(**self.config.model.goals_params)
-                away_reg = XGBRegressor(**self.config.model.goals_params)
-                home_reg.fit(X_tr, df.iloc[tr]["home_score"], sample_weight=sw)
-                away_reg.fit(X_tr, df.iloc[tr]["away_score"], sample_weight=sw)
-                lam_h = np.maximum(home_reg.predict(X_va), self.config.model.min_lambda)
-                lam_a = np.maximum(away_reg.predict(X_va), self.config.model.min_lambda)
-                p_pois = self._calculate_poisson_outcome_probs(lam_h, lam_a)
-                # candidate entropy mapping
-                h = -np.sum(
-                    np.clip(p_cls, 1e-15, 1.0) * np.log(np.clip(p_cls, 1e-15, 1.0)),
-                    axis=1,
-                ) / np.log(3.0)
-                w = np.clip(w_min + (w_max - w_min) * np.clip(h, 0.0, 1.0), 0.0, 1.0)[
-                    :, None
-                ]
-                blend = (1.0 - w) * p_cls + w * p_pois
-                blend = np.clip(blend, 1e-15, 1.0)
-                blend /= blend.sum(axis=1, keepdims=True)
-                oof[va] = blend
-            mask = ~np.isnan(oof).any(axis=1)
-            if not np.any(mask):
-                continue
-            ll = log_loss_multiclass(
-                df.iloc[mask]["result"].astype(str).tolist(), oof[mask]
-            )
-            if ll < best_ll:
-                best_ll = ll
-                best_pair = (w_min, w_max)
-                best_oof = oof.copy()
-
-        self.config.model.hybrid_entropy_w_min = float(best_pair[0])
-        self.config.model.hybrid_entropy_w_max = float(best_pair[1])
-        if best_oof is not None:
-            self._fit_calibrator(best_oof, y_enc)
 
     def _format_predictions(
         self,
@@ -1008,14 +820,6 @@ class MatchPredictor:
             "train_class_prior": self.train_class_prior,
         }
         joblib.dump(metadata, self.config.paths.models_dir / "metadata.joblib")
-        # Save calibrator if available
-        try:
-            if self.calibrator is not None:
-                joblib.dump(
-                    self.calibrator, self.config.paths.models_dir / "calibrator.joblib"
-                )
-        except Exception:
-            pass
         self._log("Models saved successfully.")
 
     def load_models(self):
@@ -1034,13 +838,6 @@ class MatchPredictor:
         self.feature_columns = metadata["feature_columns"]
         self.label_encoder = metadata["label_encoder"]
         self.train_class_prior = metadata.get("train_class_prior")
-        # Load calibrator if present
-        try:
-            cal_path = self.config.paths.models_dir / "calibrator.joblib"
-            if cal_path.exists():
-                self.calibrator = joblib.load(cal_path)
-        except Exception:
-            self.calibrator = None
         self._log("Models loaded successfully.")
 
     def evaluate(self, test_df: pd.DataFrame) -> dict:

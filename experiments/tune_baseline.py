@@ -170,8 +170,6 @@ def _apply_params_to_config(params: dict) -> None:
     cfg = get_config()
     # Baseline forcing
     cfg.model.prob_source = "classifier"
-    cfg.model.calibrator_enabled = False
-    cfg.model.prior_anchor_enabled = False
 
     # Core levers
     if "draw_boost" in params:

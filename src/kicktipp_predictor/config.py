@@ -151,24 +151,6 @@ class ModelConfig:
 
     selected_features_file: str = "kept_features.yaml"
 
-    # Calibration of final blended probabilities
-    calibrator_enabled: bool = False
-    calibrator_method: str = (
-        "dirichlet"  # or 'multinomial_logistic' fallback if external lib unavailable
-    )
-    calibrator_C: float = 1.0
-    calibrator_cv_folds: int = 3
-    # Post-calibration class-prior anchoring
-    prior_anchor_enabled: bool = False
-    prior_anchor_strength: float = 0.15
-    # Entropy-based hybrid tuning candidates
-    hybrid_entropy_tune: bool = False
-    hybrid_entropy_w_min_candidates: list[float] = field(
-        default_factory=lambda: [0.0, 0.1, 0.2, 0.3]
-    )
-    hybrid_entropy_w_max_candidates: list[float] = field(
-        default_factory=lambda: [0.7, 0.8, 0.9, 1.0]
-    )
 
     @property
     def goals_params(self) -> dict:
@@ -371,51 +353,6 @@ class Config:
                             params["goals_min_child_weight"]
                         )
 
-                    # Calibration-related knobs
-                    if "calibrator_enabled" in params:
-                        config.model.calibrator_enabled = bool(
-                            params["calibrator_enabled"]
-                        )
-                    if "calibrator_method" in params:
-                        config.model.calibrator_method = (
-                            str(params["calibrator_method"]).strip().lower()
-                        )
-                    if "calibrator_C" in params:
-                        config.model.calibrator_C = float(params["calibrator_C"])
-                    if "calibrator_cv_folds" in params:
-                        config.model.calibrator_cv_folds = int(
-                            params["calibrator_cv_folds"]
-                        )
-                    if "prior_anchor_enabled" in params:
-                        config.model.prior_anchor_enabled = bool(
-                            params["prior_anchor_enabled"]
-                        )
-                    if "prior_anchor_strength" in params:
-                        config.model.prior_anchor_strength = float(
-                            params["prior_anchor_strength"]
-                        )
-
-                    # Optional: hybrid entropy tuning controls
-                    if "hybrid_entropy_tune" in params:
-                        config.model.hybrid_entropy_tune = bool(
-                            params["hybrid_entropy_tune"]
-                        )
-                    if "hybrid_entropy_w_min_candidates" in params:
-                        try:
-                            config.model.hybrid_entropy_w_min_candidates = [
-                                float(x)
-                                for x in params["hybrid_entropy_w_min_candidates"]
-                            ]
-                        except Exception:
-                            pass
-                    if "hybrid_entropy_w_max_candidates" in params:
-                        try:
-                            config.model.hybrid_entropy_w_max_candidates = [
-                                float(x)
-                                for x in params["hybrid_entropy_w_max_candidates"]
-                            ]
-                        except Exception:
-                            pass
 
             except Exception:
                 pass
