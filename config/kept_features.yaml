@@ -35,24 +35,46 @@
 # HOME TEAM FORM
 - home_form_points_weighted_by_opponent_rank
 - home_form_points_per_game
+# Multi-window points (unweighted and weighted)
+- home_form_points_L3
+- home_form_points_L5
+- home_form_points_L10
+- home_wform_points_L3
+- home_wform_points_L5
+- home_wform_points_L10
 - home_form_wins
 - home_form_draws
 - home_form_losses
 - home_form_goals_scored
 - home_form_goals_conceded
 - home_form_goal_diff
+# Multi-window goal diff
+- home_form_goal_diff_L3
+- home_form_goal_diff_L5
+- home_form_goal_diff_L10
 - home_form_avg_goals_scored
 - home_form_avg_goals_conceded
 
 # AWAY TEAM FORM
 - away_form_points_weighted_by_opponent_rank
 - away_form_points_per_game
+# Multi-window points (unweighted and weighted)
+- away_form_points_L3
+- away_form_points_L5
+- away_form_points_L10
+- away_wform_points_L3
+- away_wform_points_L5
+- away_wform_points_L10
 - away_form_wins
 - away_form_draws
 - away_form_losses
 - away_form_goals_scored
 - away_form_goals_conceded
 - away_form_goal_diff
+# Multi-window goal diff
+- away_form_goal_diff_L3
+- away_form_goal_diff_L5
+- away_form_goal_diff_L10
 - away_form_avg_goals_scored
 - away_form_avg_goals_conceded
 

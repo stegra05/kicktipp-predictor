@@ -280,12 +280,23 @@ class DataLoader:
             "avg_points",
             "form_points_weighted_by_opponent_rank",
             "form_points_per_game",
+            # Multi-window points (unweighted and weighted)
+            "form_points_L3",
+            "form_points_L5",
+            "form_points_L10",
+            "wform_points_L3",
+            "wform_points_L5",
+            "wform_points_L10",
             "form_wins",
             "form_draws",
             "form_losses",
             "form_goals_scored",
             "form_goals_conceded",
             "form_goal_diff",
+            # Multi-window goal diff
+            "form_goal_diff_L3",
+            "form_goal_diff_L5",
+            "form_goal_diff_L10",
             "form_avg_goals_scored",
             "form_avg_goals_conceded",
             "momentum_points",
@@ -656,12 +667,23 @@ class DataLoader:
             "avg_points",
             "form_points_weighted_by_opponent_rank",
             "form_points_per_game",
+            # Multi-window points (unweighted and weighted)
+            "form_points_L3",
+            "form_points_L5",
+            "form_points_L10",
+            "wform_points_L3",
+            "wform_points_L5",
+            "wform_points_L10",
             "form_wins",
             "form_draws",
             "form_losses",
             "form_goals_scored",
             "form_goals_conceded",
             "form_goal_diff",
+            # Multi-window goal diff
+            "form_goal_diff_L3",
+            "form_goal_diff_L5",
+            "form_goal_diff_L10",
             "form_avg_goals_scored",
             "form_avg_goals_conceded",
             "momentum_points",
@@ -1193,6 +1215,33 @@ class DataLoader:
         long_df["form_goal_diff"] = gf_roll - ga_roll
         long_df["form_avg_goals_scored"] = gf_roll / np.minimum(N, grp.cumcount() + 1)
         long_df["form_avg_goals_conceded"] = ga_roll / np.minimum(N, grp.cumcount() + 1)
+
+        # Multi-window form metrics (L3/L5/L10)
+        for w in (3, 5, 10):
+            # Unweighted points over last w matches
+            long_df[f"form_points_L{w}"] = (
+                pts_prior.rolling(window=w, min_periods=1)
+                .sum()
+                .reset_index(level=0, drop=True)
+            )
+            # Weighted points over last w matches
+            long_df[f"wform_points_L{w}"] = (
+                weighted_pts_prior.rolling(window=w, min_periods=1)
+                .sum()
+                .reset_index(level=0, drop=True)
+            )
+            # Goal diff over last w matches
+            gf_w = (
+                gf_prior.rolling(window=w, min_periods=1)
+                .sum()
+                .reset_index(level=0, drop=True)
+            )
+            ga_w = (
+                ga_prior.rolling(window=w, min_periods=1)
+                .sum()
+                .reset_index(level=0, drop=True)
+            )
+            long_df[f"form_goal_diff_L{w}"] = gf_w - ga_w
 
         # Momentum features via EWMA on prior rows
         try:
