@@ -11,6 +11,7 @@ architecture to forecast match outcomes and scorelines. The process involves:
     predicted outcome.
 """
 
+# === Imports ===
 import time
 
 import joblib
@@ -25,101 +26,27 @@ from xgboost import XGBClassifier, XGBRegressor
 
 # Optional YAML import for feature selection file
 try:
-    import yaml 
+    import yaml
 except Exception:
     yaml = None
 
 from .config import get_config
+from .scoring import compute_ep_scoreline
 
-
-
-
-# --- New: Expected Points scoreline selection (top-level for parallelism) ---
+# === Scoreline Selection ===
 
 
 def compute_ep_scoreline(
     home_lambda: float,
     away_lambda: float,
-    max_goals: int
+    max_goals: int,
 ) -> tuple[int, int]:
-    """Select the scoreline maximizing expected Kicktipp points under a Poisson grid.
-
-    Builds a joint score grid up to `max_goals`, optionally applies Dixon–Coles
-    low-score adjustments and a diagonal draw bump, then evaluates expected points
-    for every candidate predicted scoreline and returns the argmax.
-    """
-    max_goals = int(max(0, max_goals))
-    G = max_goals
-    lam_h = float(home_lambda)
-    lam_a = float(away_lambda)
-
-    x = np.arange(G + 1)
-    ph = poisson.pmf(x, lam_h)
-    pa = poisson.pmf(x, lam_a)
-    grid = np.outer(ph, pa)
-
-    total = float(np.sum(grid))
-    if total <= 0.0:
-        return (1, 1)
-    grid = grid / total
-
-    EP = np.zeros_like(grid, dtype=float)
-    for ph_pred in range(G + 1):
-        for pa_pred in range(G + 1):
-            exp_pts = 0.0
-            for h in range(G + 1):
-                for a in range(G + 1):
-                    if ph_pred == h and pa_pred == a:
-                        pts = 4
-                    elif (ph_pred - pa_pred) == (h - a):
-                        pts = 3
-                    elif (
-                        (ph_pred > pa_pred and h > a)
-                        or (ph_pred == pa_pred and h == a)
-                        or (ph_pred < pa_pred and h < a)
-                    ):
-                        pts = 2
-                    else:
-                        pts = 0
-                    exp_pts += grid[h, a] * pts
-            EP[ph_pred, pa_pred] = exp_pts
-
-    mx = float(np.max(EP))
-    cand = np.argwhere(EP == mx)
-    if len(cand) == 1:
-        return int(cand[0][0]), int(cand[0][1])
-
-    # Tie-break by grid probability, then by common scorelines
-    best = (int(cand[0][0]), int(cand[0][1]))
-    best_p = float(grid[best[0], best[1]])
-    for c in cand[1:]:
-        p = float(grid[int(c[0]), int(c[1])])
-        if p > best_p + 1e-12:
-            best = (int(c[0]), int(c[1]))
-            best_p = p
-
-    common_scorelines = [
-        (2, 1),
-        (1, 0),
-        (1, 1),
-        (0, 1),
-        (2, 0),
-        (0, 0),
-        (2, 2),
-        (3, 1),
-        (1, 2),
-        (3, 0),
-        (0, 3),
-        (3, 2),
-        (2, 3),
-    ]
-    candidates_set = {(int(c[0]), int(c[1])) for c in cand}
-    for h, a in common_scorelines:
-        if (h, a) in candidates_set and h <= G and a <= G:
-            return h, a
-    return best
+    """Delegate to scoring.compute_ep_scoreline for EP-max scoreline selection."""
+    from .scoring import compute_ep_scoreline as _compute
+    return _compute(home_lambda, away_lambda, max_goals)
 
 
+# === MatchPredictor ===
 class MatchPredictor:
     """A two-step predictor for match outcomes and scorelines.
 
@@ -157,6 +84,30 @@ class MatchPredictor:
     def _log(self, *args, **kwargs) -> None:
         if not self.quiet:
             self.console.log(*args, **kwargs)
+
+    def _fit_xgb_regressor(
+        self,
+        model: XGBRegressor,
+        X_tr: pd.DataFrame,
+        y_tr: pd.Series,
+        X_val: pd.DataFrame,
+        y_val: pd.Series,
+        sample_weights: np.ndarray | None = None,
+    ) -> None:
+        """Fit a single XGBRegressor with optional sample weights.
+
+        Args:
+            model: The regressor instance to fit.
+            X_tr: Training features.
+            y_tr: Training targets.
+            X_val: Validation features.
+            y_val: Validation targets.
+            sample_weights: Optional per-sample weights.
+        """
+        fit_params = {"eval_set": [(X_val, y_val)], "verbose": False}
+        if sample_weights is not None:
+            fit_params["sample_weight"] = sample_weights
+        model.fit(X_tr, y_tr, **fit_params)
 
     def _load_selected_features(self) -> list[str] | None:
         """Load selected feature names from YAML (config/selected_features_file)."""
@@ -238,11 +189,14 @@ class MatchPredictor:
 
         if "tanh_tamed_elo" not in self.feature_columns:
             self._log(
-                "WARNING: 'tanh_tamed_elo' not found in feature columns; verify feature engineering and YAML selection."
+                "WARNING: 'tanh_tamed_elo' not found in feature columns; "
+                "verify feature engineering and YAML selection."
             )
         if len(self.feature_columns) < 10:
             self._log(
-                f"WARNING: Very few features selected ({len(self.feature_columns)}). Check kept_features.yaml wiring and data completeness."
+                f"WARNING: Very few features selected "
+                f"({len(self.feature_columns)}). "
+                "Check kept_features.yaml wiring and data completeness."
             )
 
         X = training_data[self.feature_columns].fillna(0)
@@ -255,7 +209,8 @@ class MatchPredictor:
 
         counts = y_result.value_counts()
         self._log(
-            f"Training on {len(training_data)} matches with {len(self.feature_columns)} features."
+            f"Training on {len(training_data)} matches with "
+            f"{len(self.feature_columns)} features."
         )
 
         dates = (
@@ -275,6 +230,7 @@ class MatchPredictor:
 
         self._log("Training completed.")
 
+    # --- Training Utilities ---
     def _compute_time_decay_weights(self, df: pd.DataFrame) -> np.ndarray:
         """Calculates time-decay weights to prioritize more recent matches."""
         if not self.config.model.use_time_decay or "date" not in df.columns:
@@ -298,7 +254,12 @@ class MatchPredictor:
         start = time.perf_counter()
 
         # Hardcode low-impact params to defaults for simplicity
-        goals_params = {**self.config.model.goals_params, "reg_alpha": 0.0, "gamma": 0.0, "colsample_bytree": 0.8}
+        goals_params = {
+            **self.config.model.goals_params,
+            "reg_alpha": 0.0,
+            "gamma": 0.0,
+            "colsample_bytree": 0.8,
+        }
         self.home_goals_model = XGBRegressor(**goals_params)
         self.away_goals_model = XGBRegressor(**goals_params)
 
@@ -308,15 +269,15 @@ class MatchPredictor:
         ya_tr, ya_val = y_away[train_mask], y_away[~train_mask]
         sw_tr = sample_weights[train_mask] if sample_weights is not None else None
 
-        fit_params = {"eval_set": [(X_val, yh_val)], "verbose": False}
-        if sw_tr is not None:
-            fit_params["sample_weight"] = sw_tr
-        self.home_goals_model.fit(X_tr, yh_tr, **fit_params)
+        self._fit_xgb_regressor(
+            self.home_goals_model, X_tr, yh_tr, X_val, yh_val, sw_tr
+        )
+        self._fit_xgb_regressor(
+            self.away_goals_model, X_tr, ya_tr, X_val, ya_val, sw_tr
+        )
 
-        fit_params["eval_set"] = [(X_val, ya_val)]
-        self.away_goals_model.fit(X_tr, ya_tr, **fit_params)
-
-        self._log(f"Goal regressors trained in {time.perf_counter() - start:.2f}s")
+        elapsed = time.perf_counter() - start
+        self._log(f"Goal regressors trained in {elapsed:.2f}s")
 
     def _get_train_validation_split(
         self, X: pd.DataFrame, dates: pd.Series | None
@@ -361,7 +322,12 @@ class MatchPredictor:
         sample_weights = balanced_weights * tw_train * boost_weights
 
         # Hardcode low-impact params to defaults for simplicity
-        outcome_params = {**self.config.model.outcome_params, "reg_alpha": 0.0, "gamma": 0.0, "colsample_bytree": 0.8}
+        outcome_params = {
+            **self.config.model.outcome_params,
+            "reg_alpha": 0.0,
+            "gamma": 0.0,
+            "colsample_bytree": 0.8,
+        }
         self.outcome_model = XGBClassifier(**outcome_params)
         self.outcome_model.fit(
             X_train, y_train, sample_weight=sample_weights, verbose=False
@@ -388,8 +354,15 @@ class MatchPredictor:
         Returns:
             A list of prediction dictionaries.
         """
-        if not all([self.outcome_model, self.home_goals_model, self.away_goals_model]):
-            raise ValueError("Models must be trained or loaded before prediction.")
+        if not all([
+            self.outcome_model,
+            self.home_goals_model,
+            self.away_goals_model,
+        ]):
+            raise ValueError(
+                "Models must be trained via train() or loaded via "
+                "load_models() before prediction."
+            )
 
         X = self._prepare_features(features_df)
         classifier_probs = self.outcome_model.predict_proba(X)
@@ -405,7 +378,8 @@ class MatchPredictor:
         )
 
         # Base outcomes: argmax over final probabilities
-        prob_map = {label: i for i, label in enumerate(self.label_encoder.classes_)}
+        classes = self.label_encoder.classes_
+        prob_map = {label: i for i, label in enumerate(classes)}
         outcomes_idx = np.argmax(final_probs, axis=1)
 
         outcomes = self.label_encoder.inverse_transform(outcomes_idx)
@@ -425,6 +399,7 @@ class MatchPredictor:
             diag,
         )
 
+    # --- Prediction Assembly ---
     def _prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Aligns DataFrame columns with the model's feature schema."""
         for col in self.feature_columns:
@@ -443,6 +418,7 @@ class MatchPredictor:
             for i in range(n)
         ]
 
+    # --- Probability Utilities ---
     def _derive_final_probabilities(self, classifier_probs, home_lambdas, away_lambdas):
         """Derives final outcome probabilities using hybrid-only blending.
 
@@ -483,7 +459,9 @@ class MatchPredictor:
         for i in range(n):
             lam_h = float(home_lambdas[i])
             lam_a = float(away_lambdas[i])
-            G = int(min(max_cap, int(np.ceil(max(lam_h, lam_a) + 4))))
+            G_cap = int(max_cap)
+            G_dynamic = int(np.ceil(max(lam_h, lam_a) + 4))
+            G = int(min(G_cap, G_dynamic))
             x = np.arange(G + 1)
             ph = poisson.pmf(x, lam_h)
             pa = poisson.pmf(x, lam_a)
@@ -516,7 +494,8 @@ class MatchPredictor:
     ):
         """Assembles the final list of prediction dictionaries."""
         predictions = []
-        prob_map = {label: i for i, label in enumerate(self.label_encoder.classes_)}
+        classes = self.label_encoder.classes_
+        prob_map = {label: i for i, label in enumerate(classes)}
 
         for i in range(len(df)):
             probs_sorted = sorted(final_probs[i], reverse=True)
@@ -572,6 +551,7 @@ class MatchPredictor:
             predictions.append(pred)
         return predictions
 
+    # --- Persistence ---
     def save_models(self):
         """Saves the trained models and metadata to disk."""
         if not all([self.outcome_model, self.home_goals_model, self.away_goals_model]):
