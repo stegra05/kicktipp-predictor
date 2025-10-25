@@ -2,7 +2,7 @@
 
 **Version 2.0** - A clean, transparent machine learning predictor for Germany's 3. Bundesliga football matches, optimized for maximizing prediction points in fantasy football leagues.
 
-> What's New: Dynamic season evaluation only, with a richer console report powered by `rich`. Plots are no longer produced by evaluation; artifacts are concise JSON/CSV. Removed probability calibrator and prior anchoring to simplify the pipeline; metrics still report calibration quality.
+> What's New: Dynamic season evaluation only, with a richer console report powered by `rich`. Plots are no longer produced by evaluation; artifacts are concise JSON/CSV. 
 
 ## Architecture: The Predictor-Selector Model
 
@@ -63,12 +63,6 @@ kicktipp_predictor predict --days 7 --workers 8
 # Predict specific matchday
 kicktipp_predictor predict --matchday 15
 
-# Evaluate model performance (default probability source)
-kicktipp_predictor evaluate
-
-# Evaluate with Poisson-derived probabilities and detailed plots
-kicktipp_predictor evaluate --prob-source poisson --detailed
-
 # Run web UI (defaults to 127.0.0.1:8000)
 kicktipp_predictor web --host 0.0.0.0 --port 8000
 ```
@@ -100,7 +94,7 @@ All functionality is available through the CLI:
 
 - **`train [--seasons-back N]`**: Train models on historical data (default: 3 seasons).
 - **`predict [--days N | --matchday N]`**: Generate predictions for upcoming matches.
-- **`evaluate [--season] [--dynamic] [--retrain-every N]`**: Evaluate on a test split or across the current season; with `--dynamic`, retrain every N matchdays (default: 1).
+- **`evaluate [--retrain-every N]`**: Evaluate on a test split or across the current season; with `--dynamic`, retrain every N matchdays (default: 1).
 - **`web [--host HOST] [--port PORT]`**: Run the Flask web UI.
 - **`tune [options]`**: Hyperparameter tuning (wrapper around `experiments/auto_tune.py`).
 - **`shap`**: Run SHAP analysis to understand feature importance.
@@ -201,7 +195,7 @@ The model's behavior is controlled by parameters in `config/best_params.yaml`. T
 - **`prob_source`**: Outcome probability source: `classifier` | `poisson` | `hybrid` (default: `hybrid`)
 - **`hybrid_poisson_weight`**: When `prob_source=hybrid`, fixed weight of Poisson probabilities in [0,1] (default: 0.0525).
 - **`proba_temperature`**: Temperature scaling for classifier probabilities (default: 1.0)
-- **`prior_blend_alpha`**: Empirical-prior blending (applies when `prob_source` is `classifier` or `hybrid`)
+
 - **`draw_boost`**: Class weight multiplier for draws during classifier training
 - **`use_ep_selection`**: Enable EP-maximizing scoreline selection (default: True)
 - **`poisson_draw_rho`**: Optional diagonal bump: multiply draw cells by `exp(rho)` (default: 0.0)
@@ -220,54 +214,22 @@ These parameters can be tuned using the `tune` command (see Advanced Usage below
 
 ## Advanced Usage
 
-### Hyperparameter Tuning (Optuna, recommended objective)
-Use the CLI `tune` command to optimize hyperparameters via time-series CV using Optuna. Starting with v2.1, the outcome classifier is trained with class-balanced weights by default, combined with time-decay and an optional `draw_boost`. We recommend optimizing for weighted Kicktipp points (PPG). The tuner writes per-objective YAMLs (e.g., `config/best_params_logloss.yaml`) and copies the winner (by weighted PPG) to `config/best_params.yaml`. The search space includes `prob_source`, `hybrid_poisson_weight`, and `proba_grid_max_goals`.
+### Hyperparameter Tuning (Optuna)
+Use the CLI `tune` command to optimize hyperparameters via time-series CV using Optuna.
 
 Serial example (no storage required):
 ```bash
-python3 -m kicktipp_predictor tune --n-trials 200 --n-splits 3 --workers 1 --objective ppg
+kicktipp_predictor tune --n-trials 200 --n-splits 3 --workers 1
 ```
 
 Parallel example (database-coordinated workers):
 ```bash
-python3 -m kicktipp_predictor tune \
+kicktipp_predictor tune \
   --n-trials 200 \
   --n-splits 3 \
   --workers 8 \
-  --storage "sqlite:///data/kicktipp_study.db?timeout=60" \
-  --objective ppg
-
-### Recommended study run
-After enabling the balanced trainer, run a longer PPG-focused study with modest parallelism to reduce DB lock contention:
-```bash
-python3 -m kicktipp_predictor tune \
-  --n-trials 500 \
-  --n-splits 3 \
-  --workers 8 \
-  --storage "sqlite:///data/study_balanced_ppg.db?timeout=120" \
-  --objective ppg
+  --storage "sqlite:///data/kicktipp_study.db?timeout=60"
 ```
-
-Notes:
-- `--n-trials` is the total trial budget across all workers (evenly split).
-- `--workers` controls process-level parallelism. Each worker is single-threaded internally to avoid nested parallelism.
-- When `--workers > 1`, a storage URL is required (SQLite with `?timeout=60` recommended, or a remote RDBMS). In compare mode with SQLite, the CLI automatically derives objective-specific files (e.g., `..._logloss.db`).
-
-Common options:
-- `--n-trials <number>`: Total Optuna trials across all workers.
-- `--n-splits <number>`: Time-series CV folds.
-- `--workers <number>`: Number of worker processes (default: 1).
-- `--storage <url>`: Optuna storage URL (required if `--workers > 1`).
-- `--objective <name>`: ppg|ppg_unweighted|logloss|brier|balanced_accuracy|accuracy|rps
-- `--direction <dir>`: auto|maximize|minimize (auto resolves from objective)
-- `--compare <list>`: comma-separated objectives to run and compare (ignores `--objective`)
-
-Advanced users can still call the underlying worker script directly (single-process worker):
-```bash
-python experiments/auto_tune.py --n-trials 200 --n-splits 3 --storage "sqlite:////absolute/path/kicktipp_study.db?timeout=60"
-```
-
-The tuner outputs the best-performing parameters to `config/best_params.yaml`, which are automatically used by `MatchPredictor`.
 
 ### Feature Ablation Study
 To find the optimal balance between model complexity and performance, run the feature ablation study. This script systematically tests different feature subsets by removing categories one by one and analyzing the impact.

@@ -266,14 +266,7 @@ class DataLoader:
         self._current_table = self._calculate_table(matches)
         long_df = self._compute_team_history_features(long_df)
 
-        # Precompute EWMA recency features once across the dataset and merge
-        try:
-            ewma_long_df = self._compute_ewma_recency_features(matches, span=5)
-        except Exception:
-            ewma_long_df = None
-
         # Assemble match-level features by merging home/away history rows for the same match_id
-        # Select team history columns to attach
         hist_cols = [
             "avg_goals_for",
             "avg_goals_against",
@@ -299,17 +292,6 @@ class DataLoader:
             "form_goal_diff_L10",
             "form_avg_goals_scored",
             "form_avg_goals_conceded",
-            "momentum_points",
-            "momentum_goals",
-            "momentum_conceded",
-            "momentum_score",
-            # venue-specific history metrics
-            "points_pg_at_home",
-            "goals_pg_at_home",
-            "goals_conceded_pg_at_home",
-            "points_pg_away",
-            "goals_pg_away",
-            "goals_conceded_pg_away",
             # matches played prior (leakage-safe count)
             "matches_played_prior",
         ]
@@ -344,55 +326,6 @@ class DataLoader:
                 columns={"away_matches_played_prior": "away_matches_played"},
                 inplace=True,
             )
-        # Drop merge helper columns
-        if ewma_long_df is not None and not ewma_long_df.empty:
-            # Home EWMA
-            home_ewm = ewma_long_df.rename(
-                columns={"team": "home_team", "match_id": "home_match_id"}
-            )
-            features_df = features_df.merge(
-                home_ewm.add_prefix("home_"),
-                left_on=["match_id", "home_team"],
-                right_on=["home_home_match_id", "home_home_team"],
-                how="left",
-            )
-            # Away EWMA
-            away_ewm = ewma_long_df.rename(
-                columns={"team": "away_team", "match_id": "away_match_id"}
-            )
-            features_df = features_df.merge(
-                away_ewm.add_prefix("away_"),
-                left_on=["match_id", "away_team"],
-                right_on=["away_away_match_id", "away_away_team"],
-                how="left",
-            )
-            # Clean helper columns
-            for c in [
-                "home_home_match_id",
-                "home_home_team",
-                "away_away_match_id",
-                "away_away_team",
-            ]:
-                if c in features_df.columns:
-                    features_df.drop(columns=[c], inplace=True)
-
-            # Rename ewm columns to expected names (home_/away_ prefix placement)
-            ewm_map = {
-                "goals_for_ewm5": "goals_for_ewm5",
-                "goals_against_ewm5": "goals_against_ewm5",
-                "goal_diff_ewm5": "goal_diff_ewm5",
-                "points_ewm5": "points_ewm5",
-            }
-            for base_col in ewm_map.values():
-                hcol = f"home_{base_col}"
-                acol = f"away_{base_col}"
-                # Already prefixed by add_prefix; columns exist as home_<col>, away_<col>
-                # Ensure they exist
-                if hcol not in features_df.columns:
-                    features_df[hcol] = 0.0
-                if acol not in features_df.columns:
-                    features_df[acol] = 0.0
-
         # Compute simple derived differences
         features_df["abs_weighted_form_points_diff"] = (
             features_df.get("home_form_points_weighted_by_opponent_rank", 0)
@@ -434,65 +367,7 @@ class DataLoader:
                 - features_df["away_goals_conceded_pg_away"]
             )
 
-        # Interaction ratios (safe divisions)
-        eps = 1e-6
 
-        def _safe_div(a: pd.Series, b: pd.Series) -> pd.Series:
-            return a.astype(float) / (b.astype(float) + eps)
-
-        if all(
-            c in features_df.columns
-            for c in ["home_form_avg_goals_scored", "away_form_avg_goals_conceded"]
-        ):
-            features_df["attack_defense_form_ratio_home"] = _safe_div(
-                features_df["home_form_avg_goals_scored"],
-                features_df["away_form_avg_goals_conceded"],
-            )
-        if all(
-            c in features_df.columns
-            for c in ["away_form_avg_goals_scored", "home_form_avg_goals_conceded"]
-        ):
-            features_df["attack_defense_form_ratio_away"] = _safe_div(
-                features_df["away_form_avg_goals_scored"],
-                features_df["home_form_avg_goals_conceded"],
-            )
-        if all(
-            c in features_df.columns
-            for c in ["home_avg_goals_for", "away_avg_goals_against"]
-        ):
-            features_df["attack_defense_long_ratio_home"] = _safe_div(
-                features_df["home_avg_goals_for"], features_df["away_avg_goals_against"]
-            )
-        if all(
-            c in features_df.columns
-            for c in ["away_avg_goals_for", "home_avg_goals_against"]
-        ):
-            features_df["attack_defense_long_ratio_away"] = _safe_div(
-                features_df["away_avg_goals_for"], features_df["home_avg_goals_against"]
-            )
-        if all(
-            c in features_df.columns
-            for c in ["home_form_points_per_game", "away_form_points_per_game"]
-        ):
-            features_df["form_points_pg_ratio"] = _safe_div(
-                features_df["home_form_points_per_game"],
-                features_df["away_form_points_per_game"],
-            )
-        if all(
-            c in features_df.columns
-            for c in ["home_momentum_score", "away_momentum_score"]
-        ):
-            features_df["momentum_score_ratio"] = _safe_div(
-                features_df["home_momentum_score"], features_df["away_momentum_score"]
-            )
-        if all(
-            c in features_df.columns for c in ["home_points_ewm5", "away_points_ewm5"]
-        ):
-            features_df["ewm_points_ratio"] = _safe_div(
-                features_df["home_points_ewm5"], features_df["away_points_ewm5"]
-            )
-
-        # Elo ratings (pre-match), computed leakage-safe from chronological results
         try:
             elo_match_df, elo_long_df = self._compute_elos_from_matches(matches)
         except Exception:
@@ -686,17 +561,6 @@ class DataLoader:
             "form_goal_diff_L10",
             "form_avg_goals_scored",
             "form_avg_goals_conceded",
-            "momentum_points",
-            "momentum_goals",
-            "momentum_conceded",
-            "momentum_score",
-            # venue-specific history metrics
-            "points_pg_at_home",
-            "goals_pg_at_home",
-            "goals_conceded_pg_at_home",
-            "points_pg_away",
-            "goals_pg_away",
-            "goals_conceded_pg_away",
             # matches played prior (leakage-safe count)
             "matches_played_prior",
         ]
@@ -736,73 +600,6 @@ class DataLoader:
                 columns={"away_matches_played_prior": "away_matches_played"},
                 inplace=True,
             )
-
-        # Attach EWMA recency features from historical via asof
-        try:
-            ewma_long_df = self._compute_ewma_recency_features(
-                historical_matches, span=5
-            )
-        except Exception:
-            ewma_long_df = None
-
-        if ewma_long_df is not None and not ewma_long_df.empty:
-            # Prepare EWMA frames
-            ewm_home = ewma_long_df.rename(columns={"team": "home_team"})[
-                [
-                    "home_team",
-                    "date",
-                    "goals_for_ewm5",
-                    "goals_against_ewm5",
-                    "goal_diff_ewm5",
-                    "points_ewm5",
-                ]
-            ]
-            # Ensure global sort by 'date' for merge_asof
-            ewm_home = ewm_home.sort_values(["date"])
-            ewm_away = ewma_long_df.rename(columns={"team": "away_team"})[
-                [
-                    "away_team",
-                    "date",
-                    "goals_for_ewm5",
-                    "goals_against_ewm5",
-                    "goal_diff_ewm5",
-                    "points_ewm5",
-                ]
-            ]
-            # Ensure global sort by 'date' for merge_asof
-            ewm_away = ewm_away.sort_values(["date"])
-
-            features_df = pd.merge_asof(
-                features_df.sort_values("date"),
-                ewm_home,
-                left_on="date",
-                right_on="date",
-                left_by="home_team",
-                right_by="home_team",
-                direction="backward",
-            )
-            features_df = pd.merge_asof(
-                features_df.sort_values("date"),
-                ewm_away,
-                left_on="date",
-                right_on="date",
-                left_by="away_team",
-                right_by="away_team",
-                direction="backward",
-                suffixes=("", "_away"),
-            )
-            # Rename to home_/away_ prefixed
-            for base in [
-                "goals_for_ewm5",
-                "goals_against_ewm5",
-                "goal_diff_ewm5",
-                "points_ewm5",
-            ]:
-                if base in features_df.columns:
-                    features_df.rename(columns={base: f"home_{base}"}, inplace=True)
-                away_col = f"{base}_away"
-                if away_col in features_df.columns:
-                    features_df.rename(columns={away_col: f"away_{base}"}, inplace=True)
 
         # Elo ratings as-of the match date (from historical only)
         try:
@@ -881,64 +678,6 @@ class DataLoader:
             features_df["venue_conceded_delta"] = (
                 features_df["home_goals_conceded_pg_at_home"]
                 - features_df["away_goals_conceded_pg_away"]
-            )
-
-        # Interaction ratios (safe divisions)
-        eps = 1e-6
-
-        def _safe_div(a: pd.Series, b: pd.Series) -> pd.Series:
-            return a.astype(float) / (b.astype(float) + eps)
-
-        if all(
-            c in features_df.columns
-            for c in ["home_form_avg_goals_scored", "away_form_avg_goals_conceded"]
-        ):
-            features_df["attack_defense_form_ratio_home"] = _safe_div(
-                features_df["home_form_avg_goals_scored"],
-                features_df["away_form_avg_goals_conceded"],
-            )
-        if all(
-            c in features_df.columns
-            for c in ["away_form_avg_goals_scored", "home_form_avg_goals_conceded"]
-        ):
-            features_df["attack_defense_form_ratio_away"] = _safe_div(
-                features_df["away_form_avg_goals_scored"],
-                features_df["home_form_avg_goals_conceded"],
-            )
-        if all(
-            c in features_df.columns
-            for c in ["home_avg_goals_for", "away_avg_goals_against"]
-        ):
-            features_df["attack_defense_long_ratio_home"] = _safe_div(
-                features_df["home_avg_goals_for"], features_df["away_avg_goals_against"]
-            )
-        if all(
-            c in features_df.columns
-            for c in ["away_avg_goals_for", "home_avg_goals_against"]
-        ):
-            features_df["attack_defense_long_ratio_away"] = _safe_div(
-                features_df["away_avg_goals_for"], features_df["home_avg_goals_against"]
-            )
-        if all(
-            c in features_df.columns
-            for c in ["home_form_points_per_game", "away_form_points_per_game"]
-        ):
-            features_df["form_points_pg_ratio"] = _safe_div(
-                features_df["home_form_points_per_game"],
-                features_df["away_form_points_per_game"],
-            )
-        if all(
-            c in features_df.columns
-            for c in ["home_momentum_score", "away_momentum_score"]
-        ):
-            features_df["momentum_score_ratio"] = _safe_div(
-                features_df["home_momentum_score"], features_df["away_momentum_score"]
-            )
-        if all(
-            c in features_df.columns for c in ["home_points_ewm5", "away_points_ewm5"]
-        ):
-            features_df["ewm_points_ratio"] = _safe_div(
-                features_df["home_points_ewm5"], features_df["away_points_ewm5"]
             )
 
         return features_df
@@ -1243,139 +982,10 @@ class DataLoader:
             )
             long_df[f"form_goal_diff_L{w}"] = gf_w - ga_w
 
-        # Momentum features via EWMA on prior rows
-        try:
-            decay = float(getattr(self.config.model, "momentum_decay", 0.9))
-        except Exception:
-            decay = 0.9
-        alpha = max(1e-6, 1.0 - min(max(decay, 0.0), 0.9999))
-
-        long_df["momentum_points"] = pts_prior.groupby(long_df["team"]).transform(
-            lambda s: s.ewm(alpha=alpha, adjust=False).mean()
-        )
-        long_df["momentum_goals"] = gf_prior.groupby(long_df["team"]).transform(
-            lambda s: s.ewm(alpha=alpha, adjust=False).mean()
-        )
-        long_df["momentum_conceded"] = ga_prior.groupby(long_df["team"]).transform(
-            lambda s: s.ewm(alpha=alpha, adjust=False).mean()
-        )
-        long_df["momentum_score"] = (
-            (long_df["momentum_points"].fillna(0))
-            + (long_df["momentum_goals"].fillna(0)) * 0.5
-            - (long_df["momentum_conceded"].fillna(0)) * 0.3
-        )
-
         # Fill initial NaNs
         long_df.fillna(0.0, inplace=True)
 
-        # Venue-specific last-N metrics (home vs away), leakage-safe via shift(1)
-        try:
-            home_mask = long_df["at_home"] == True
-            away_mask = long_df["at_home"] == False
-
-            # Group within venue subsets
-            grp_home = long_df[home_mask].groupby("team", group_keys=False)
-            grp_away = long_df[away_mask].groupby("team", group_keys=False)
-
-            # Points per game (mean of prior points over last N at that venue)
-            long_df.loc[home_mask, "points_pg_at_home"] = (
-                grp_home["points"]
-                .shift(1)
-                .rolling(window=N, min_periods=1)
-                .mean()
-                .values
-            )
-            long_df.loc[away_mask, "points_pg_away"] = (
-                grp_away["points"]
-                .shift(1)
-                .rolling(window=N, min_periods=1)
-                .mean()
-                .values
-            )
-
-            # Goals for per game at venue
-            long_df.loc[home_mask, "goals_pg_at_home"] = (
-                grp_home["goals_for"]
-                .shift(1)
-                .rolling(window=N, min_periods=1)
-                .mean()
-                .values
-            )
-            long_df.loc[away_mask, "goals_pg_away"] = (
-                grp_away["goals_for"]
-                .shift(1)
-                .rolling(window=N, min_periods=1)
-                .mean()
-                .values
-            )
-
-            # Goals conceded per game at venue
-            long_df.loc[home_mask, "goals_conceded_pg_at_home"] = (
-                grp_home["goals_against"]
-                .shift(1)
-                .rolling(window=N, min_periods=1)
-                .mean()
-                .values
-            )
-            long_df.loc[away_mask, "goals_conceded_pg_away"] = (
-                grp_away["goals_against"]
-                .shift(1)
-                .rolling(window=N, min_periods=1)
-                .mean()
-                .values
-            )
-
-            # Fill remaining NaNs with zeros
-            for c in [
-                "points_pg_at_home",
-                "goals_pg_at_home",
-                "goals_conceded_pg_at_home",
-                "points_pg_away",
-                "goals_pg_away",
-                "goals_conceded_pg_away",
-            ]:
-                if c in long_df.columns:
-                    long_df[c] = long_df[c].fillna(0.0)
-        except Exception:
-            # If venue columns are missing for any reason, proceed without them
-            pass
-
         return long_df
-
-    def _compute_ewma_recency_features(
-        self, matches: list[dict], span: int = 5
-    ) -> pd.DataFrame:
-        """Compute leakage-safe EWMA recency features on a long-format team-match frame.
-
-        Returns a DataFrame with columns: ['match_id','date','team', '<metric>_ewm{span}', ...]
-        where each EWMA is computed on prior values only (via groupby.shift(1)).
-        """
-        long_df = self._build_team_long_df(matches)
-        if long_df.empty:
-            return long_df
-
-        long_df = long_df.sort_values(["team", "date"]).reset_index(drop=True)
-
-        metrics = ["goals_for", "goals_against", "goal_diff", "points"]
-        for col in metrics:
-            prior_col = f"{col}_prior"
-            ewm_col = f"{col}_ewm{span}"
-            long_df[prior_col] = long_df.groupby("team")[col].shift(1)
-            # EWMA on prior values to avoid leakage
-            long_df[ewm_col] = long_df.groupby("team")[prior_col].transform(
-                lambda s: s.ewm(span=span, adjust=False).mean()
-            )
-            # Drop helper
-            long_df.drop(columns=[prior_col], inplace=True)
-
-        # Fill early NaNs with global means (season not tracked explicitly)
-        for col in [f"{m}_ewm{span}" for m in metrics]:
-            if col in long_df.columns:
-                long_df[col] = long_df[col].fillna(long_df[col].mean())
-
-        # Keep only lookup-relevant columns
-        keep_cols = ["match_id", "date", "team"] + [f"{m}_ewm{span}" for m in metrics]
-        return long_df[keep_cols]
 
     def _get_form_features(
         self, team: str, history: list[dict], prefix: str, last_n: int = 5
