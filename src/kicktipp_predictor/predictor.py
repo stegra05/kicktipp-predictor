@@ -461,8 +461,9 @@ class MatchPredictor:
             self.away_goals_model.predict(X), self.MIN_LAMBDA
         )
 
-        final_probs = classifier_probs
-        diag = {}
+        final_probs, diag = self._derive_final_probabilities(
+            classifier_probs, home_lambdas, away_lambdas
+        )
 
         # Base outcomes: argmax over final probabilities
         prob_map = {label: i for i, label in enumerate(self.label_encoder.classes_)}
@@ -543,6 +544,86 @@ class MatchPredictor:
             )
             for i in range(n)
         ]
+
+    def _derive_final_probabilities(self, classifier_probs, home_lambdas, away_lambdas):
+        """Derives final outcome probabilities based on the configured source.
+
+        This method supports three sources:
+        - 'classifier': Uses the raw probabilities from the XGBoost classifier.
+        - 'poisson': Derives probabilities from the Poisson goal regressors.
+        - 'hybrid': Blends classifier and Poisson probabilities using a fixed weight.
+
+        Returns:
+            A tuple containing the final probabilities and a dictionary with
+            diagnostic information.
+        """
+        source = self.config.model.prob_source.lower()
+        diag = {"classifier_probs": classifier_probs, "poisson_probs": np.zeros_like(classifier_probs)}
+
+        if source == "classifier":
+            return classifier_probs, diag
+
+        poisson_probs = self._calculate_poisson_outcome_probs(home_lambdas, away_lambdas)
+        diag["poisson_probs"] = poisson_probs
+
+        if source == "poisson":
+            return poisson_probs, diag
+
+        if source == "hybrid":
+            weight = self.config.model.hybrid_poisson_weight
+            diag["weights"] = np.full(len(classifier_probs), weight)
+            blended = self._blend_probs(classifier_probs, poisson_probs, weights=weight)
+            return blended, diag
+
+        return classifier_probs, diag
+
+
+    def _blend_probs(
+        self,
+        cls: np.ndarray,
+        pois: np.ndarray,
+        weights: np.ndarray | float | None = None,
+    ) -> np.ndarray:
+        if weights is None or isinstance(weights, float):
+            w = (
+                float(weights)
+                if weights is not None
+                else float(self.config.model.hybrid_poisson_weight)
+            )
+            blend = (1.0 - w) * cls + w * pois
+        else:
+            w = weights.reshape(-1, 1)
+            blend = (1.0 - w) * cls + w * pois
+        blend = np.clip(blend, 1e-15, 1.0)
+        return blend / blend.sum(axis=1, keepdims=True)
+
+    def _calculate_poisson_outcome_probs(self, home_lambdas, away_lambdas):
+        """Outcome probabilities from Poisson lambdas with per-match dynamic grid."""
+        n = len(home_lambdas)
+        probs = np.zeros((n, 3), dtype=float)
+        max_cap = int(self.config.model.proba_grid_max_goals)
+        for i in range(n):
+            lam_h = float(home_lambdas[i])
+            lam_a = float(away_lambdas[i])
+            G = int(min(max_cap, int(np.ceil(max(lam_h, lam_a) + 4))))
+            x = np.arange(G + 1)
+            ph = poisson.pmf(x, lam_h)
+            pa = poisson.pmf(x, lam_a)
+            grid = np.outer(ph, pa)
+            total = np.sum(grid)
+            if total <= 0:
+                probs[i] = np.array([1 / 3, 1 / 3, 1 / 3])
+                continue
+            grid /= total
+            upper = np.triu(grid, k=1)
+            lower = np.tril(grid, k=-1)
+            diag = np.diag(np.diag(grid))
+            pH = float(np.sum(upper))
+            pD = float(np.sum(np.diag(grid)))
+            pA = float(np.sum(lower))
+            probs[i] = np.array([pH, pD, pA])
+        probs = np.clip(probs, 1e-15, 1.0)
+        return probs / probs.sum(axis=1, keepdims=True)
 
     # _compute_ep_scorelines removed: using compute_scoreline_for_outcome via _compute_scorelines
 

@@ -17,7 +17,6 @@ Outcome probabilities used for evaluation can be sourced from the classifier, de
 - **Clear Two-Step Architecture**: Outcome first, then scoreline - easy to understand and debug
 - **Selectable Outcome Probabilities**: Use classifier probabilities, Poisson-derived probabilities, or a hybrid blend
 - **Dynamic Feature Management**: Comes with 80+ features, but you can use the built-in **Feature Ablation Study** to find the optimal subset for performance and simplicity.
-- **Advanced Feature Engineering**: Includes momentum, strength of schedule, rest days, goal patterns, and more.
 - **EWMA Recency Features**: Leakage-safe exponentially weighted moving averages capture recent form.
 - **Comprehensive Evaluation**: Brier score, log loss, RPS, accuracy, and Kicktipp points.
 - **Performance Tracking**: Automatic tracking of prediction accuracy and points earned.
@@ -108,16 +107,6 @@ The `evaluate` command now uses a single dynamic, expanding-window procedure:
   - `data/predictions/metrics_season.json`
   - `data/predictions/per_matchday_metrics_season.csv`
 
-### EWMA Recency Features
-
-To capture short-term momentum without leakage, the feature pipeline precomputes exponentially weighted moving averages (span=5, adjust=False) on prior match values per team and merges them into match-level features. Added columns include:
-
-- `home_goals_for_ewm5`, `away_goals_for_ewm5`
-- `home_goals_against_ewm5`, `away_goals_against_ewm5`
-- `home_goal_diff_ewm5`, `away_goal_diff_ewm5`
-- `home_points_ewm5`, `away_points_ewm5`
-
-Early-season gaps are filled with global means to handle cold starts. These features are computed once across the dataset and reused for both training and prediction paths.
 
 ### Benefits
 
@@ -198,13 +187,8 @@ The model's behavior is controlled by parameters in `config/best_params.yaml`. T
 
 - **`draw_boost`**: Class weight multiplier for draws during classifier training
 - **`use_ep_selection`**: Enable EP-maximizing scoreline selection (default: True)
-- **`poisson_draw_rho`**: Optional diagonal bump: multiply draw cells by `exp(rho)` (default: 0.0)
-- **`poisson_joint`**: Joint grid model: `independent` or `dixon_coles` (default: `dixon_coles`)
-- **`dixon_coles_rho`**: Dixon–Coles low-score correlation parameter (default: 0.0)
 - **`use_time_decay`**: Apply recency weighting during training (default: True)
 - **`time_decay_half_life_days`**: Half-life in days for time-decay weights (default: 330, typically overridden via YAML)
-- **`form_last_n`**: Window size for last-N form features (default: 5)
-- **`momentum_decay`**: EWMA decay for momentum features (default: 0.83)
 
 ### XGBoost Hyperparameters
 - **Outcome Classifier**: `n_estimators`, `max_depth`, `learning_rate`, `subsample`, `colsample_bytree`
