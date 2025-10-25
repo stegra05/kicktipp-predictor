@@ -1,3 +1,4 @@
+# Version 3.0: Simplified architecture (2025-10-24)
 """Implements a two-stage match predictor for football games.
 
 This module defines the `MatchPredictor`, a class that uses a predictor-selector
@@ -102,10 +103,7 @@ def compute_scoreline_for_outcome(
 def compute_ep_scoreline(
     home_lambda: float,
     away_lambda: float,
-    max_goals: int,
-    draw_rho: float = 0.0,
-    joint: str = "independent",
-    dixon_rho: float = 0.0,
+    max_goals: int
 ) -> tuple[int, int]:
     """Select the scoreline maximizing expected Kicktipp points under a Poisson grid.
 
@@ -122,20 +120,6 @@ def compute_ep_scoreline(
     ph = poisson.pmf(x, lam_h)
     pa = poisson.pmf(x, lam_a)
     grid = np.outer(ph, pa)
-
-    if str(joint).lower() == "dixon_coles" and abs(float(dixon_rho)) > 1e-12:
-        rho = float(dixon_rho)
-        P = np.array(grid, copy=True)
-        P[0, 0] *= max(0.0, 1.0 - lam_h * lam_a * rho)
-        if G >= 1:
-            P[0, 1] *= max(0.0, 1.0 + lam_h * rho)
-            P[1, 0] *= max(0.0, 1.0 + lam_a * rho)
-            P[1, 1] *= max(0.0, 1.0 - rho)
-        grid = P
-
-    if float(draw_rho) != 0.0:
-        idx = np.arange(G + 1)
-        grid[idx, idx] *= np.exp(float(draw_rho))
 
     total = float(np.sum(grid))
     if total <= 0.0:
@@ -564,9 +548,6 @@ class MatchPredictor:
     def _compute_ep_scorelines(self, home_lambdas, away_lambdas, workers):
         """Computes EP-maximizing scorelines for each match in parallel."""
         G = int(self.config.model.max_goals)
-        rho = float(getattr(self.config.model, "poisson_draw_rho", 0.0))
-        joint = str(getattr(self.config.model, "poisson_joint", "independent")).lower()
-        dc_rho = float(getattr(self.config.model, "dixon_coles_rho", 0.0))
         n = len(home_lambdas)
         if workers and workers > 1 and n > 0:
             with ProcessPoolExecutor(max_workers=workers) as executor:
@@ -576,14 +557,11 @@ class MatchPredictor:
                         home_lambdas,
                         away_lambdas,
                         itertools.repeat(G, n),
-                        itertools.repeat(rho, n),
-                        itertools.repeat(joint, n),
-                        itertools.repeat(dc_rho, n),
                     )
                 )
         return [
             compute_ep_scoreline(
-                home_lambdas[i], away_lambdas[i], G, rho, joint, dc_rho
+                home_lambdas[i], away_lambdas[i], G
             )
             for i in range(n)
         ]
@@ -622,17 +600,14 @@ class MatchPredictor:
                 axis=1,
             ) / np.log(3.0)
 
-        # Calibrate and prior-anchor
-        calibrated = self._apply_calibration_and_anchoring(blend)
         diag = {
             "weights": weights,
-            "entropy": entropy,
             "classifier_probs": classifier_probs,
             "poisson_probs": pois_probs,
             "precalibrated": blend,
-            "postcalibrated": calibrated,
+            "postcalibrated": blend,
         }
-        return calibrated, diag
+        return blend, diag
 
 
     def _blend_probs(
@@ -655,11 +630,10 @@ class MatchPredictor:
         return blend / blend.sum(axis=1, keepdims=True)
 
     def _calculate_poisson_outcome_probs(self, home_lambdas, away_lambdas):
-        """Outcome probabilities from Poisson lambdas with per-match dynamic grid and optional diagonal bump."""
+        """Outcome probabilities from Poisson lambdas with per-match dynamic grid."""
         n = len(home_lambdas)
         probs = np.zeros((n, 3), dtype=float)
         max_cap = int(self.config.model.proba_grid_max_goals)
-        rho = float(self.config.model.poisson_draw_rho)
         for i in range(n):
             lam_h = float(home_lambdas[i])
             lam_a = float(away_lambdas[i])
@@ -668,12 +642,6 @@ class MatchPredictor:
             ph = poisson.pmf(x, lam_h)
             pa = poisson.pmf(x, lam_a)
             grid = np.outer(ph, pa)
-            # Optional Dixon–Coles low-score dependence
-            grid = self._maybe_apply_dixon_coles(grid, lam_h, lam_a)
-            # Optional diagonal bump legacy (minor tweak)
-            if rho != 0.0:
-                idx = np.arange(G + 1)
-                grid[idx, idx] *= np.exp(rho)
             total = np.sum(grid)
             if total <= 0:
                 probs[i] = np.array([1 / 3, 1 / 3, 1 / 3])
@@ -690,41 +658,6 @@ class MatchPredictor:
         return probs / probs.sum(axis=1, keepdims=True)
 
     # _compute_ep_scorelines removed: using compute_scoreline_for_outcome via _compute_scorelines
-
-    def _maybe_apply_dixon_coles(
-        self, grid: np.ndarray, lam_h: float, lam_a: float
-    ) -> np.ndarray:
-        """Apply Dixon–Coles low-score adjustment if enabled in config.
-
-        Adjusts probabilities for (0,0), (0,1), (1,0), (1,1) using a small rho.
-        """
-        try:
-            if (
-                getattr(self.config.model, "poisson_joint", "independent").lower()
-                != "dixon_coles"
-            ):
-                return grid
-            rho = float(getattr(self.config.model, "dixon_coles_rho", 0.0))
-            if abs(rho) < 1e-12:
-                return grid
-            G = grid.shape[0] - 1
-            P = np.array(grid, copy=True)
-            # τ adjustments (common approximation)
-            # clip indexes
-            P[0, 0] *= max(0.0, 1.0 - lam_h * lam_a * rho)
-            if G >= 1:
-                P[0, 1] *= max(0.0, 1.0 + lam_h * rho)
-                P[1, 0] *= max(0.0, 1.0 + lam_a * rho)
-                P[1, 1] *= max(0.0, 1.0 - rho)
-            return P
-        except Exception:
-            return grid
-
-    def _apply_calibration_and_anchoring(self, probs: np.ndarray) -> np.ndarray:
-        # Temporarily disabled: return input probabilities unchanged
-        return np.array(probs, copy=True)
-
-
 
     def _format_predictions(
         self,
@@ -757,9 +690,6 @@ class MatchPredictor:
                 "confidence": float(probs_sorted[0] - probs_sorted[1]),
                 "max_probability": float(probs_sorted[0]),
                 # Diagnostics
-                "entropy": float(diag.get("entropy", [np.nan] * len(df))[i])
-                if isinstance(diag.get("entropy"), np.ndarray)
-                else float("nan"),
                 "blend_weight": float(diag.get("weights", [np.nan] * len(df))[i])
                 if isinstance(diag.get("weights"), np.ndarray)
                 else float("nan"),

@@ -130,12 +130,6 @@ class ModelConfig:
     hybrid_poisson_weight: float = 0.0525
     # Max goals for Poisson probability grid used to derive P(H/D/A) (separate from scoreline grid)
     proba_grid_max_goals: int = 12
-    # Draw bump for Poisson-derived probabilities: multiply diagonal cells by exp(rho) before normalization
-    poisson_draw_rho: float = 0.0
-    # Joint model for Poisson score grid: 'independent' or 'dixon_coles'
-    poisson_joint: str = "dixon_coles"
-    # Dixon–Coles low-score correlation parameter (small magnitude, e.g., -0.05..0.05)
-    dixon_coles_rho: float = 0.0
 
     # --- New: EP scoreline selection toggle ---
     use_ep_selection: bool = True
@@ -233,16 +227,6 @@ class Config:
                         config.model.proba_grid_max_goals = int(
                             params["proba_grid_max_goals"]
                         )
-                    if "poisson_draw_rho" in params:
-                        config.model.poisson_draw_rho = float(
-                            params["poisson_draw_rho"]
-                        )
-                    if "poisson_joint" in params:
-                        config.model.poisson_joint = (
-                            str(params["poisson_joint"]).strip().lower()
-                        )
-                    if "dixon_coles_rho" in params:
-                        config.model.dixon_coles_rho = float(params["dixon_coles_rho"])
                     # New: EP selection toggle from YAML
                     if "use_ep_selection" in params:
                         config.model.use_ep_selection = bool(params["use_ep_selection"])
