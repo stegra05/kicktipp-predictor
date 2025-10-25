@@ -334,10 +334,10 @@ class DataLoader:
         features_df["weighted_form_points_difference"] = features_df.get(
             "home_form_points_weighted_by_opponent_rank", 0
         ) - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
-        features_df["abs_momentum_score_diff"] = (
+        features_df["abs_momentum_score_diff"] = abs(
             features_df.get("home_momentum_score", 0.0)
             - features_df.get("away_momentum_score", 0.0)
-        ).abs()
+        )
         features_df["momentum_score_difference"] = features_df.get(
             "home_momentum_score", 0.0
         ) - features_df.get("away_momentum_score", 0.0)
@@ -647,10 +647,10 @@ class DataLoader:
         features_df["weighted_form_points_difference"] = features_df.get(
             "home_form_points_weighted_by_opponent_rank", 0
         ) - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
-        features_df["abs_momentum_score_diff"] = (
+        features_df["abs_momentum_score_diff"] = abs(
             features_df.get("home_momentum_score", 0.0)
             - features_df.get("away_momentum_score", 0.0)
-        ).abs()
+        )
         features_df["momentum_score_difference"] = features_df.get(
             "home_momentum_score", 0.0
         ) - features_df.get("away_momentum_score", 0.0)
