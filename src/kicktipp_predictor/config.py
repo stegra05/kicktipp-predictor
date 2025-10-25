@@ -86,15 +86,11 @@ class ModelConfig:
     goals_reg_lambda: float = 1.0
     goals_min_child_weight: float = 1.6919
 
-    # Early stopping
-    goals_early_stopping_rounds: int = 25
-
     # Poisson grid for scoreline selection
     max_goals: int = 8
 
     # Training
     random_state: int = 42
-    test_size: float = 0.2
     min_training_matches: int = 50
 
     # Time-decay weighting (recency)
@@ -191,11 +187,7 @@ class Config:
                         config.model.max_goals = int(params["max_goals"])
 
                     if "draw_boost" in params:
-                        config.model.draw_boost = float(params["draw_boost"])
-                    if "proba_temperature" in params:
-                        config.model.proba_temperature = float(
-                            params["proba_temperature"]
-                        )
+                        config.model.draw_boost = float(params["draw_boost"])            
 
 
 
