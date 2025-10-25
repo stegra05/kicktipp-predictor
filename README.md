@@ -38,22 +38,15 @@ Hey there! This is my little side project while juggling studies – a football 
   ```
 - Predict upcoming matches (next N days or a specific matchday):
   ```bash
-  # Next 7 days, hybrid probabilities (default), parallel scoreline selection
-  kicktipp-predictor predict \
-    --days 7 \
-    --workers 4 \
-    --prob-source hybrid \
-    --hybrid-poisson-weight 0.0525 \
-    --proba-grid-max-goals 12
+  # Next 7 days
+  kicktipp-predictor predict --days 7
   
   # Or predict a specific matchday
   kicktipp-predictor predict --matchday 12
   ```
   Notes:
-  - `--prob-source` supports `classifier|poisson|hybrid`. Hybrid blends classifier and Poisson with a fixed weight.
-  - `--hybrid-poisson-weight` is the Poisson weight in `[0,1]` (classifier weight is `1-w`).
-  - `--proba-grid-max-goals` caps the dynamic Poisson probability grid when deriving H/D/A probabilities (separate from scoreline grid).
-  - `--poisson-draw-rho` is currently accepted but not applied in probability computations.
+  - Outcome probabilities use hybrid blending (classifier + Poisson) with a fixed internal weight.
+  - Scorelines are selected via Expected Points (EP) maximization under a Poisson grid.
 - Evaluate a current season with expanding-window retraining:
   ```bash
   kicktipp-predictor evaluate --retrain-every 1
@@ -78,17 +71,12 @@ Configuration is centralized in `src/kicktipp_predictor/config.py` and loaded op
   - Goal regressors: `goals_n_estimators`, `goals_max_depth`, `goals_learning_rate`, `goals_subsample`, `goals_reg_lambda`, `goals_min_child_weight`, `goals_early_stopping_rounds`
   - Training: `random_state`, `test_size`, `min_training_matches`
   - Feature/recency: `use_time_decay`, `time_decay_half_life_days`, `form_last_n`
-  - Probability config: `prob_source`, `hybrid_poisson_weight`, `proba_grid_max_goals`, `draw_boost`, `proba_temperature`
-  - Scoreline selection: `max_goals`, `use_ep_selection`
+  - Probability config: `draw_boost` (training class weight), `proba_temperature` (reserved)
+  - Scoreline selection: `max_goals`
   - Feature selection file: `selected_features_file` (default `kept_features.yaml`)
 
 Example YAML (`config/best_params.yaml`):
 ```yaml
-# Probability derivation
-prob_source: hybrid
-hybrid_poisson_weight: 0.0525
-proba_grid_max_goals: 12
-
 # Training and features
 use_time_decay: true
 time_decay_half_life_days: 330.0
@@ -112,7 +100,6 @@ goals_min_child_weight: 1.6919
 
 # Scorelines
 max_goals: 8
-use_ep_selection: true
 
 # Class weighting & temperature
 draw_boost: 1.7
@@ -130,8 +117,6 @@ from kicktipp_predictor.config import get_config
 
 # Optional: tweak config in code
 cfg = get_config()
-cfg.model.prob_source = "hybrid"
-cfg.model.hybrid_poisson_weight = 0.1
 
 loader = DataLoader()
 current = loader.get_current_season()
@@ -147,7 +132,7 @@ predictor.load_models()
 upcoming = loader.get_upcoming_matches(days=7)
 historical = loader.fetch_season_matches(current)
 features = loader.create_prediction_features(upcoming, historical)
-preds = predictor.predict(features, workers=4)
+preds = predictor.predict(features)
 for p in preds:
     print(p["home_team"], "vs", p["away_team"], p["predicted_home_score"], "-", p["predicted_away_score"])  # noqa: E501
 ```

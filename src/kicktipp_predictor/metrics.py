@@ -151,59 +151,7 @@ def expected_calibration_error(
         ece[lab] = float(acc_sum)
     return ece
 
-
-def reliability_diagram(
-    y_true: list[str], proba: np.ndarray, class_label: str, n_bins: int = 10
-):
-    """Generate data for a reliability diagram.
-
-    This function bins predictions by confidence and calculates the accuracy
-    and average confidence for each bin, which can then be plotted to visualize
-    model calibration.
-
-    Args:
-        y_true: A list of true labels ('H', 'D', 'A').
-        proba: A numpy array of shape (n_samples, 3) with predicted probabilities.
-        class_label: The class to generate the diagram for.
-        n_bins: The number of confidence bins.
-
-    Returns:
-        A pandas DataFrame with reliability diagram data.
-    """
-    import pandas as pd
-
-    mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
-    li = mapping[class_label]
-    P = np.clip(np.asarray(proba, dtype=float), 1e-15, 1.0)
-    P = P / P.sum(axis=1, keepdims=True)
-    probs = P[:, li]
-    bins = np.linspace(0.0, 1.0, n_bins + 1)
-    bin_ids = np.clip(np.digitize(probs, bins, right=True), 1, n_bins)
-    y_idx = np.array([mapping.get(lbl, -1) for lbl in y_true], dtype=int)
-    rows = []
-    for b in range(1, n_bins + 1):
-        mask = bin_ids == b
-        if not np.any(mask):
-            rows.append(
-                {
-                    "bin": f"[{bins[b - 1]:.1f},{bins[b]:.1f})",
-                    "avg_confidence": float("nan"),
-                    "accuracy": float("nan"),
-                    "count": 0,
-                }
-            )
-        else:
-            rows.append(
-                {
-                    "bin": f"[{bins[b - 1]:.2f},{bins[b]:.2f})",
-                    "avg_confidence": float(np.mean(probs[mask])),
-                    "accuracy": float(np.mean(y_idx[mask] == li)),
-                    "count": int(np.sum(mask)),
-                }
-            )
-    return pd.DataFrame(rows)
-
-
+    
 def confusion_matrix_stats(y_true: list[str], proba: np.ndarray) -> dict:
     """Calculate a confusion matrix and related statistics.
 

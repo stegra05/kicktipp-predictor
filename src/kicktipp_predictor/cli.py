@@ -53,21 +53,6 @@ def train(
 def predict(
     days: int = typer.Option(7, help="Days ahead to predict"),
     matchday: int | None = typer.Option(None, help="Specific matchday to predict"),
-    workers: int = typer.Option(
-        1, help="Process workers for scoreline selection ( >1 enables parallelism)"
-    ),
-    prob_source: str = typer.Option(
-        "hybrid", help="Outcome prob source: classifier|poisson|hybrid"
-    ),
-    hybrid_poisson_weight: float | None = typer.Option(
-        None, help="When prob_source=hybrid: weight of Poisson probabilities [0,1] (default from config)"
-    ),
-    proba_grid_max_goals: int = typer.Option(
-        12, help="Grid cap for Poisson-derived probabilities (not scoreline grid)"
-    ),
-    poisson_draw_rho: float = typer.Option(
-        0.0, help="Diagonal bump for draws in Poisson probs: multiply diag by exp(rho)"
-    ),
 ):
     """Make predictions for upcoming matches."""
     from kicktipp_predictor.data import DataLoader
@@ -78,16 +63,6 @@ def predict(
     print("=" * 80)
     print()
 
-    # Apply probability-source options to config
-    from kicktipp_predictor.config import get_config
-
-    cfg = get_config()
-    cfg.model.prob_source = str(prob_source).strip().lower()
-    if hybrid_poisson_weight is not None:
-        cfg.model.hybrid_poisson_weight = float(hybrid_poisson_weight)
-    cfg.model.proba_grid_max_goals = int(proba_grid_max_goals)
-    cfg.model.poisson_draw_rho = float(poisson_draw_rho)
-    # prior_blend_alpha applies only when prob_source=classifier
 
     # Load data
     loader = DataLoader()
@@ -128,7 +103,7 @@ def predict(
         return
 
     # Make predictions
-    predictions = predictor.predict(features_df, workers=workers)
+    predictions = predictor.predict(features_df)
 
     # Display predictions
     print("\n" + "=" * 80)

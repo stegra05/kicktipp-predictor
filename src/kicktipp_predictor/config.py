@@ -116,22 +116,8 @@ class ModelConfig:
     draw_boost: float = 1.7
 
     # Outcome probability post-processing
-    # Temperature < 1 sharpens, > 1 softens
-    proba_temperature: float = 1.0
     # Blend with empirical prior from training window
 
-
-    # Outcome probability source for evaluation and reporting
-    # One of: 'classifier' (default), 'poisson', 'hybrid'
-    prob_source: str = "hybrid"
-    # When prob_source='hybrid', weight of Poisson-derived probabilities in [0,1]
-    # Note: only fixed-weight blending is supported.
-    hybrid_poisson_weight: float = 0.0525
-    # Max goals for Poisson probability grid used to derive P(H/D/A) (separate from scoreline grid)
-    proba_grid_max_goals: int = 12
-
-    # --- New: EP scoreline selection toggle ---
-    use_ep_selection: bool = True
 
     selected_features_file: str = "kept_features.yaml"
 
@@ -211,21 +197,7 @@ class Config:
                             params["proba_temperature"]
                         )
 
-                    if "prob_source" in params:
-                        config.model.prob_source = (
-                            str(params["prob_source"]).strip().lower()
-                        )
-                    if "hybrid_poisson_weight" in params:
-                        config.model.hybrid_poisson_weight = float(
-                            params["hybrid_poisson_weight"]
-                        )
-                    if "proba_grid_max_goals" in params:
-                        config.model.proba_grid_max_goals = int(
-                            params["proba_grid_max_goals"]
-                        )
-                    # New: EP selection toggle from YAML
-                    if "use_ep_selection" in params:
-                        config.model.use_ep_selection = bool(params["use_ep_selection"])
+
 
                     # Time-decay weighting and feature knobs
                     if "use_time_decay" in params:

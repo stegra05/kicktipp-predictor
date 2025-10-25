@@ -11,9 +11,7 @@ architecture to forecast match outcomes and scorelines. The process involves:
     predicted outcome.
 """
 
-import itertools
 import time
-from concurrent.futures import ProcessPoolExecutor
 
 import joblib
 import numpy as np
@@ -27,73 +25,13 @@ from xgboost import XGBClassifier, XGBRegressor
 
 # Optional YAML import for feature selection file
 try:
-    import yaml  # type: ignore
+    import yaml 
 except Exception:
     yaml = None
 
 from .config import get_config
-from .metrics import log_loss_multiclass
 
 
-def compute_scoreline_for_outcome(
-    outcome: str, home_lambda: float, away_lambda: float, max_goals: int
-) -> tuple[int, int]:
-    """Selects the most probable scoreline for a given outcome using a Poisson grid.
-
-    This function is designed for parallel execution. It constructs a probability
-    grid for all possible scorelines up to `max_goals` and filters it to find
-    the scoreline with the highest probability that matches the specified outcome.
-
-    Args:
-        outcome: The predicted outcome ('H', 'D', 'A').
-        home_lambda: The expected number of goals for the home team.
-        away_lambda: The expected number of goals for the away team.
-        max_goals: The maximum number of goals to consider for the grid.
-
-    Returns:
-        A tuple containing the most probable (home_score, away_score).
-    """
-    max_goals = int(max(0, max_goals))
-
-    grid = np.zeros((max_goals + 1, max_goals + 1))
-    for h in range(max_goals + 1):
-        for a in range(max_goals + 1):
-            grid[h, a] = poisson.pmf(h, home_lambda) * poisson.pmf(a, away_lambda)
-
-    if outcome == "H":
-        grid = np.tril(grid, k=-1)
-    elif outcome == "A":
-        grid = np.triu(grid, k=1)
-    else:
-        grid = np.diag(np.diag(grid))
-
-    if np.max(grid) == 0:
-        return (2, 1) if outcome == "H" else ((1, 2) if outcome == "A" else (1, 1))
-
-    candidates = np.argwhere(grid == np.max(grid))
-    if len(candidates) == 1:
-        return int(candidates[0][0]), int(candidates[0][1])
-
-    common_scorelines = [
-        (2, 1),
-        (1, 0),
-        (1, 1),
-        (0, 1),
-        (2, 0),
-        (0, 0),
-        (2, 2),
-        (3, 1),
-        (1, 2),
-        (3, 0),
-        (0, 3),
-        (3, 2),
-        (2, 3),
-    ]
-    for h, a in common_scorelines:
-        if h <= max_goals and a <= max_goals and grid[h, a] == np.max(grid):
-            return h, a
-
-    return int(candidates[0][0]), int(candidates[0][1])
 
 
 # --- New: Expected Points scoreline selection (top-level for parallelism) ---
@@ -201,6 +139,8 @@ class MatchPredictor:
         feature_columns: A list of feature names used for training.
         label_encoder: A LabelEncoder for the outcome variable.
     """
+
+    HYBRID_WEIGHT: float = 0.0525
 
     def __init__(self, quiet: bool = False):
         """Initializes the MatchPredictor with its configuration."""
@@ -438,13 +378,12 @@ class MatchPredictor:
     MIN_LAMBDA: float = 0.2  # clamp for expected goals to avoid degenerate predictions
 
     def predict(
-        self, features_df: pd.DataFrame, workers: int | None = None
+        self, features_df: pd.DataFrame
     ) -> list[dict]:
         """Predicts match outcomes and scorelines.
 
         Args:
             features_df: A DataFrame with match features.
-            workers: The number of parallel workers for scoreline selection.
 
         Returns:
             A list of prediction dictionaries.
@@ -471,16 +410,10 @@ class MatchPredictor:
 
         outcomes = self.label_encoder.inverse_transform(outcomes_idx)
 
-        # Compute scorelines: EP selection if enabled, otherwise outcome-constrained
-        use_ep = bool(getattr(self.config.model, "use_ep_selection", False))
-        if use_ep:
-            scorelines = self._compute_ep_scorelines(
-                home_lambdas, away_lambdas, workers
-            )
-        else:
-            scorelines = self._compute_scorelines(
-                outcomes, home_lambdas, away_lambdas, workers
-            )
+        # Compute scorelines using EP-only selection
+        scorelines = self._compute_ep_scorelines(
+            home_lambdas, away_lambdas
+        )
 
         return self._format_predictions(
             features_df,
@@ -500,82 +433,31 @@ class MatchPredictor:
         return df[self.feature_columns].fillna(0)
 
 
-
-    def _compute_scorelines(self, outcomes, home_lambdas, away_lambdas, workers):
-        """Computes the most likely scoreline for each match in parallel."""
-        max_goals = self.config.model.max_goals
-        n = len(outcomes)
-        if workers and workers > 1 and n > 0:
-            with ProcessPoolExecutor(max_workers=workers) as executor:
-                return list(
-                    executor.map(
-                        compute_scoreline_for_outcome,
-                        outcomes,
-                        home_lambdas,
-                        away_lambdas,
-                        itertools.repeat(max_goals, n),
-                    )
-                )
-        return [
-            compute_scoreline_for_outcome(
-                outcomes[i], home_lambdas[i], away_lambdas[i], max_goals
-            )
-            for i in range(n)
-        ]
-
     # --- New: EP scoreline computation ---
-    def _compute_ep_scorelines(self, home_lambdas, away_lambdas, workers):
-        """Computes EP-maximizing scorelines for each match in parallel."""
+    def _compute_ep_scorelines(self, home_lambdas, away_lambdas):
+        """Computes EP-maximizing scorelines for each match (no parallelism)."""
         G = int(self.config.model.max_goals)
         n = len(home_lambdas)
-        if workers and workers > 1 and n > 0:
-            with ProcessPoolExecutor(max_workers=workers) as executor:
-                return list(
-                    executor.map(
-                        compute_ep_scoreline,
-                        home_lambdas,
-                        away_lambdas,
-                        itertools.repeat(G, n),
-                    )
-                )
         return [
-            compute_ep_scoreline(
-                home_lambdas[i], away_lambdas[i], G
-            )
+            compute_ep_scoreline(home_lambdas[i], away_lambdas[i], G)
             for i in range(n)
         ]
 
     def _derive_final_probabilities(self, classifier_probs, home_lambdas, away_lambdas):
-        """Derives final outcome probabilities based on the configured source.
-
-        This method supports three sources:
-        - 'classifier': Uses the raw probabilities from the XGBoost classifier.
-        - 'poisson': Derives probabilities from the Poisson goal regressors.
-        - 'hybrid': Blends classifier and Poisson probabilities using a fixed weight.
+        """Derives final outcome probabilities using hybrid-only blending.
 
         Returns:
             A tuple containing the final probabilities and a dictionary with
             diagnostic information.
         """
-        source = self.config.model.prob_source.lower()
         diag = {"classifier_probs": classifier_probs, "poisson_probs": np.zeros_like(classifier_probs)}
-
-        if source == "classifier":
-            return classifier_probs, diag
 
         poisson_probs = self._calculate_poisson_outcome_probs(home_lambdas, away_lambdas)
         diag["poisson_probs"] = poisson_probs
+        diag["weights"] = np.full(len(classifier_probs), self.HYBRID_WEIGHT)
 
-        if source == "poisson":
-            return poisson_probs, diag
-
-        if source == "hybrid":
-            weight = self.config.model.hybrid_poisson_weight
-            diag["weights"] = np.full(len(classifier_probs), weight)
-            blended = self._blend_probs(classifier_probs, poisson_probs, weights=weight)
-            return blended, diag
-
-        return classifier_probs, diag
+        blended = self._blend_probs(classifier_probs, poisson_probs)
+        return blended, diag
 
 
     def _blend_probs(
@@ -585,11 +467,7 @@ class MatchPredictor:
         weights: np.ndarray | float | None = None,
     ) -> np.ndarray:
         if weights is None or isinstance(weights, float):
-            w = (
-                float(weights)
-                if weights is not None
-                else float(self.config.model.hybrid_poisson_weight)
-            )
+            w = float(weights) if weights is not None else float(self.HYBRID_WEIGHT)
             blend = (1.0 - w) * cls + w * pois
         else:
             w = weights.reshape(-1, 1)
@@ -601,7 +479,7 @@ class MatchPredictor:
         """Outcome probabilities from Poisson lambdas with per-match dynamic grid."""
         n = len(home_lambdas)
         probs = np.zeros((n, 3), dtype=float)
-        max_cap = int(self.config.model.proba_grid_max_goals)
+        max_cap = int(self.config.model.max_goals)
         for i in range(n):
             lam_h = float(home_lambdas[i])
             lam_a = float(away_lambdas[i])
@@ -625,7 +503,6 @@ class MatchPredictor:
         probs = np.clip(probs, 1e-15, 1.0)
         return probs / probs.sum(axis=1, keepdims=True)
 
-    # _compute_ep_scorelines removed: using compute_scoreline_for_outcome via _compute_scorelines
 
     def _format_predictions(
         self,
@@ -730,16 +607,3 @@ class MatchPredictor:
         self.label_encoder = metadata["label_encoder"]
 
         self._log("Models loaded successfully.")
-
-    def evaluate(self, test_df: pd.DataFrame) -> dict:
-        """Evaluates the predictor on a test dataset.
-
-        Args:
-            test_df: A DataFrame with features and actual results.
-
-        Returns:
-            A dictionary of evaluation metrics.
-        """
-        from .evaluate import evaluate_predictor
-
-        return evaluate_predictor(self, test_df)
