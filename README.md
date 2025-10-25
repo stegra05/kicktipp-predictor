@@ -108,10 +108,6 @@ proba_temperature: 1.0
 
 Feature selection (`kept_features.yaml`): place this file under `config/` at the project root. If present, only essential columns and the listed features are kept for training and prediction feature frames.
 
-Cleanup notes:
-- Removed dead features: `abs_momentum_score_diff`, `momentum_score_difference`, `venue_points_delta`, `venue_goals_delta`, `venue_conceded_delta`.
-- Transient Elo columns (`home_elo`, `away_elo`, `elo_diff`) are created briefly to engineer `tanh_tamed_elo` and then dropped to avoid leakage/bias. Use `tanh_tamed_elo` as the stable Elo-derived signal.
-
 ## Programmatic API
 Train, save, load, and predict in Python:
 ```python
