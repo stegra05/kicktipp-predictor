@@ -4,23 +4,116 @@ This module centralizes all configuration parameters including paths,
 model hyperparameters, and API settings.
 """
 
+# === Imports ===
 import os
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Callable
 
 try:
     import yaml  # type: ignore
 except ImportError:
     yaml = None
 
-
-# Get project root (3 levels up from this file)
+# === Project Root ===
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
+# === Utilities ===
+def _resolve_config_file(paths: "PathConfig", override: str | None) -> Path:
+    """Resolve configuration file path.
 
+    Prefers the `override` path when provided and exists; otherwise uses the
+    default file in `paths.config_dir`.
+
+    Args:
+        paths: Path configuration.
+        override: Optional path from environment.
+
+    Returns:
+        Path to the configuration file to use.
+    """
+    if override:
+        candidate = Path(override)
+        if candidate.exists():
+            return candidate
+    return paths.config_dir / "best_params.yaml"
+
+
+def _read_yaml_params(config_file: Path) -> dict[str, Any] | None:
+    """Read YAML parameters from a file if possible.
+
+    Provides graceful fallbacks: returns None when YAML support is missing
+    or the file does not exist. Emits a warning on read/parse failures.
+
+    Args:
+        config_file: Path to the YAML file.
+
+    Returns:
+        A dictionary of parameters if loaded, else None.
+    """
+    if yaml is None:
+        warnings.warn("YAML support not available; using defaults.")
+        return None
+    if not config_file.exists():
+        return None
+    try:
+        with open(config_file, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        return data if isinstance(data, dict) else None
+    except Exception as exc:  # pragma: no cover - robust error path
+        warnings.warn(f"Failed to read config file '{config_file}': {exc}")
+        return None
+
+
+def _apply_model_params_from_dict(config: "Config", params: dict[str, Any]) -> None:
+    """Apply model-related parameters to `config.model` from a dict.
+
+    Handles type conversion with simple casting functions and skips invalid
+    values with a warning, preserving existing defaults.
+
+    Args:
+        config: The configuration container to mutate.
+        params: Parameter dictionary loaded from YAML.
+    """
+    casts: dict[str, Callable[[Any], Any]] = {
+        # General knobs
+        "max_goals": int,
+        "draw_boost": float,
+        "use_time_decay": bool,
+        "time_decay_half_life_days": float,
+        "form_last_n": int,
+        # Outcome hyperparameters
+        "outcome_n_estimators": int,
+        "outcome_max_depth": int,
+        "outcome_learning_rate": float,
+        "outcome_subsample": float,
+        "outcome_reg_lambda": float,
+        "outcome_min_child_weight": float,
+        # Goal regressors hyperparameters
+        "goals_n_estimators": int,
+        "goals_max_depth": int,
+        "goals_learning_rate": float,
+        "goals_subsample": float,
+        "goals_reg_lambda": float,
+        "goals_min_child_weight": float,
+    }
+
+    for key, caster in casts.items():
+        if key in params:
+            try:
+                value = caster(params[key])
+                setattr(config.model, key, value)
+            except Exception as exc:  # pragma: no cover - robust error path
+                warnings.warn(f"Invalid value for '{key}': {exc}")
+
+# === Paths ===
 @dataclass
 class PathConfig:
-    """File system paths configuration."""
+    """File system paths configuration.
+
+    Creates and manages directories used by the project.
+    """
 
     # Data directories
     data_dir: Path = PROJECT_ROOT / "data"
@@ -30,7 +123,7 @@ class PathConfig:
     # Configuration files
     config_dir: Path = PROJECT_ROOT / "config"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Ensure all directories exist."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.models_dir.mkdir(parents=True, exist_ok=True)
@@ -51,7 +144,7 @@ class PathConfig:
         """Path to the away goals regressor model."""
         return self.models_dir / "away_goals_regressor.joblib"
 
-
+# === API Settings ===
 @dataclass
 class APIConfig:
     """API and data fetching configuration."""
@@ -61,7 +154,7 @@ class APIConfig:
     cache_ttl: int = 3600  # Cache time-to-live in seconds (1 hour)
     request_timeout: int = 10  # HTTP request timeout in seconds
 
-
+# === Model Hyperparameters ===
 # Defaults updated per final tuning run (2025-10-24)
 # See README Key Parameters for rationale.
 @dataclass
@@ -114,12 +207,10 @@ class ModelConfig:
     # Outcome probability post-processing
     # Blend with empirical prior from training window
 
-
     selected_features_file: str = "kept_features.yaml"
 
-
     @property
-    def goals_params(self) -> dict:
+    def goals_params(self) -> dict[str, int | float]:
         """Return XGBoost parameters for goal regressors as a dictionary."""
         return {
             "n_estimators": self.goals_n_estimators,
@@ -133,7 +224,7 @@ class ModelConfig:
         }
 
     @property
-    def outcome_params(self) -> dict:
+    def outcome_params(self) -> dict[str, int | float]:
         """Return XGBoost parameters for outcome classifier as a dictionary."""
         return {
             "n_estimators": self.outcome_n_estimators,
@@ -146,10 +237,14 @@ class ModelConfig:
             "n_jobs": self.n_jobs,
         }
 
-
+# === Configuration Container ===
 @dataclass
 class Config:
-    """Main configuration container."""
+    """Main configuration container.
+
+    Aggregates path, API, and model configuration sections and provides a
+    loader with YAML override support and a readable string summary.
+    """
 
     paths: PathConfig = field(default_factory=PathConfig)
     api: APIConfig = field(default_factory=APIConfig)
@@ -159,103 +254,36 @@ class Config:
     def load(cls, config_file: Path | None = None) -> "Config":
         """Load configuration from file if available.
 
+        Resolution order:
+        1. Explicit `config_file` argument when provided.
+        2. `KTP_CONFIG_FILE` environment variable when it points to a file.
+        3. Default `best_params.yaml` in the project config directory.
+
         Args:
-            config_file: Path to config YAML file. If None, uses default location.
+            config_file: Path to config YAML file. If None, uses default.
 
         Returns:
             Config instance with loaded or default values.
         """
         config = cls()
 
-        if config_file is None:
-            # Allow override via environment variable for tuning processes
-            env_cfg = os.getenv("KTP_CONFIG_FILE")
-            if env_cfg and Path(env_cfg).exists():
-                config_file = Path(env_cfg)
-            else:
-                config_file = config.paths.config_dir / "best_params.yaml"
+        # Choose file path
+        chosen_file = (
+            config_file
+            if config_file is not None
+            else _resolve_config_file(
+                config.paths, os.getenv("KTP_CONFIG_FILE")
+            )
+        )
 
-        # Try to load from YAML if available
-        if yaml is not None and config_file.exists():
-            try:
-                with open(config_file, encoding="utf-8") as f:
-                    params = yaml.safe_load(f)
-
-                if isinstance(params, dict):
-                    # Load model parameters if present
-                    if "max_goals" in params:
-                        config.model.max_goals = int(params["max_goals"])
-
-                    if "draw_boost" in params:
-                        config.model.draw_boost = float(params["draw_boost"])            
-
-
-
-                    # Time-decay weighting and feature knobs
-                    if "use_time_decay" in params:
-                        config.model.use_time_decay = bool(params["use_time_decay"])
-                    if "time_decay_half_life_days" in params:
-                        config.model.time_decay_half_life_days = float(
-                            params["time_decay_half_life_days"]
-                        )
-                    if "form_last_n" in params:
-                        config.model.form_last_n = int(params["form_last_n"])
-
-                    # Outcome classifier hyperparameters
-                    if "outcome_n_estimators" in params:
-                        config.model.outcome_n_estimators = int(
-                            params["outcome_n_estimators"]
-                        )
-                    if "outcome_max_depth" in params:
-                        config.model.outcome_max_depth = int(
-                            params["outcome_max_depth"]
-                        )
-                    if "outcome_learning_rate" in params:
-                        config.model.outcome_learning_rate = float(
-                            params["outcome_learning_rate"]
-                        )
-                    if "outcome_subsample" in params:
-                        config.model.outcome_subsample = float(
-                            params["outcome_subsample"]
-                        )
-                    if "outcome_reg_lambda" in params:
-                        config.model.outcome_reg_lambda = float(
-                            params["outcome_reg_lambda"]
-                        )
-                    if "outcome_min_child_weight" in params:
-                        config.model.outcome_min_child_weight = float(
-                            params["outcome_min_child_weight"]
-                        )
-
-                    # Goal regressors hyperparameters
-                    if "goals_n_estimators" in params:
-                        config.model.goals_n_estimators = int(
-                            params["goals_n_estimators"]
-                        )
-                    if "goals_max_depth" in params:
-                        config.model.goals_max_depth = int(params["goals_max_depth"])
-                    if "goals_learning_rate" in params:
-                        config.model.goals_learning_rate = float(
-                            params["goals_learning_rate"]
-                        )
-                    if "goals_subsample" in params:
-                        config.model.goals_subsample = float(params["goals_subsample"])
-                    if "goals_reg_lambda" in params:
-                        config.model.goals_reg_lambda = float(
-                            params["goals_reg_lambda"]
-                        )
-                    if "goals_min_child_weight" in params:
-                        config.model.goals_min_child_weight = float(
-                            params["goals_min_child_weight"]
-                        )
-
-
-            except Exception:
-                pass
+        # Load parameters and apply
+        params = _read_yaml_params(chosen_file)
+        if params:
+            _apply_model_params_from_dict(config, params)
 
         return config
 
-    def __str__(self) -> str:
+    def __str__(self) -> str:  # pragma: no cover - human-friendly output
         """String representation of configuration."""
         return (
             f"Config(\n"
@@ -267,7 +295,7 @@ class Config:
             f")"
         )
 
-
+# === Global Access ===
 # Global config instance
 _config: Config | None = None
 
@@ -284,7 +312,7 @@ def get_config() -> Config:
     return _config
 
 
-def reset_config():
+def reset_config() -> None:
     """Reset the global configuration (mainly for testing)."""
     global _config
     _config = None

@@ -1,287 +1,321 @@
-"""Evaluation metrics and plotting utilities for model assessment.
+"""Model evaluation metrics and utilities.
 
-This module provides functions to:
-- Calculate multiclass classification metrics (Brier score, log loss, RPS).
-- Assess model calibration (Expected Calibration Error, reliability diagrams).
-- Compute and visualize confusion matrices.
-- Analyze performance based on prediction confidence.
-- Simulate Kicktipp point scoring.
+This module provides:
+- Probability metrics: Brier score, log loss, Ranked Probability Score (RPS)
+- Calibration metrics: Expected Calibration Error (ECE)
+- Confusion matrix statistics
+- Confidence binning analysis
+- Kicktipp points calculation
+- Lightweight I/O helpers (JSON saving, directory creation)
+
+Public functions preserve the original API and semantics while the
+implementation is organized into logical classes and helpers.
 """
 
+# === Imports ===
 import json
 import os
+from typing import Dict, List, Tuple
 
 import numpy as np
 
-LABELS_ORDER: tuple[str, str, str] = ("H", "D", "A")
+# === Constants ===
+LABELS_ORDER: Tuple[str, str, str] = ("H", "D", "A")
 
 
+# === Utilities ===
+class MetricsUtils:
+    """Internal helpers for label mapping and probability normalization."""
+
+    @staticmethod
+    def label_mapping() -> Dict[str, int]:
+        """Return a consistent label-to-index mapping using LABELS_ORDER."""
+        return {lab: i for i, lab in enumerate(LABELS_ORDER)}
+
+    @staticmethod
+    def labels_to_indices(y_true: List[str]) -> np.ndarray:
+        """Map label strings to integer indices, -1 for unknown labels."""
+        mapping = MetricsUtils.label_mapping()
+        return np.array([mapping.get(label, -1) for label in y_true], dtype=int)
+
+    @staticmethod
+    def normalize_proba(proba: np.ndarray) -> np.ndarray:
+        """Clip and row-normalize predicted probabilities safely.
+
+        - Clips values to [1e-15, 1.0] to avoid log(0) and instability.
+        - Normalizes rows so each row sums to 1.
+        - Works with any number of classes; current code uses 3.
+        """
+        P = np.clip(np.asarray(proba, dtype=float), 1e-15, 1.0)
+        row_sums = P.sum(axis=1, keepdims=True)
+        # Prevent division by zero in pathological inputs
+        row_sums = np.where(row_sums <= 0.0, 1.0, row_sums)
+        return P / row_sums
+
+
+# === File I/O ===
 def ensure_dir(path: str) -> None:
     """Create a directory if it does not exist."""
     os.makedirs(path, exist_ok=True)
 
 
 def save_json(obj: dict, out_path: str) -> None:
-    """Save a dictionary to a JSON file."""
+    """Save a dictionary to a JSON file.
+
+    Ensures parent directory exists and writes UTF-8 JSON with indentation.
+    """
     ensure_dir(os.path.dirname(out_path) or ".")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2, ensure_ascii=False)
 
 
-def brier_score_multiclass(y_true: list[str], proba: np.ndarray) -> float:
-    """Calculate the Brier score for multiclass predictions.
+# === Probability Metrics ===
+class ProbabilityMetrics:
+    """Probability-based scoring rules for multiclass predictions."""
 
-    The Brier score measures the mean squared difference between predicted
-    probabilities and actual outcomes. A lower score indicates better calibration.
+    @staticmethod
+    def brier_score_multiclass(y_true: List[str], proba: np.ndarray) -> float:
+        """Mean squared error between predicted probabilities and one-hot truth.
 
-    Args:
-        y_true: A list of true labels ('H', 'D', 'A').
-        proba: A numpy array of shape (n_samples, 3) with predicted probabilities.
+        Returns NaN if no valid labels.
+        """
+        y = MetricsUtils.labels_to_indices(y_true)
+        P = MetricsUtils.normalize_proba(proba)
+        n = len(y)
+        Y = np.zeros_like(P)
+        valid = y >= 0
+        if n:
+            Y[np.arange(n)[valid], y[valid]] = 1.0
+        diffs = (P - Y)[valid]
+        if len(diffs) == 0:
+            return float("nan")
+        return float(np.mean(np.sum(diffs * diffs, axis=1)))
 
-    Returns:
-        The calculated Brier score.
-    """
-    mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
-    y = np.array([mapping.get(label, -1) for label in y_true], dtype=int)
-    P = np.clip(np.asarray(proba, dtype=float), 1e-15, 1.0)
-    P = P / P.sum(axis=1, keepdims=True)
-    n = len(y)
-    Y = np.zeros_like(P)
-    valid = y >= 0
-    if n:
-        Y[np.arange(n)[valid], y[valid]] = 1.0
-    diffs = (P - Y)[valid]
-    if len(diffs) == 0:
-        return float("nan")
-    return float(np.mean(np.sum(diffs * diffs, axis=1)))
+    @staticmethod
+    def log_loss_multiclass(y_true: List[str], proba: np.ndarray) -> float:
+        """Multiclass logarithmic loss.
+
+        Penalizes confident but wrong predictions more heavily; lower is better.
+        Returns NaN if no valid labels.
+        """
+        y = MetricsUtils.labels_to_indices(y_true)
+        P = MetricsUtils.normalize_proba(proba)
+        valid = y >= 0
+        idx = np.arange(len(y))[valid]
+        if len(idx) == 0:
+            return float("nan")
+        p_true = P[idx, y[valid]]
+        return float(-np.mean(np.log(np.clip(p_true, 1e-15, 1.0))))
+
+    @staticmethod
+    def ranked_probability_score_3c(y_true: List[str], proba: np.ndarray) -> float:
+        """Ranked Probability Score (RPS) for ordered 3-class outcomes.
+
+        Computes squared distance between cumulative distributions (pred vs true),
+        averaged over samples; lower is better. Returns NaN if no valid labels.
+        """
+        y = MetricsUtils.labels_to_indices(y_true)
+        P = MetricsUtils.normalize_proba(proba)
+        valid = y >= 0
+        if not np.any(valid):
+            return float("nan")
+        scores: List[float] = []
+        # Construct true CDF per sample from the integer class index
+        for i in np.where(valid)[0]:
+            cdf_pred = np.cumsum(P[i, :])
+            cdf_true = np.zeros(P.shape[1], dtype=float)
+            cdf_true[y[i] :] = 1.0
+            scores.append(float(np.sum((cdf_pred - cdf_true) ** 2) / 2.0))
+        return float(np.mean(scores))
 
 
-def log_loss_multiclass(y_true: list[str], proba: np.ndarray) -> float:
-    """Calculate the logarithmic loss for multiclass predictions.
+# === Calibration Metrics ===
+class CalibrationMetrics:
+    """Calibration assessment utilities (ECE and reliability-style bins)."""
 
-    Log loss penalizes confident but incorrect predictions more heavily.
-    A lower score is better.
+    @staticmethod
+    def expected_calibration_error(
+        y_true: List[str], proba: np.ndarray, n_bins: int = 10
+    ) -> Dict[str, float]:
+        """Compute per-class Expected Calibration Error (ECE).
 
-    Args:
-        y_true: A list of true labels ('H', 'D', 'A').
-        proba: A numpy array of shape (n_samples, 3) with predicted probabilities.
+        ECE is the weighted average over bins of |accuracy - confidence|.
+        """
+        y = MetricsUtils.labels_to_indices(y_true)
+        P = MetricsUtils.normalize_proba(proba)
+        ece: Dict[str, float] = {}
+        for class_index, label in enumerate(LABELS_ORDER):
+            probs = P[:, class_index]
+            bins = np.linspace(0.0, 1.0, n_bins + 1)
+            bin_ids = np.digitize(probs, bins, right=True)
+            acc_sum = 0.0
+            for b in range(1, n_bins + 1):
+                mask = bin_ids == b
+                if not np.any(mask):
+                    continue
+                conf = float(np.mean(probs[mask]))
+                acc = float(np.mean(y[mask] == class_index))
+                w = float(np.mean(mask))
+                acc_sum += w * abs(acc - conf)
+            ece[label] = float(acc_sum)
+        return ece
 
-    Returns:
-        The calculated log loss.
-    """
-    mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
-    y = np.array([mapping.get(label, -1) for label in y_true], dtype=int)
-    P = np.clip(np.asarray(proba, dtype=float), 1e-15, 1.0)
-    P = P / P.sum(axis=1, keepdims=True)
-    valid = y >= 0
-    idx = np.arange(len(y))[valid]
-    if len(idx) == 0:
-        return float("nan")
-    p_true = P[idx, y[valid]]
-    return float(-np.mean(np.log(np.clip(p_true, 1e-15, 1.0))))
+
+# === Confusion Matrix ===
+class ConfusionMetrics:
+    """Confusion matrix and derived statistics (accuracy, precision, recall)."""
+
+    @staticmethod
+    def _compute_matrix(y_true_idx: np.ndarray, y_pred_idx: np.ndarray) -> np.ndarray:
+        """Build a 3x3 confusion matrix from indexes for LABELS_ORDER."""
+        cm = np.zeros((len(LABELS_ORDER), len(LABELS_ORDER)), dtype=int)
+        for t, p in zip(y_true_idx, y_pred_idx):
+            if t >= 0 and p >= 0:
+                cm[t, p] += 1
+        return cm
+
+    @staticmethod
+    def confusion_matrix_stats(y_true: List[str], proba: np.ndarray) -> dict:
+        """Return confusion matrix, accuracy, and per-class precision/recall."""
+        y_idx = MetricsUtils.labels_to_indices(y_true)
+        P = MetricsUtils.normalize_proba(proba)
+        y_pred = np.argmax(P, axis=1)
+        valid = y_idx >= 0
+        y_true_v = y_idx[valid]
+        y_pred_v = y_pred[valid]
+        cm = ConfusionMetrics._compute_matrix(y_true_v, y_pred_v)
+        acc = float(np.mean(y_true_v == y_pred_v)) if len(y_true_v) else float("nan")
+        per_class: Dict[str, Dict[str, float]] = {}
+        for i, lab in enumerate(LABELS_ORDER):
+            tp = int(cm[i, i])
+            fp = int(np.sum(cm[:, i]) - tp)
+            fn = int(np.sum(cm[i, :]) - tp)
+            precision = float(tp / (tp + fp)) if (tp + fp) > 0 else float("nan")
+            recall = float(tp / (tp + fn)) if (tp + fn) > 0 else float("nan")
+            per_class[lab] = {"precision": precision, "recall": recall}
+        return {"matrix": cm.tolist(), "accuracy": acc, "per_class": per_class}
 
 
-def ranked_probability_score_3c(y_true: list[str], proba: np.ndarray) -> float:
-    """Calculate the Ranked Probability Score (RPS) for 3-class outcomes.
+# === Confidence Binning ===
+class ConfidenceAnalysis:
+    """Group performance by prediction confidence bins."""
 
-    RPS is a proper scoring rule that measures the difference between cumulative
-    distribution functions of predictions and outcomes. It is sensitive to distance;
-    predicting a home win when the result is a draw is better than predicting an away win.
-    A lower score is better.
+    @staticmethod
+    def bin_by_confidence(
+        conf: np.ndarray,
+        y_true: List[str],
+        proba: np.ndarray,
+        points: np.ndarray,
+        n_bins: int = 5,
+    ):
+        """Summarize average points and accuracy across confidence bins.
 
-    Args:
-        y_true: A list of true labels ('H', 'D', 'A').
-        proba: A numpy array of shape (n_samples, 3) with predicted probabilities.
+        Returns a pandas DataFrame with per-bin statistics.
+        """
+        import pandas as pd
 
-    Returns:
-        The calculated Ranked Probability Score.
-    """
-    mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
-    y = np.array([mapping.get(label, -1) for label in y_true], dtype=int)
-    P = np.clip(np.asarray(proba, dtype=float), 1e-15, 1.0)
-    P = P / P.sum(axis=1, keepdims=True)
-    valid = y >= 0
-    if not np.any(valid):
-        return float("nan")
-    scores = []
-    for i in np.where(valid)[0]:
-        cdf_pred = np.cumsum(P[i, :])
-        cdf_true = np.zeros(3)
-        cdf_true[y[i] :] = 1.0
-        scores.append(np.sum((cdf_pred - cdf_true) ** 2) / 2.0)
-    return float(np.mean(scores))
+        P = MetricsUtils.normalize_proba(proba)
+        y_idx = MetricsUtils.labels_to_indices(y_true)
+        conf = np.asarray(conf, dtype=float)
+        bins = np.linspace(0.0, 1.0, n_bins + 1)
+        bin_ids = np.clip(np.digitize(conf, bins, right=True), 1, n_bins)
+        rows = []
+        for b in range(1, n_bins + 1):
+            mask = bin_ids == b
+            count = int(np.sum(mask))
+            if count == 0:
+                rows.append(
+                    {
+                        "bin": f"[{bins[b - 1]:.2f},{bins[b]:.2f})",
+                        "count": 0,
+                        "avg_points": float("nan"),
+                        "accuracy": float("nan"),
+                        "avg_confidence": float("nan"),
+                    }
+                )
+            else:
+                avg_pts = float(np.mean(points[mask]))
+                acc = float(np.mean(np.argmax(P[mask], axis=1) == y_idx[mask]))
+                avg_conf = float(np.mean(conf[mask]))
+                rows.append(
+                    {
+                        "bin": f"[{bins[b - 1]:.2f},{bins[b]:.2f})",
+                        "count": count,
+                        "avg_points": avg_pts,
+                        "accuracy": acc,
+                        "avg_confidence": avg_conf,
+                    }
+                )
+        return pd.DataFrame(rows)
+
+
+# === Kicktipp Points ===
+class KicktippScoring:
+    """Scoring rules for Kicktipp predicted vs actual scorelines."""
+
+    @staticmethod
+    def compute_points(pred_home, pred_away, act_home, act_away):
+        """Calculate points: 4 exact, 3 correct diff, 2 correct outcome, 0 else."""
+        ph = np.asarray(list(pred_home), dtype=int)
+        pa = np.asarray(list(pred_away), dtype=int)
+        ah = np.asarray(list(act_home), dtype=int)
+        aa = np.asarray(list(act_away), dtype=int)
+        points = np.zeros_like(ph, dtype=int)
+        exact = (ph == ah) & (pa == aa)
+        points[exact] = 4
+        not_exact = ~exact
+        gd_ok = ((ph - pa) == (ah - aa)) & not_exact
+        points[gd_ok] = 3
+        rem = ~(exact | gd_ok)
+        pred_outcome = np.where(ph > pa, "H", np.where(pa > ph, "A", "D"))
+        act_outcome = np.where(ah > aa, "H", np.where(aa > ah, "A", "D"))
+        points[(pred_outcome == act_outcome) & rem] = 2
+        return points
+
+
+# === Backward-Compatible Public API (wrappers) ===
+def brier_score_multiclass(y_true: List[str], proba: np.ndarray) -> float:
+    """Wrapper for ProbabilityMetrics.brier_score_multiclass."""
+    return ProbabilityMetrics.brier_score_multiclass(y_true, proba)
+
+
+def log_loss_multiclass(y_true: List[str], proba: np.ndarray) -> float:
+    """Wrapper for ProbabilityMetrics.log_loss_multiclass."""
+    return ProbabilityMetrics.log_loss_multiclass(y_true, proba)
+
+
+def ranked_probability_score_3c(y_true: List[str], proba: np.ndarray) -> float:
+    """Wrapper for ProbabilityMetrics.ranked_probability_score_3c."""
+    return ProbabilityMetrics.ranked_probability_score_3c(y_true, proba)
 
 
 def expected_calibration_error(
-    y_true: list[str], proba: np.ndarray, n_bins: int = 10
-) -> dict[str, float]:
-    """Calculate the Expected Calibration Error (ECE).
+    y_true: List[str], proba: np.ndarray, n_bins: int = 10
+) -> Dict[str, float]:
+    """Wrapper for CalibrationMetrics.expected_calibration_error."""
+    return CalibrationMetrics.expected_calibration_error(y_true, proba, n_bins)
 
-    ECE measures the difference between a model's confidence and its accuracy.
-    It is computed by binning predictions by confidence and finding the
-    weighted average of the absolute difference between accuracy and confidence
-    in each bin. A lower ECE indicates better calibration.
 
-    Args:
-        y_true: A list of true labels ('H', 'D', 'A').
-        proba: A numpy array of shape (n_samples, 3) with predicted probabilities.
-        n_bins: The number of confidence bins to use.
-
-    Returns:
-        A dictionary mapping each class label to its ECE value.
-    """
-    mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
-    y = np.array([mapping.get(label, -1) for label in y_true], dtype=int)
-    P = np.clip(np.asarray(proba, dtype=float), 1e-15, 1.0)
-    P = P / P.sum(axis=1, keepdims=True)
-    ece: dict[str, float] = {}
-    for li, lab in enumerate(LABELS_ORDER):
-        probs = P[:, li]
-        bins = np.linspace(0.0, 1.0, n_bins + 1)
-        bin_ids = np.digitize(probs, bins, right=True)
-        acc_sum = 0.0
-        for b in range(1, n_bins + 1):
-            mask = bin_ids == b
-            if not np.any(mask):
-                continue
-            conf = np.mean(probs[mask])
-            acc = float(np.mean(y[mask] == li))
-            w = np.mean(mask)
-            acc_sum += w * abs(acc - conf)
-        ece[lab] = float(acc_sum)
-    return ece
-
-    
-def confusion_matrix_stats(y_true: list[str], proba: np.ndarray) -> dict:
-    """Calculate a confusion matrix and related statistics.
-
-    Args:
-        y_true: A list of true labels ('H', 'D', 'A').
-        proba: A numpy array of shape (n_samples, 3) with predicted probabilities.
-
-    Returns:
-        A dictionary containing the confusion matrix, overall accuracy, and
-        per-class precision and recall.
-    """
-    mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
-    y_idx = np.array([mapping.get(lbl, -1) for lbl in y_true], dtype=int)
-    P = np.clip(np.asarray(proba, dtype=float), 1e-15, 1.0)
-    P = P / P.sum(axis=1, keepdims=True)
-    y_pred = np.argmax(P, axis=1)
-    valid = y_idx >= 0
-    y_true_v = y_idx[valid]
-    y_pred_v = y_pred[valid]
-    cm = np.zeros((3, 3), dtype=int)
-    for t, p in zip(y_true_v, y_pred_v):
-        cm[t, p] += 1
-    acc = float(np.mean(y_true_v == y_pred_v)) if len(y_true_v) else float("nan")
-    per_class: dict[str, dict[str, float]] = {}
-    for i, lab in enumerate(LABELS_ORDER):
-        tp = cm[i, i]
-        fp = int(np.sum(cm[:, i]) - tp)
-        fn = int(np.sum(cm[i, :]) - tp)
-        precision = tp / (tp + fp) if (tp + fp) > 0 else float("nan")
-        recall = tp / (tp + fn) if (tp + fn) > 0 else float("nan")
-        per_class[lab] = {"precision": float(precision), "recall": float(recall)}
-    return {"matrix": cm.tolist(), "accuracy": acc, "per_class": per_class}
+def confusion_matrix_stats(y_true: List[str], proba: np.ndarray) -> dict:
+    """Wrapper for ConfusionMetrics.confusion_matrix_stats."""
+    return ConfusionMetrics.confusion_matrix_stats(y_true, proba)
 
 
 def bin_by_confidence(
     conf: np.ndarray,
-    y_true: list[str],
+    y_true: List[str],
     proba: np.ndarray,
     points: np.ndarray,
     n_bins: int = 5,
 ):
-    """Group match data into confidence-based bins.
-
-    This function is useful for analyzing model performance at different
-    levels of prediction confidence.
-
-    Args:
-        conf: An array of confidence scores for each prediction.
-        y_true: A list of true labels.
-        proba: A numpy array of predicted probabilities.
-        points: An array of points awarded for each match.
-        n_bins: The number of confidence bins.
-
-    Returns:
-        A pandas DataFrame summarizing performance metrics for each bin.
-    """
-    import pandas as pd
-
-    mapping = {lab: i for i, lab in enumerate(LABELS_ORDER)}
-    P = np.clip(np.asarray(proba, dtype=float), 1e-15, 1.0)
-    P = P / P.sum(axis=1, keepdims=True)
-    y_idx = np.array([mapping.get(lbl, -1) for lbl in y_true], dtype=int)
-    conf = np.asarray(conf, dtype=float)
-    bins = np.linspace(0.0, 1.0, n_bins + 1)
-    bin_ids = np.clip(np.digitize(conf, bins, right=True), 1, n_bins)
-    rows = []
-    for b in range(1, n_bins + 1):
-        mask = bin_ids == b
-        count = int(np.sum(mask))
-        if count == 0:
-            rows.append(
-                {
-                    "bin": f"[{bins[b - 1]:.2f},{bins[b]:.2f})",
-                    "count": 0,
-                    "avg_points": float("nan"),
-                    "accuracy": float("nan"),
-                    "avg_confidence": float("nan"),
-                }
-            )
-        else:
-            avg_pts = float(np.mean(points[mask]))
-            acc = float(np.mean(np.argmax(P[mask], axis=1) == y_idx[mask]))
-            avg_conf = float(np.mean(conf[mask]))
-            rows.append(
-                {
-                    "bin": f"[{bins[b - 1]:.2f},{bins[b]:.2f})",
-                    "count": count,
-                    "avg_points": avg_pts,
-                    "accuracy": acc,
-                    "avg_confidence": avg_conf,
-                }
-            )
-    return pd.DataFrame(rows)
+    """Wrapper for ConfidenceAnalysis.bin_by_confidence."""
+    return ConfidenceAnalysis.bin_by_confidence(conf, y_true, proba, points, n_bins)
 
 
 def compute_points(pred_home, pred_away, act_home, act_away):
-    """Calculate Kicktipp points for predicted versus actual scores.
-
-    The scoring rules are:
-    - 4 points: Exact scoreline match.
-    - 3 points: Correct goal difference.
-    - 2 points: Correct outcome (win/draw/loss).
-    - 0 points: Incorrect outcome.
-
-    Args:
-        pred_home: Predicted home goals.
-        pred_away: Predicted away goals.
-        act_home: Actual home goals.
-        act_away: Actual away goals.
-
-    Returns:
-        A numpy array of points for each match.
-    """
-    import numpy as np
-
-    ph = np.asarray(list(pred_home), dtype=int)
-    pa = np.asarray(list(pred_away), dtype=int)
-    ah = np.asarray(list(act_home), dtype=int)
-    aa = np.asarray(list(act_away), dtype=int)
-    points = np.zeros_like(ph, dtype=int)
-    exact = (ph == ah) & (pa == aa)
-    points[exact] = 4
-    not_exact = ~exact
-    gd_ok = ((ph - pa) == (ah - aa)) & not_exact
-    points[gd_ok] = 3
-    rem = ~(exact | gd_ok)
-    pred_outcome = np.where(ph > pa, "H", np.where(pa > ph, "A", "D"))
-    act_outcome = np.where(ah > aa, "H", np.where(aa > ah, "A", "D"))
-    points[(pred_outcome == act_outcome) & rem] = 2
-    return points
+    """Wrapper for KicktippScoring.compute_points."""
+    return KicktippScoring.compute_points(pred_home, pred_away, act_home, act_away)
 
 
-# expected_points_from_grid helper removed; EP scoreline logic is no longer used
+# NOTE:
+# - expected_points_from_grid helper previously removed; EP scoreline logic not used.

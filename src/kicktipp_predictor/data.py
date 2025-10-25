@@ -4,6 +4,7 @@ This module combines data fetching from OpenLigaDB API with
 comprehensive feature engineering for match prediction.
 """
 
+# === Imports ===
 import os
 import pickle
 import time
@@ -23,7 +24,11 @@ except Exception:  # pragma: no cover - optional dependency
 
 
 class DataLoader:
-    """Fetches match data and creates features for prediction."""
+    """Fetches match data and creates features for prediction.
+
+    Exposes a public API used by CLI and predictor modules while hiding
+    implementation details behind private helper methods.
+    """
 
     def __init__(self):
         """Initialize with configuration."""
@@ -33,6 +38,42 @@ class DataLoader:
         self.league_code = self.config.api.league_code
         self.cache_ttl = self.config.api.cache_ttl
         self.timeout = self.config.api.request_timeout
+
+    # =================================================================
+    # Internal helpers (caching & requests)
+    # =================================================================
+    def _is_cache_valid(self, cache_file: str) -> bool:
+        """Return True if cache file exists and is within TTL."""
+        try:
+            age = time.time() - os.path.getmtime(cache_file)
+            return age < self.cache_ttl
+        except Exception:
+            return False
+
+    def _load_cached_matches(self, cache_file: str) -> list[dict] | None:
+        """Load cached matches list from pickle file, or None on failure."""
+        try:
+            with open(cache_file, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            return None
+
+    def _save_cached_matches(self, cache_file: str, matches: list[dict]) -> None:
+        """Persist matches list to pickle cache, ignoring write errors."""
+        try:
+            with open(cache_file, "wb") as f:
+                pickle.dump(matches, f)
+        except Exception:
+            pass
+
+    def _request_matches(self, url: str) -> list[dict]:
+        """Perform HTTP GET and return parsed JSON list of matches.
+
+        Errors propagate to caller for context-appropriate handling.
+        """
+        response = requests.get(url, timeout=self.timeout)
+        response.raise_for_status()
+        return response.json()
 
     # =================================================================
     # DATA FETCHING METHODS
@@ -48,7 +89,8 @@ class DataLoader:
         """Fetch all matches for a given season.
 
         Args:
-            season: Season year (e.g., 2024 for 2024/2025). Defaults to current season.
+            season: Season year (e.g., 2024 for 2024/2025).
+                Defaults to current season.
 
         Returns:
             List of match dictionaries.
@@ -58,35 +100,23 @@ class DataLoader:
 
         cache_file = os.path.join(self.cache_dir, f"matches_{season}.pkl")
 
-        # Check cache
-        if os.path.exists(cache_file):
-            cache_age = time.time() - os.path.getmtime(cache_file)
-            if cache_age < self.cache_ttl:
-                with open(cache_file, "rb") as f:
-                    return pickle.load(f)
+        # Use valid cache when possible
+        if os.path.exists(cache_file) and self._is_cache_valid(cache_file):
+            cached = self._load_cached_matches(cache_file)
+            if cached is not None:
+                return cached
 
         url = f"{self.base_url}/getmatchdata/{self.league_code}/{season}"
-
         try:
-            response = requests.get(url, timeout=self.timeout)
-            response.raise_for_status()
-            matches_raw = response.json()
-
+            matches_raw = self._request_matches(url)
             matches = self._parse_matches(matches_raw)
-
-            # Cache the results
-            with open(cache_file, "wb") as f:
-                pickle.dump(matches, f)
-
+            self._save_cached_matches(cache_file, matches)
             return matches
-
         except Exception as e:
             print(f"Error fetching matches for season {season}: {e}")
-            # Try to return cached data even if expired
-            if os.path.exists(cache_file):
-                with open(cache_file, "rb") as f:
-                    return pickle.load(f)
-            return []
+            # Fallback to any cached data even if expired
+            cached = self._load_cached_matches(cache_file)
+            return cached if cached is not None else []
 
     def fetch_matchday(self, matchday: int, season: int | None = None) -> list[dict]:
         """Fetch matches for a specific matchday.
@@ -101,15 +131,12 @@ class DataLoader:
         if season is None:
             season = self.get_current_season()
 
-        url = f"{self.base_url}/getmatchdata/{self.league_code}/{season}/{matchday}"
-
+        url = (
+            f"{self.base_url}/getmatchdata/{self.league_code}/{season}/{matchday}"
+        )
         try:
-            response = requests.get(url, timeout=self.timeout)
-            response.raise_for_status()
-            matches_raw = response.json()
-
+            matches_raw = self._request_matches(url)
             return self._parse_matches(matches_raw)
-
         except Exception as e:
             print(f"Error fetching matchday {matchday}: {e}")
             return []
@@ -163,7 +190,11 @@ class DataLoader:
         return all_matches
 
     def _parse_matches(self, matches_raw: list[dict]) -> list[dict]:
-        """Parse raw API response into standardized match dictionaries."""
+        """Parse raw API response into standardized match dictionaries.
+
+        Converts OpenLigaDB response objects into a stable schema used by
+        downstream feature engineering.
+        """
         matches = []
 
         for match in matches_raw:
@@ -198,9 +229,8 @@ class DataLoader:
                     match_dict["away_score"] = None
 
                 matches.append(match_dict)
-
-            except Exception as e:
-                print(f"Error parsing match: {e}")
+            except Exception:
+                # Skip malformed entries but continue parsing others
                 continue
 
         return matches
@@ -209,8 +239,61 @@ class DataLoader:
     # FEATURE ENGINEERING METHODS
     # =================================================================
 
+    def _merge_history_features(
+        self,
+        base: pd.DataFrame,
+        long_df: pd.DataFrame,
+        hist_cols: list[str],
+    ) -> pd.DataFrame:
+        """Merge home/away history features into match-level frame.
+
+        Args:
+            base: Match-level DataFrame of finished games.
+            long_df: Long-format per-team history features.
+            hist_cols: Columns from long_df to merge for each side.
+
+        Returns:
+            Match-level DataFrame with prefixed home/away history columns.
+        """
+        right_cols = ["match_id", "team"] + hist_cols
+        home_merge = long_df[right_cols].rename(columns={"team": "home_team"})
+        away_merge = long_df[right_cols].rename(columns={"team": "away_team"})
+
+        features_df = base.copy()
+        # Merge home team features
+        features_df = features_df.merge(
+            home_merge.add_prefix("home_"),
+            left_on=["match_id", "home_team"],
+            right_on=["home_match_id", "home_home_team"],
+            how="left",
+        )
+        features_df.drop(columns=["home_match_id"], inplace=True)
+
+        # Merge away team features
+        features_df = features_df.merge(
+            away_merge.add_prefix("away_"),
+            left_on=["match_id", "away_team"],
+            right_on=["away_match_id", "away_away_team"],
+            how="left",
+        )
+        features_df.drop(columns=["away_match_id"], inplace=True)
+
+        # Normalize column names for match counts
+        if "home_matches_played_prior" in features_df.columns:
+            features_df.rename(
+                columns={"home_matches_played_prior": "home_matches_played"},
+                inplace=True,
+            )
+        if "away_matches_played_prior" in features_df.columns:
+            features_df.rename(
+                columns={"away_matches_played_prior": "away_matches_played"},
+                inplace=True,
+            )
+
+        return features_df
+
     def create_features_from_matches(self, matches: list[dict]) -> pd.DataFrame:
-        """Create feature dataset from match data using vectorized pandas operations.
+        """Create feature dataset from match data using vectorized pandas ops.
 
         Args:
             matches: List of match dictionaries.
@@ -249,7 +332,7 @@ class DataLoader:
         self._current_table = self._calculate_table(matches)
         long_df = self._compute_team_history_features(long_df)
 
-        # Assemble match-level features by merging home/away history rows for the same match_id
+        # Assemble match-level features by merging home/away history rows
         hist_cols = [
             "avg_goals_for",
             "avg_goals_against",
@@ -278,38 +361,37 @@ class DataLoader:
             # matches played prior (leakage-safe count)
             "matches_played_prior",
         ]
-        right_cols = ["match_id", "team"] + hist_cols
-        home_merge = long_df[right_cols].rename(columns={"team": "home_team"})
-        away_merge = long_df[right_cols].rename(columns={"team": "away_team"})
+        features_df = self._merge_history_features(base, long_df, hist_cols)
 
-        features_df = base.copy()
-        # Merge home team features
-        features_df = features_df.merge(
-            home_merge.add_prefix("home_"),
-            left_on=["match_id", "home_team"],
-            right_on=["home_match_id", "home_home_team"],
-            how="left",
-        )
-        # Merge away team features
-        features_df = features_df.merge(
-            away_merge.add_prefix("away_"),
-            left_on=["match_id", "away_team"],
-            right_on=["away_match_id", "away_away_team"],
-            how="left",
-        )
-
-        # Normalize column names for match counts
-        if "home_matches_played_prior" in features_df.columns:
-            features_df.rename(
-                columns={"home_matches_played_prior": "home_matches_played"},
+        # Elo ratings joined per match for normalization
+        try:
+            match_elos, _ = self._compute_elos_from_matches(matches)
+            features_df = features_df.merge(
+                match_elos, left_on="match_id", right_on="match_id", how="left"
+            )
+            # Derived Elo difference (home - away)
+            features_df["elo_diff"] = (
+                features_df.get("home_elo", 0.0) - features_df.get("away_elo", 0.0)
+            )
+            # Normalize elo_diff by average matches played prior
+            home_mp = features_df.get("home_matches_played", pd.Series(0)).fillna(0)
+            away_mp = features_df.get("away_matches_played", pd.Series(0)).fillna(0)
+            avg_matches = (home_mp + away_mp) / 2.0
+            scale_factor = 1.0 + avg_matches * 0.01
+            features_df["normalized_elo_diff"] = (
+                features_df["elo_diff"].fillna(0).astype(float) / scale_factor
+            )
+            # Transient Elo features: created briefly and then removed to prevent leakage/bias
+            features_df.drop(
+                columns=["home_elo", "away_elo", "elo_diff"],
+                errors="ignore",
                 inplace=True,
             )
-        if "away_matches_played_prior" in features_df.columns:
-            features_df.rename(
-                columns={"away_matches_played_prior": "away_matches_played"},
-                inplace=True,
-            )
-        # Compute simple derived differences
+        except Exception:
+            # Elo is optional; continue gracefully
+            pass
+
+        # Derived form diffs
         features_df["abs_weighted_form_points_diff"] = (
             features_df.get("home_form_points_weighted_by_opponent_rank", 0)
             - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
@@ -317,127 +399,6 @@ class DataLoader:
         features_df["weighted_form_points_difference"] = features_df.get(
             "home_form_points_weighted_by_opponent_rank", 0
         ) - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
-        # Removed dead momentum diff features: abs_momentum_score_diff, momentum_score_difference
-        # Removed venue delta features: venue_points_delta, venue_goals_delta, venue_conceded_delta
-
-
-        try:
-            elo_match_df, elo_long_df = self._compute_elos_from_matches(matches)
-        except Exception:
-            elo_match_df, elo_long_df = None, None
-        if elo_match_df is not None and not elo_match_df.empty:
-            try:
-                features_df = features_df.merge(
-                    elo_match_df[["match_id", "home_elo", "away_elo"]],
-                    on="match_id",
-                    how="left",
-                )
-                # Derived Elo difference (home - away)
-                features_df["elo_diff"] = features_df.get(
-                    "home_elo", 0.0
-                ) - features_df.get("away_elo", 0.0)
-                # Compute normalized Elo diff (scaled by matches played) and drop raw Elo
-                home_mp = (
-                    features_df.get(
-                        "home_matches_played",
-                        features_df.get("home_matches_played_prior", 0),
-                    )
-                    .fillna(0)
-                    .astype(float)
-                )
-                away_mp = (
-                    features_df.get(
-                        "away_matches_played",
-                        features_df.get("away_matches_played_prior", 0),
-                    )
-                    .fillna(0)
-                    .astype(float)
-                )
-                avg_matches = (home_mp + away_mp) / 2.0
-                scale_factor = 1.0 + avg_matches * 0.01
-                features_df["normalized_elo_diff"] = (
-                    features_df["elo_diff"].fillna(0).astype(float) / scale_factor
-                )
-                # Transient Elo features: home_elo/away_elo/elo_diff are created briefly and dropped to avoid leakage
-                features_df.drop(
-                    columns=["home_elo", "away_elo", "elo_diff"],
-                    errors="ignore",
-                    inplace=True,
-                )
-                # Scaled tanh tamer for Elo difference (C=100)
-                if "normalized_elo_diff" in features_df.columns:
-                    with np.errstate(over="ignore"):
-                        features_df["tanh_tamed_elo"] = np.tanh(
-                            features_df["normalized_elo_diff"].astype(float) / 100.0
-                        )
-            except Exception:
-                pass
-
-        # Compute normalized Elo diff and drop raw Elo columns
-        if "elo_diff" in features_df.columns:
-            home_mp = (
-                features_df.get(
-                    "home_matches_played",
-                    features_df.get("home_matches_played_prior", 0),
-                )
-                .fillna(0)
-                .astype(float)
-            )
-            away_mp = (
-                features_df.get(
-                    "away_matches_played",
-                    features_df.get("away_matches_played_prior", 0),
-                )
-                .fillna(0)
-                .astype(float)
-            )
-            avg_matches = (home_mp + away_mp) / 2.0
-            scale_factor = 1.0 + avg_matches * 0.01
-            features_df["normalized_elo_diff"] = (
-                features_df["elo_diff"].fillna(0).astype(float) / scale_factor
-            )
-            # Transient Elo features: created briefly and then removed to prevent leakage/bias
-            features_df.drop(
-                columns=["home_elo", "away_elo", "elo_diff"],
-                errors="ignore",
-                inplace=True,
-            )
-            # Scaled tanh tamer for Elo difference (C=100)
-            if "normalized_elo_diff" in features_df.columns:
-                with np.errstate(over="ignore"):
-                    features_df["tanh_tamed_elo"] = np.tanh(
-                        features_df["normalized_elo_diff"].astype(float) / 100.0
-                    )
-
-        # Compute normalized Elo diff and drop raw Elo columns
-        if "elo_diff" in features_df.columns:
-            home_mp = (
-                features_df.get(
-                    "home_matches_played",
-                    features_df.get("home_matches_played_prior", 0),
-                )
-                .fillna(0)
-                .astype(float)
-            )
-            away_mp = (
-                features_df.get(
-                    "away_matches_played",
-                    features_df.get("away_matches_played_prior", 0),
-                )
-                .fillna(0)
-                .astype(float)
-            )
-            avg_matches = (home_mp + away_mp) / 2.0
-            scale_factor = 1.0 + avg_matches * 0.01
-            features_df["normalized_elo_diff"] = (
-                features_df["elo_diff"].fillna(0).astype(float) / scale_factor
-            )
-            # Transient Elo features: created briefly and then removed to prevent leakage/bias
-            features_df.drop(
-                columns=["home_elo", "away_elo", "elo_diff"],
-                errors="ignore",
-                inplace=True,
-            )
 
         # Targets
         features_df["goal_difference"] = (
@@ -449,11 +410,7 @@ class DataLoader:
             np.where(features_df["goal_difference"] < 0, "A", "D"),
         )
 
-        # Optionally reduce to selected features if config/<selected_features_file> exists
-        features_df = self._apply_selected_features(features_df)
-
-        # Ensure deterministic column order (optional)
-        # Optionally reduce to selected features if config/<selected_features_file> exists
+        # Optionally reduce to selected features if selection exists
         features_df = self._apply_selected_features(features_df)
 
         return features_df
@@ -461,7 +418,7 @@ class DataLoader:
     def create_prediction_features(
         self, upcoming_matches: list[dict], historical_matches: list[dict]
     ) -> pd.DataFrame:
-        """Create features for upcoming matches to predict using vectorized history merges.
+        """Create features for upcoming matches using vectorized history merges.
 
         Args:
             upcoming_matches: List of upcoming match dictionaries.
@@ -527,7 +484,6 @@ class DataLoader:
 
         # Home side merge
         home_hist = hist_merge.rename(columns={"team": "home_team"})
-        # merge_asof requires the right keys (on=date) to be globally sorted by 'date'
         home_hist = home_hist.sort_values(["date"])
         features_df = pd.merge_asof(
             upcoming.sort_values("date"),
@@ -543,7 +499,25 @@ class DataLoader:
             if col in features_df.columns:
                 features_df.rename(columns={col: f"home_{col}"}, inplace=True)
 
-        # Normalize column names for match counts (home)
+        # Away side merge
+        away_hist = hist_merge.rename(columns={"team": "away_team"})
+        away_hist = away_hist.sort_values(["date"])
+        features_df = pd.merge_asof(
+            features_df.sort_values("date"),
+            away_hist,
+            left_on="date",
+            right_on="date",
+            left_by="away_team",
+            right_by="away_team",
+            direction="backward",
+        )
+        # Prefix away columns
+        for col in hist_cols:
+            colname = col
+            if colname in features_df.columns:
+                features_df.rename(columns={colname: f"away_{colname}"}, inplace=True)
+
+        # Normalize column names for match counts
         if "home_matches_played_prior" in features_df.columns:
             features_df.rename(
                 columns={"home_matches_played_prior": "home_matches_played"},
@@ -587,9 +561,10 @@ class DataLoader:
                     right_by="away_team",
                     direction="backward",
                 )
-                features_df["elo_diff"] = features_df.get(
-                    "home_elo", 0.0
-                ) - features_df.get("away_elo", 0.0)
+                features_df["elo_diff"] = (
+                    features_df.get("home_elo", 0.0)
+                    - features_df.get("away_elo", 0.0)
+                )
             except Exception:
                 pass
 
@@ -601,15 +576,13 @@ class DataLoader:
         features_df["weighted_form_points_difference"] = features_df.get(
             "home_form_points_weighted_by_opponent_rank", 0
         ) - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
-        # Removed dead momentum diff features: abs_momentum_score_diff, momentum_score_difference
-        # Removed venue delta features: venue_points_delta, venue_goals_delta, venue_conceded_delta
 
         return features_df
 
     def _apply_selected_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """If a selected features list exists, filter DataFrame to essential + selected.
+        """Filter DataFrame to essential + selected if selection list exists.
 
-        This keeps ID/meta/target columns alongside the selected feature names.
+        Keeps ID/meta/target columns alongside the selected feature names.
         If the selection file is absent or unreadable, returns df unchanged.
         """
         try:
@@ -631,10 +604,10 @@ class DataLoader:
                     if isinstance(val, list):
                         selected = [str(c) for c in val]
                     elif isinstance(val, str):
-                        # Support newline-separated string under key
-                        selected = [s.strip() for s in val.splitlines() if s.strip()]
+                        selected = [
+                            s.strip() for s in val.splitlines() if s.strip()
+                        ]
                 elif isinstance(loaded, str):
-                    # Support plain newline-separated string in YAML
                     selected = [s.strip() for s in loaded.splitlines() if s.strip()]
             else:
                 # Fallback: try .txt with one name per line
@@ -662,7 +635,6 @@ class DataLoader:
                 "result",
             }
             keep_cols = [c for c in df.columns if (c in essential) or (c in selected)]
-            # Ensure we keep at least essentials
             if not keep_cols:
                 return df
             return df[keep_cols].copy()
@@ -672,7 +644,8 @@ class DataLoader:
     def _build_team_long_df(self, matches: list[dict]) -> pd.DataFrame:
         """Build a long-format team-match DataFrame from match dicts.
 
-        Each finished match contributes two rows (home and away) with goals_for/against.
+        Each finished match contributes two rows (home and away) with
+        goals_for/goals_against.
         """
         rows = []
         for m in matches:
@@ -718,7 +691,7 @@ class DataLoader:
 
         long_df = pd.DataFrame(rows)
         long_df["goal_diff"] = long_df["goals_for"] - long_df["goals_against"]
-        # Points per match: 3 win, 1 draw, 0 loss (from perspective of team)
+        # Points per match: 3 win, 1 draw, 0 loss
         long_df["points"] = np.select(
             [
                 long_df["goals_for"] > long_df["goals_against"],
@@ -732,11 +705,13 @@ class DataLoader:
     def _compute_elos_from_matches(
         self, matches: list[dict], K: float | int = 20, home_adv: float | int = 90
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Compute Elo ratings chronologically and return per-match and per-team timeseries.
+        """Compute Elo ratings chronologically.
 
         Returns:
-            match_elos: DataFrame with columns ['match_id','home_elo','away_elo'] (pre-match ratings)
-            elo_long:  DataFrame with columns ['team','date','elo'] giving pre-match Elo per team per match
+            match_elos: DataFrame with columns ['match_id','home_elo','away_elo']
+                (pre-match ratings)
+            elo_long: DataFrame with columns ['team','date','elo'] giving
+                pre-match Elo per team per match
         """
         if not matches:
             return pd.DataFrame(), pd.DataFrame()
@@ -783,7 +758,8 @@ class DataLoader:
     def _compute_team_history_features(self, long_df: pd.DataFrame) -> pd.DataFrame:
         """Compute leakage-safe per-team expanding/rolling and momentum features.
 
-        Assumes long_df has columns: ['match_id','date','team','goals_for','goals_against','goal_diff','points']
+        Assumes long_df has columns:
+        ['match_id','date','team','goals_for','goals_against','goal_diff','points']
         """
         if long_df.empty:
             return long_df
@@ -820,16 +796,15 @@ class DataLoader:
         draw_prior = (
             grp["goals_for"].shift(1) == grp["goals_against"].shift(1)
         ).astype(float)
-        loss_prior = (grp["goals_for"].shift(1) < grp["goals_against"].shift(1)).astype(
-            float
-        )
+        loss_prior = (
+            grp["goals_for"].shift(1) < grp["goals_against"].shift(1)
+        ).astype(float)
 
         # Strength-of-Schedule: weight prior points by opponent rank
         try:
             table = getattr(self, "_current_table", {}) or {}
         except Exception:
             table = {}
-        # Map opponent rank (position) from current table; fallback to 10 if unknown
         opponent_rank = long_df.get(
             "opponent_team", pd.Series(index=long_df.index)
         ).map(lambda t: (table.get(t, {}) or {}).get("position", np.nan))
@@ -877,23 +852,22 @@ class DataLoader:
         long_df["form_goals_conceded"] = ga_roll
         long_df["form_goal_diff"] = gf_roll - ga_roll
         long_df["form_avg_goals_scored"] = gf_roll / np.minimum(N, grp.cumcount() + 1)
-        long_df["form_avg_goals_conceded"] = ga_roll / np.minimum(N, grp.cumcount() + 1)
+        long_df["form_avg_goals_conceded"] = ga_roll / np.minimum(
+            N, grp.cumcount() + 1
+        )
 
         # Multi-window form metrics (L3/L5/L10)
         for w in (3, 5, 10):
-            # Unweighted points over last w matches
             long_df[f"form_points_L{w}"] = (
                 pts_prior.rolling(window=w, min_periods=1)
                 .sum()
                 .reset_index(level=0, drop=True)
             )
-            # Weighted points over last w matches
             long_df[f"wform_points_L{w}"] = (
                 weighted_pts_prior.rolling(window=w, min_periods=1)
                 .sum()
                 .reset_index(level=0, drop=True)
             )
-            # Goal diff over last w matches
             gf_w = (
                 gf_prior.rolling(window=w, min_periods=1)
                 .sum()
@@ -906,11 +880,8 @@ class DataLoader:
             )
             long_df[f"form_goal_diff_L{w}"] = gf_w - ga_w
 
-        # Fill initial NaNs
         long_df.fillna(0.0, inplace=True)
-
         return long_df
-
 
     def _calculate_table(self, matches: list[dict]) -> dict:
         """Calculate league table from matches."""
@@ -934,7 +905,6 @@ class DataLoader:
             away = match["away_team"]
             home_score = match["home_score"]
             away_score = match["away_score"]
-            # Skip if scores are missing to avoid NoneType operations
             if home_score is None or away_score is None:
                 continue
 
@@ -959,7 +929,6 @@ class DataLoader:
                 table[home]["points"] += 1
                 table[away]["points"] += 1
 
-        # Add positions
         sorted_teams = sorted(
             table.items(),
             key=lambda x: (
