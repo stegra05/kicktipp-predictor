@@ -162,15 +162,6 @@ def evaluate(
     print("=" * 80)
     print()
 
-    # Apply probability-source options to config
-    from kicktipp_predictor.config import get_config
-
-    cfg = get_config()
-    cfg.model.prob_source = str(prob_source).strip().lower()
-    if hybrid_poisson_weight is not None:
-        cfg.model.hybrid_poisson_weight = float(hybrid_poisson_weight)
-    cfg.model.proba_grid_max_goals = int(proba_grid_max_goals)
-    cfg.model.poisson_draw_rho = float(poisson_draw_rho)
 
     # Run dynamic season evaluation
     run_season_dynamic_evaluation(retrain_every=retrain_every)
