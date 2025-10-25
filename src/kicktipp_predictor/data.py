@@ -114,23 +114,6 @@ class DataLoader:
             print(f"Error fetching matchday {matchday}: {e}")
             return []
 
-    def get_current_matchday(self, season: int | None = None) -> int:
-        """Get the current matchday number."""
-        matches = self.fetch_season_matches(season)
-
-        now = datetime.now()
-
-        # Find the next unplayed matchday
-        for match in matches:
-            if match["date"] > now and not match["is_finished"]:
-                return match["matchday"]
-
-        # If all matches are finished, return last matchday
-        if matches:
-            return matches[-1]["matchday"]
-
-        return 1
-
     def get_upcoming_matches(
         self, days: int = 7, season: int | None = None
     ) -> list[dict]:
@@ -334,38 +317,8 @@ class DataLoader:
         features_df["weighted_form_points_difference"] = features_df.get(
             "home_form_points_weighted_by_opponent_rank", 0
         ) - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
-        features_df["abs_momentum_score_diff"] = abs(
-            features_df.get("home_momentum_score", 0.0)
-            - features_df.get("away_momentum_score", 0.0)
-        )
-        features_df["momentum_score_difference"] = features_df.get(
-            "home_momentum_score", 0.0
-        ) - features_df.get("away_momentum_score", 0.0)
-
-        # Venue deltas
-        if all(
-            c in features_df.columns
-            for c in ["home_points_pg_at_home", "away_points_pg_away"]
-        ):
-            features_df["venue_points_delta"] = (
-                features_df["home_points_pg_at_home"]
-                - features_df["away_points_pg_away"]
-            )
-        if all(
-            c in features_df.columns
-            for c in ["home_goals_pg_at_home", "away_goals_pg_away"]
-        ):
-            features_df["venue_goals_delta"] = (
-                features_df["home_goals_pg_at_home"] - features_df["away_goals_pg_away"]
-            )
-        if all(
-            c in features_df.columns
-            for c in ["home_goals_conceded_pg_at_home", "away_goals_conceded_pg_away"]
-        ):
-            features_df["venue_conceded_delta"] = (
-                features_df["home_goals_conceded_pg_at_home"]
-                - features_df["away_goals_conceded_pg_away"]
-            )
+        # Removed dead momentum diff features: abs_momentum_score_diff, momentum_score_difference
+        # Removed venue delta features: venue_points_delta, venue_goals_delta, venue_conceded_delta
 
 
         try:
@@ -405,6 +358,7 @@ class DataLoader:
                 features_df["normalized_elo_diff"] = (
                     features_df["elo_diff"].fillna(0).astype(float) / scale_factor
                 )
+                # Transient Elo features: home_elo/away_elo/elo_diff are created briefly and dropped to avoid leakage
                 features_df.drop(
                     columns=["home_elo", "away_elo", "elo_diff"],
                     errors="ignore",
@@ -442,7 +396,7 @@ class DataLoader:
             features_df["normalized_elo_diff"] = (
                 features_df["elo_diff"].fillna(0).astype(float) / scale_factor
             )
-            # Remove raw Elo features to prevent leakage/bias
+            # Transient Elo features: created briefly and then removed to prevent leakage/bias
             features_df.drop(
                 columns=["home_elo", "away_elo", "elo_diff"],
                 errors="ignore",
@@ -478,7 +432,7 @@ class DataLoader:
             features_df["normalized_elo_diff"] = (
                 features_df["elo_diff"].fillna(0).astype(float) / scale_factor
             )
-            # Remove raw Elo features to prevent leakage/bias
+            # Transient Elo features: created briefly and then removed to prevent leakage/bias
             features_df.drop(
                 columns=["home_elo", "away_elo", "elo_diff"],
                 errors="ignore",
@@ -647,38 +601,8 @@ class DataLoader:
         features_df["weighted_form_points_difference"] = features_df.get(
             "home_form_points_weighted_by_opponent_rank", 0
         ) - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
-        features_df["abs_momentum_score_diff"] = abs(
-            features_df.get("home_momentum_score", 0.0)
-            - features_df.get("away_momentum_score", 0.0)
-        )
-        features_df["momentum_score_difference"] = features_df.get(
-            "home_momentum_score", 0.0
-        ) - features_df.get("away_momentum_score", 0.0)
-
-        # Venue deltas
-        if all(
-            c in features_df.columns
-            for c in ["home_points_pg_at_home", "away_points_pg_away"]
-        ):
-            features_df["venue_points_delta"] = (
-                features_df["home_points_pg_at_home"]
-                - features_df["away_points_pg_away"]
-            )
-        if all(
-            c in features_df.columns
-            for c in ["home_goals_pg_at_home", "away_goals_pg_away"]
-        ):
-            features_df["venue_goals_delta"] = (
-                features_df["home_goals_pg_at_home"] - features_df["away_goals_pg_away"]
-            )
-        if all(
-            c in features_df.columns
-            for c in ["home_goals_conceded_pg_at_home", "away_goals_conceded_pg_away"]
-        ):
-            features_df["venue_conceded_delta"] = (
-                features_df["home_goals_conceded_pg_at_home"]
-                - features_df["away_goals_conceded_pg_away"]
-            )
+        # Removed dead momentum diff features: abs_momentum_score_diff, momentum_score_difference
+        # Removed venue delta features: venue_points_delta, venue_goals_delta, venue_conceded_delta
 
         return features_df
 
@@ -987,66 +911,6 @@ class DataLoader:
 
         return long_df
 
-    def _get_form_features(
-        self, team: str, history: list[dict], prefix: str, last_n: int = 5
-    ) -> dict:
-        """Calculate team form over last N matches."""
-        # Allow config override for last_n
-        try:
-            cfg_last_n = int(getattr(self.config.model, "form_last_n", last_n))
-            last_n = cfg_last_n if cfg_last_n > 0 else last_n
-        except Exception:
-            pass
-
-        recent = history[-last_n:] if len(history) >= last_n else history
-
-        points = 0
-        wins = 0
-        draws = 0
-        losses = 0
-        goals_scored = 0
-        goals_conceded = 0
-
-        for match in recent:
-            if match["home_team"] == team:
-                scored = match["home_score"]
-                conceded = match["away_score"]
-            else:
-                scored = match["away_score"]
-                conceded = match["home_score"]
-
-            goals_scored += scored
-            goals_conceded += conceded
-
-            if scored > conceded:
-                points += 3
-                wins += 1
-            elif scored == conceded:
-                points += 1
-                draws += 1
-            else:
-                losses += 1
-
-        num_matches = len(recent)
-
-        return {
-            f"{prefix}_form_points": points,
-            f"{prefix}_form_points_per_game": points / num_matches
-            if num_matches > 0
-            else 0,
-            f"{prefix}_form_wins": wins,
-            f"{prefix}_form_draws": draws,
-            f"{prefix}_form_losses": losses,
-            f"{prefix}_form_goals_scored": goals_scored,
-            f"{prefix}_form_goals_conceded": goals_conceded,
-            f"{prefix}_form_goal_diff": goals_scored - goals_conceded,
-            f"{prefix}_form_avg_goals_scored": goals_scored / num_matches
-            if num_matches > 0
-            else 0,
-            f"{prefix}_form_avg_goals_conceded": goals_conceded / num_matches
-            if num_matches > 0
-            else 0,
-        }
 
     def _calculate_table(self, matches: list[dict]) -> dict:
         """Calculate league table from matches."""
