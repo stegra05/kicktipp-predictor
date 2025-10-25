@@ -1,209 +1,202 @@
-# Kicktipp Predictor [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/release/python-390/)
+# Kicktipp Predictor
 
-A sophisticated football match prediction model and web application designed to forecast match outcomes and scorelines, primarily for platforms like Kicktipp.
-
-## Architecture Overview
-
-The Kicktipp Predictor employs a robust two-stage, predictor-selector architecture to achieve high accuracy and interpretability in football match forecasting.
-
-### Overview
-
-1.  **Outcome Prediction (Selector):** An XGBoost classifier is utilized to predict the fundamental match result: Home Win, Draw, or Away Win.
-2.  **Scoreline Selection (Predictor):** Two XGBoost regressors estimate the expected goals for each team. These expected goal values (lambda) are then fed into a Poisson distribution to determine the most probable scoreline for the match.
-
-### Rationale
-
-This architectural choice balances predictive accuracy with model interpretability. By separating outcome prediction from scoreline selection, specialized models can be trained for each task. The Poisson distribution provides a probabilistic framework well-suited for modeling goal counts.
-
-### Feature Engineering
-
-The project incorporates a comprehensive feature engineering pipeline that generates rich predictive signals from historical match data. Key features include:
-
--   **Elo Ratings**: Tamed Elo ratings are used to control for bias and incorporate uncertainty, providing a dynamic measure of team strength.
--   **Form Metrics**: Various performance indicators such as points, wins, draws, losses, goals scored, and goals conceded are calculated over different historical windows (e.g., last 3, 5, 10 matches).
--   **Strength of Schedule**: Opponent rank is used to weight prior points, offering a more nuanced assessment of team strength against varying competition.
--   **Venue-Specific Deltas**: Features capturing the comparative strength of teams when playing at home versus away are included to account for home-field advantage.
-
-### Model Training
-
-Both the outcome classifier and the goal regressors are trained using XGBoost, a powerful gradient boosting framework. Training methodologies include:
-
--   **Time-Decay Weighting**: More recent matches are given higher weight during training to ensure the model is sensitive to current team form and trends.
--   **Class-Balanced Weights**: The outcome classifier uses class-balanced weights, with an additional boost for the 'Draw' class to mitigate its underrepresentation in football results.
--   **Cross-Validation**: Time-series cross-validation is employed for hyperparameter tuning, ensuring robust performance on sequential data characteristic of sports seasons.
-
-### Prediction and Scoreline Selection
-
-The prediction process involves several steps:
-
-1.  **Outcome Probabilities**: The outcome classifier generates initial probabilities for Home Win, Draw, and Away Win. These can be blended with Poisson-derived probabilities using a configurable hybrid weight.
-2.  **Expected Goals**: Home and away goal regressors predict the expected number of goals for each team.
-3.  **Scoreline Selection**: A Poisson grid is used to select the most probable scoreline based on predicted outcomes and expected goals. Optionally, an Expected Points (EP) maximizing approach can be used to select the scoreline that yields the highest fantasy football points.
-
-### Evaluation
-
-Model performance is rigorously evaluated using a dynamic, expanding-window procedure. The model is retrained every N matchdays on all historical data up to that point and then evaluated on the finished matches of the current season. Key metrics tracked include:
-
--   **Brier Score**: Measures the accuracy of probabilistic predictions.
--   **Log Loss**: Penalizes inaccurate and confident predictions.
--   **Ranked Probability Score (RPS)**: A proper scoring rule that considers the distance between predicted and actual outcomes.
--   **Accuracy**: Overall prediction accuracy.
--   **Kicktipp Points**: Simulated fantasy football points earned.
--   **Expected Calibration Error (ECE)**: Assesses how well predicted probabilities align with observed frequencies.
-
-All evaluation results are output to the console and saved as concise JSON/CSV artifacts.
+Hey there! This is my little side project while juggling studies – a football match predictor for the German 3. Liga. I built it to dominate my Kicktipp games with friends using some machine learning wizardry: an XGBoost outcome classifier, goal regressors, and Poisson scoreline selection. It comes with a handy CLI, caching, evaluation tools, and an API. :)
 
 ## Features
-
-The Kicktipp Predictor offers both a command-line interface (CLI) and a web application for interacting with the prediction model.
-
-### CLI Features
-
--   **`train`**: Trains the match predictor on historical data.
-    -   Configurable number of past seasons for training.
--   **`predict`**: Generates predictions for upcoming matches.
-    -   Predicts for a specified number of days ahead or a specific matchday.
-    -   Options for probability source (classifier, Poisson, hybrid) and Poisson parameters.
-    -   Supports parallel processing for scoreline selection.
--   **`evaluate`**: Evaluates model performance across the current season using expanding-window retraining.
-    -   Configurable retraining frequency and probability source options.
--   **`web`**: Starts the Flask web application.
-    -   Configurable host and port.
--   **`tune`**: Runs Optuna hyperparameter tuning with selectable objectives.
-    -   Supports multi-worker parallel tuning with shared storage.
-    -   Various objectives (e.g., PPG, logloss, brier, accuracy).
-    -   Pruning strategies (median, hyperband).
--   **`shap`**: Performs SHAP (SHapley Additive exPlanations) analysis on trained models to explain feature importance.
-    -   Configurable number of seasons and samples for analysis.
-
-### Web Application Features
-
--   **Home Page (`/`)**: Displays upcoming match predictions.
--   **API Endpoints**:
-    -   **`/api/upcoming_predictions`**: Fetches predictions for upcoming matches (configurable days ahead).
-    -   **`/api/current_matchday`**: Retrieves predictions for the current matchday.
-    -   **`/api/table`**: Provides the current league table, including form and EWMA points.
-    -   **`/api/model_quality`**: Returns model quality metrics (Brier Score, Log Loss, Accuracy, etc.) from the latest evaluation.
-    -   **`/api/match/<match_id>`**: Displays detailed prediction and feature information for a specific match.
--   **Frontend Pages**:
-    -   **`/statistics`**: Dedicated page for model statistics.
-    -   **`/table`**: Dedicated page for the league table.
-    -   **`/match/<match_id>`**: Detailed view for individual match predictions.
+- Train outcome and goal models from OpenLigaDB season data
+- Predict upcoming matches with scorelines and H/D/A probabilities
+- Hybrid probability blending: classifier + Poisson with fixed weight
+- Configurable feature selection via `kept_features.yaml`
+- Season-long dynamic evaluation with expanding-window retraining
+- Simple persistence: `data/models/*.joblib` + `metadata.joblib` ^_^
 
 ## Installation
+- Requirements: Python `>=3.10`
+- Create and activate a virtual environment, then install:
+  ```bash
+  python -m venv .venv
+  source .venv/bin/activate
+  pip install -e .
+  # Optional extras
+  pip install -e .[dev]        # ruff, mypy, pre-commit
+  pip install -e .[tuning]     # optuna
+  pip install -e .[plots]      # shap
+  ```
+- The CLI entrypoint is installed as `kicktipp-predictor`. You can also run:
+  ```bash
+  python -m kicktipp_predictor --help
+  ```
 
-To set up the Kicktipp Predictor locally, follow these steps:
-
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/your-username/kicktipp-predictor.git
-    cd kicktipp-predictor
-    ```
-
-2.  **Create and activate a virtual environment:**
-    ```bash
-    python -m venv .venv
-    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-    ```
-
-3.  **Install dependencies:**
-    ```bash
-    pip install -e .
-    ```
-    If you plan to run SHAP analysis or advanced tuning, install with extras:
-    ```bash
-    pip install -e ".[dev,shap,tune]"
-    ```
-
-4.  **Environment Variables (Optional):**
-    The application might use environment variables for API keys or database connections. Check `src/kicktipp_predictor/config/config.py` for details.
-    Example:
-    ```bash
-    export KICKTIPP_API_KEY="your_api_key_here"
-    ```
+## Quickstart (CLI)
+- Show help:
+  ```bash
+  kicktipp-predictor --help
+  ```
+- Train models (past seasons window):
+  ```bash
+  kicktipp-predictor train --seasons-back 5
+  ```
+- Predict upcoming matches (next N days or a specific matchday):
+  ```bash
+  # Next 7 days, hybrid probabilities (default), parallel scoreline selection
+  kicktipp-predictor predict \
+    --days 7 \
+    --workers 4 \
+    --prob-source hybrid \
+    --hybrid-poisson-weight 0.0525 \
+    --proba-grid-max-goals 12
+  
+  # Or predict a specific matchday
+  kicktipp-predictor predict --matchday 12
+  ```
+  Notes:
+  - `--prob-source` supports `classifier|poisson|hybrid`. Hybrid blends classifier and Poisson with a fixed weight.
+  - `--hybrid-poisson-weight` is the Poisson weight in `[0,1]` (classifier weight is `1-w`).
+  - `--proba-grid-max-goals` caps the dynamic Poisson probability grid when deriving H/D/A probabilities (separate from scoreline grid).
+  - `--poisson-draw-rho` is currently accepted but not applied in probability computations.
+- Evaluate a current season with expanding-window retraining:
+  ```bash
+  kicktipp-predictor evaluate --retrain-every 1
+  ```
+  Outputs season metrics and per-matchday breakdowns to `data/predictions/`.
 
 ## Configuration
+Configuration is centralized in `src/kicktipp_predictor/config.py` and loaded optionally from YAML.
 
-The project uses YAML files for configuration, located in the `src/kicktipp_predictor/config/` directory.
+- YAML location: by default `config/best_params.yaml` at project root. Override via env var:
+  ```bash
+  export KTP_CONFIG_FILE=path/to/your_params.yaml
+  ```
+- Paths (`PathConfig`):
+  - `data_dir`: `data/`
+  - `models_dir`: `data/models/`
+  - `cache_dir`: `data/cache/`
+  - `config_dir`: `config/` (create this directory at project root to use YAMLs)
+- API (`APIConfig`): `base_url`, `league_code` (default `bl3`), `cache_ttl`, `request_timeout`.
+- Model (`ModelConfig`): key options (see code for full list)
+  - Outcome classifier: `outcome_n_estimators`, `outcome_max_depth`, `outcome_learning_rate`, `outcome_subsample`, `outcome_reg_lambda`, `outcome_min_child_weight`
+  - Goal regressors: `goals_n_estimators`, `goals_max_depth`, `goals_learning_rate`, `goals_subsample`, `goals_reg_lambda`, `goals_min_child_weight`, `goals_early_stopping_rounds`
+  - Training: `random_state`, `test_size`, `min_training_matches`
+  - Feature/recency: `use_time_decay`, `time_decay_half_life_days`, `form_last_n`
+  - Probability config: `prob_source`, `hybrid_poisson_weight`, `proba_grid_max_goals`, `draw_boost`, `proba_temperature`
+  - Scoreline selection: `max_goals`, `use_ep_selection`
+  - Feature selection file: `selected_features_file` (default `kept_features.yaml`)
 
--   `all_features.yaml`: Defines all available features for the model.
--   `best_params_baseline.yaml`: Stores the best hyperparameters found during tuning for the baseline model.
--   `best_params_ppg.yaml`: Stores the best hyperparameters found during tuning for the PPG objective.
--   `config.py`: Python module for loading and managing configurations.
--   `kept_features.yaml`: Specifies features to be kept.
--   `minimal_features.yaml`: Defines a minimal set of features.
+Example YAML (`config/best_params.yaml`):
+```yaml
+# Probability derivation
+prob_source: hybrid
+hybrid_poisson_weight: 0.0525
+proba_grid_max_goals: 12
 
-You can modify these files to adjust model parameters, feature sets, and other application settings.
+# Training and features
+use_time_decay: true
+time_decay_half_life_days: 330.0
+form_last_n: 5
 
-## Usage
+# Outcome classifier
+outcome_n_estimators: 1150
+outcome_max_depth: 6
+outcome_learning_rate: 0.1
+outcome_subsample: 0.8
+outcome_reg_lambda: 1.0
+outcome_min_child_weight: 0.1587
 
-### Command-Line Interface (CLI)
+# Goal regressors
+goals_n_estimators: 800
+goals_max_depth: 6
+goals_learning_rate: 0.1
+goals_subsample: 0.8
+goals_reg_lambda: 1.0
+goals_min_child_weight: 1.6919
 
-All CLI commands are accessed via `kicktipp-predictor`.
+# Scorelines
+max_goals: 8
+use_ep_selection: true
 
--   **Train the model:**
-    ```bash
-    kicktipp-predictor train --seasons-back 5
-    ```
-    This will train the model using data from the last 5 seasons.
-
--   **Make predictions for the next 7 days:**
-    ```bash
-    kicktipp-predictor predict --days 7
-    ```
-
--   **Evaluate model performance:**
-    ```bash
-    kicktipp-predictor evaluate --retrain-every 1
-    ```
-    This evaluates the model, retraining it every matchday.
-
--   **Run hyperparameter tuning:**
-    ```bash
-    kicktipp-predictor tune --n-trials 100 --objective ppg --workers 4 --storage "sqlite:///optuna_study.db"
-    ```
-    This runs 100 Optuna trials for the PPG objective using 4 workers and stores results in `optuna_study.db`.
-
--   **Run SHAP analysis:**
-    ```bash
-    kicktipp-predictor shap --seasons-back 3 --sample 5000
-    ```
-    This performs SHAP analysis using data from the last 3 seasons and 5000 samples.
-
-### Web Application
-
-To start the web application:
-
-```bash
-kicktipp-predictor web --host 0.0.0.0 --port 8000
-```
-Then, open your browser and navigate to `http://localhost:8000`.
-
-#### Screenshots/GIFs
-
-*(Placeholder for screenshots/GIFs demonstrating the web application's home page, league table, and match detail views.)*
-
-## Development
-
-### Contribution Guidelines
-
-(Placeholder for detailed contribution guidelines, e.g., coding standards, pull request process.)
-
-### Testing Procedures
-
-Tests are located in the `tests/` directory. To run tests:
-
-```bash
-pytest
+# Class weighting & temperature
+draw_boost: 1.7
+proba_temperature: 1.0
 ```
 
-### Build/Deployment Processes
+Feature selection (`kept_features.yaml`): place this file under `config/` at the project root. If present, only essential columns and the listed features are kept for training and prediction feature frames.
 
-(Placeholder for build and deployment instructions, e.g., Docker, CI/CD.)
+## Programmatic API
+Train, save, load, and predict in Python:
+```python
+from kicktipp_predictor.data import DataLoader
+from kicktipp_predictor.predictor import MatchPredictor
+from kicktipp_predictor.config import get_config
+
+# Optional: tweak config in code
+cfg = get_config()
+cfg.model.prob_source = "hybrid"
+cfg.model.hybrid_poisson_weight = 0.1
+
+loader = DataLoader()
+current = loader.get_current_season()
+all_matches = loader.fetch_historical_seasons(current - 5, current)
+train_df = loader.create_features_from_matches(all_matches)
+
+predictor = MatchPredictor()
+predictor.train(train_df)
+predictor.save_models()
+
+# Later: load and predict upcoming
+predictor.load_models()
+upcoming = loader.get_upcoming_matches(days=7)
+historical = loader.fetch_season_matches(current)
+features = loader.create_prediction_features(upcoming, historical)
+preds = predictor.predict(features, workers=4)
+for p in preds:
+    print(p["home_team"], "vs", p["away_team"], p["predicted_home_score"], "-", p["predicted_away_score"])  # noqa: E501
+```
+
+## Evaluation Outputs
+The `evaluate` command writes season artifacts to `data/predictions/`:
+- `metrics_season.json`: overall metrics (Brier, log loss, RPS, accuracy, points, bootstrap CI)
+- `per_matchday_metrics_season.csv`: per-matchday breakdown
+- `blend_debug.csv`: optional diagnostics if available (classifier vs. Poisson probs and blend weight)
+
+## Web Command (optional)
+A `web` command exists in the CLI and expects a Flask app at `kicktipp_predictor.web.app`. If this module is not present in your local checkout, running `kicktipp-predictor web` will fail. Some distributions may include the subpackage.
+
+## Paths & Artifacts
+- Models are saved under `data/models/`:
+  - `outcome_classifier.joblib`, `home_goals_regressor.joblib`, `away_goals_regressor.joblib`
+  - `metadata.joblib` (feature columns, label encoder)
+- API cache uses `data/cache/`.
+
+## Contributing
+As a student side project, I'm thrilled if anyone wants to contribute! 
+- Setup:
+  ```bash
+  python -m venv .venv && source .venv/bin/activate
+  pip install -e .[dev]
+  pre-commit install
+  ```
+- Run checks:
+  ```bash
+  ruff check .
+  ruff format .
+  pytest -q
+  ```
+- Guidelines:
+  - Keep changes focused and minimal
+  - Match existing style; prefer small, composable functions
+  - Avoid unrelated fixes in PRs; mention known issues separately
+
+I'm super thankful for every bit of time you spend looking at or improving this project – it means the world to me! :)
+
+## Troubleshooting
+- "No trained models found": run `kicktipp-predictor train` first.
+- "Could not create features": early-season data may be insufficient; try a later matchday.
+- OpenLigaDB errors/timeouts: retry later; cached data may be used if available.
+- `web` import error: ensure the `kicktipp_predictor.web` subpackage exists; not all checkouts include it.
+- Evaluate probability options: the `evaluate` command currently uses config defaults; adjust via YAML or programmatic config before running.
 
 ## License
+Licensed under the MIT License. See `LICENSE` for details.
 
-This project is licensed under the [MIT License](LICENSE).
-
----
-**Note:** This README is a living document. For the most up-to-date information, please refer to the source code and project documentation.
+## Thanks!
+A huge shoutout to everyone who checks out this project. Your interest keeps me motivated during late-night coding sessions. If it helps you win your Kicktipp group, drop me a line – I'd love to hear! :)
