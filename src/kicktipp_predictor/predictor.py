@@ -79,6 +79,11 @@ class MatchPredictor:
         self.feature_columns: list[str] = []
         self.label_encoder = LabelEncoder()
 
+        # Use configurable hybrid weight if available
+        self.HYBRID_WEIGHT = float(
+            getattr(self.config.model, "hybrid_weight", self.HYBRID_WEIGHT)
+        )
+
         self.console = Console()
 
     def _log(self, *args, **kwargs) -> None:
@@ -289,7 +294,7 @@ class MatchPredictor:
 
         _, val_idx = train_test_split(
             np.arange(len(X)),
-            test_size=0.1,
+            train_size=1.0 - self.config.model.val_fraction,
             random_state=self.config.model.random_state,
         )
         train_mask = np.ones(len(X), dtype=bool)
@@ -306,7 +311,7 @@ class MatchPredictor:
             X,
             y_result_encoded,
             time_weights,
-            test_size=self.config.model.test_size,
+            train_size=1.0 - self.config.model.val_fraction,
             random_state=self.config.model.random_state,
             stratify=y_result_encoded,
         )
@@ -379,7 +384,6 @@ class MatchPredictor:
 
         # Base outcomes: argmax over final probabilities
         classes = self.label_encoder.classes_
-        prob_map = {label: i for i, label in enumerate(classes)}
         outcomes_idx = np.argmax(final_probs, axis=1)
 
         outcomes = self.label_encoder.inverse_transform(outcomes_idx)
@@ -507,7 +511,10 @@ class MatchPredictor:
                 "predicted_away_score": int(scorelines[i][1]),
                 "home_expected_goals": float(home_lambdas[i]),
                 "away_expected_goals": float(away_lambdas[i]),
-                "predicted_result": outcomes[i],
+                "predicted_result": (
+                    "H" if scorelines[i][0] > scorelines[i][1]
+                    else ("A" if scorelines[i][1] > scorelines[i][0] else "D")
+                ),
                 "home_win_probability": float(final_probs[i][prob_map.get("H", 0)]),
                 "draw_probability": float(final_probs[i][prob_map.get("D", 1)]),
                 "away_win_probability": float(final_probs[i][prob_map.get("A", 2)]),

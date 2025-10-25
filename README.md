@@ -69,7 +69,7 @@ Configuration is centralized in `src/kicktipp_predictor/config.py` and loaded op
 - Model (`ModelConfig`): key options (see code for full list)
   - Outcome classifier: `outcome_n_estimators`, `outcome_max_depth`, `outcome_learning_rate`, `outcome_subsample`, `outcome_reg_lambda`, `outcome_min_child_weight`
   - Goal regressors: `goals_n_estimators`, `goals_max_depth`, `goals_learning_rate`, `goals_subsample`, `goals_reg_lambda`, `goals_min_child_weight`, `goals_early_stopping_rounds`
-  - Training: `random_state`, `test_size`, `min_training_matches`
+  - Training: `random_state`, `val_fraction`, `min_training_matches`
   - Feature/recency: `use_time_decay`, `time_decay_half_life_days`, `form_last_n`
   - Probability config: `draw_boost` (training class weight), `proba_temperature` (reserved)
   - Scoreline selection: `max_goals`

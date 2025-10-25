@@ -83,6 +83,8 @@ def _apply_model_params_from_dict(config: "Config", params: dict[str, Any]) -> N
         "use_time_decay": bool,
         "time_decay_half_life_days": float,
         "form_last_n": int,
+        "hybrid_weight": float,
+        "val_fraction": float,
         # Outcome hyperparameters
         "outcome_n_estimators": int,
         "outcome_max_depth": int,
@@ -185,6 +187,7 @@ class ModelConfig:
     # Training
     random_state: int = 42
     min_training_matches: int = 50
+    val_fraction: float = 0.1
 
     # Time-decay weighting (recency)
     use_time_decay: bool = True
@@ -205,6 +208,7 @@ class ModelConfig:
     draw_boost: float = 1.7
 
     # Outcome probability post-processing
+    hybrid_weight: float = 0.0525
     # Blend with empirical prior from training window
 
     selected_features_file: str = "kept_features.yaml"

@@ -239,6 +239,64 @@ class DataLoader:
     # FEATURE ENGINEERING METHODS
     # =================================================================
 
+    def _compute_tanh_tamed_elo(
+        self,
+        df: pd.DataFrame,
+        elo_diff_col: str = "normalized_elo_diff",
+        output_col: str = "tanh_tamed_elo",
+    ) -> pd.DataFrame:
+        """Compute a bounded, tamed Elo feature via tanh transform.
+
+        Parameters:
+        - df: DataFrame that may contain Elo difference columns.
+        - elo_diff_col: Name of the normalized Elo difference column to use.
+          If missing but raw `elo_diff` exists, this method normalizes it using
+          the average prior matches scale factor.
+        - output_col: Name of the output feature column to write.
+
+        Returns:
+        - df: The same DataFrame with `output_col` added as float in [-1.0, 1.0].
+
+        Notes:
+        - Robust to missing inputs: If Elo information is unavailable, sets the
+          output feature to 0.0 to avoid downstream KeyErrors.
+        - Guards against extreme values via clipping before applying tanh.
+        """
+        try:
+            if df is None or not isinstance(df, pd.DataFrame) or len(df) == 0:
+                return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+
+            col = elo_diff_col
+            if col not in df.columns:
+                # Attempt to derive normalized diff from raw Elo difference
+                if "elo_diff" in df.columns:
+                    home_mp = df.get("home_matches_played", pd.Series(0)).fillna(0)
+                    away_mp = df.get("away_matches_played", pd.Series(0)).fillna(0)
+                    avg_matches = (home_mp + away_mp) / 2.0
+                    scale_factor = 1.0 + avg_matches * 0.01
+                    df["normalized_elo_diff"] = (
+                        pd.to_numeric(df["elo_diff"], errors="coerce").fillna(0.0)
+                        / scale_factor
+                    )
+                    col = "normalized_elo_diff"
+                else:
+                    df[output_col] = 0.0
+                    return df
+
+            # Numeric conversion and clipping for robustness
+            diff = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+            max_abs = 800.0  # Cap extreme Elo differentials
+            diff = diff.clip(-max_abs, max_abs)
+
+            # Scale keeps typical Elo ranges in tanh's sensitive region
+            scale = 250.0
+            df[output_col] = np.tanh(diff / scale).astype(float)
+            return df
+        except Exception:
+            # Ensure feature exists even if something unexpected occurs
+            df[output_col] = df.get(output_col, 0.0)
+            return df
+
     def _merge_history_features(
         self,
         base: pd.DataFrame,
@@ -381,6 +439,8 @@ class DataLoader:
             features_df["normalized_elo_diff"] = (
                 features_df["elo_diff"].fillna(0).astype(float) / scale_factor
             )
+            # Compute tamed Elo feature before dropping transient columns
+            features_df = self._compute_tanh_tamed_elo(features_df)
             # Transient Elo features: created briefly and then removed to prevent leakage/bias
             features_df.drop(
                 columns=["home_elo", "away_elo", "elo_diff"],
@@ -389,6 +449,8 @@ class DataLoader:
             )
         except Exception:
             # Elo is optional; continue gracefully
+            # Ensure feature exists even if Elo computation failed
+            features_df = self._compute_tanh_tamed_elo(features_df)
             pass
 
         # Derived form diffs
@@ -565,8 +627,23 @@ class DataLoader:
                     features_df.get("home_elo", 0.0)
                     - features_df.get("away_elo", 0.0)
                 )
+                # Normalize and compute tamed Elo for upcoming matches
+                home_mp = features_df.get("home_matches_played", pd.Series(0)).fillna(0)
+                away_mp = features_df.get("away_matches_played", pd.Series(0)).fillna(0)
+                avg_matches = (home_mp + away_mp) / 2.0
+                scale_factor = 1.0 + avg_matches * 0.01
+                features_df["normalized_elo_diff"] = (
+                    pd.to_numeric(features_df.get("elo_diff", 0.0), errors="coerce").fillna(0.0)
+                    / scale_factor
+                )
+                features_df = self._compute_tanh_tamed_elo(features_df)
             except Exception:
+                # If Elo merge fails, still ensure feature exists
+                features_df = self._compute_tanh_tamed_elo(features_df)
                 pass
+        else:
+            # No Elo available; still create a safe default feature
+            features_df = self._compute_tanh_tamed_elo(features_df)
 
         # Derived diffs
         features_df["abs_weighted_form_points_diff"] = (
