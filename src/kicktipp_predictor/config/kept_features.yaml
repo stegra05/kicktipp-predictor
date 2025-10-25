@@ -6,13 +6,9 @@
 # DIFFERENCES: Simple differences/ratios that proved robust in SHAP/ablation
 - abs_weighted_form_points_diff
 - weighted_form_points_difference
-- abs_momentum_score_diff
-- momentum_score_difference
+# Removed dead momentum features from selection: abs_momentum_score_diff, momentum_score_difference
 
-# VENUE DELTAS: Capture comparative home/away strength
-- venue_points_delta
-- venue_goals_delta
-- venue_conceded_delta
+# VENUE DELTAS removed (dead code cleanup)
 
 
 # --- Base Averages / Long-Term Strength (The Stable Signals) ---
