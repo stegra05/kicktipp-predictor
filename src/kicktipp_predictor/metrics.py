@@ -204,42 +204,6 @@ def reliability_diagram(
     return pd.DataFrame(rows)
 
 
-def plot_reliability_curve(df, class_label: str, out_path: str) -> None:
-    """Plot a reliability curve from reliability diagram data.
-
-    Args:
-        df: A pandas DataFrame from `reliability_diagram`.
-        class_label: The class label for the plot title.
-        out_path: The file path to save the plot.
-    """
-    try:
-        import matplotlib.pyplot as plt  # type: ignore
-    except Exception:
-        return
-    ensure_dir(os.path.dirname(out_path) or ".")
-    xs = []
-    ys = []
-    for _, r in df.iterrows():
-        try:
-            rng = r["bin"].strip("[]").split(",")
-            xs.append((float(rng[0]) + float(rng[1])) / 2)
-            ys.append(r["accuracy"])
-        except Exception:
-            xs.append(np.nan)
-            ys.append(np.nan)
-    plt.figure(figsize=(5, 5))
-    plt.plot([0, 1], [0, 1], "k--", label="Perfect")
-    plt.scatter(xs, ys, label=f"{class_label}")
-    plt.xlabel("Confidence")
-    plt.ylabel("Accuracy")
-    plt.title(f"Calibration - {class_label}")
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(out_path)
-    plt.close()
-
-
 def confusion_matrix_stats(y_true: list[str], proba: np.ndarray) -> dict:
     """Calculate a confusion matrix and related statistics.
 
@@ -272,35 +236,6 @@ def confusion_matrix_stats(y_true: list[str], proba: np.ndarray) -> dict:
         recall = tp / (tp + fn) if (tp + fn) > 0 else float("nan")
         per_class[lab] = {"precision": float(precision), "recall": float(recall)}
     return {"matrix": cm.tolist(), "accuracy": acc, "per_class": per_class}
-
-
-def plot_confusion_matrix(cm: np.ndarray, out_path: str) -> None:
-    """Plot a confusion matrix.
-
-    Args:
-        cm: A 3x3 numpy array representing the confusion matrix.
-        out_path: The file path to save the plot.
-    """
-    try:
-        import matplotlib.pyplot as plt  # type: ignore
-    except Exception:
-        return
-    ensure_dir(os.path.dirname(out_path) or ".")
-    fig, ax = plt.subplots(figsize=(5, 4))
-    im = ax.imshow(cm, cmap="Blues")
-    ax.set_xticks(range(3))
-    ax.set_yticks(range(3))
-    ax.set_xticklabels(list(LABELS_ORDER))
-    ax.set_yticklabels(list(LABELS_ORDER))
-    for i in range(3):
-        for j in range(3):
-            ax.text(j, i, int(cm[i, j]), ha="center", va="center")
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("Actual")
-    fig.colorbar(im, ax=ax)
-    plt.tight_layout()
-    plt.savefig(out_path)
-    plt.close()
 
 
 def bin_by_confidence(
@@ -362,29 +297,6 @@ def bin_by_confidence(
                 }
             )
     return pd.DataFrame(rows)
-
-
-def plot_confidence_buckets(df, out_path: str) -> None:
-    """Plot average points scored in each confidence bucket.
-
-    Args:
-        df: A pandas DataFrame from `bin_by_confidence`.
-        out_path: The file path to save the plot.
-    """
-    try:
-        import matplotlib.pyplot as plt  # type: ignore
-    except Exception:
-        return
-    ensure_dir(os.path.dirname(out_path) or ".")
-    plt.figure(figsize=(7, 4))
-    xs = list(range(len(df)))
-    plt.bar(xs, df["avg_points"], color="#4C78A8")
-    plt.xticks(xs, df["bin"], rotation=45, ha="right")
-    plt.ylabel("Avg points")
-    plt.title("Confidence buckets")
-    plt.tight_layout()
-    plt.savefig(out_path)
-    plt.close()
 
 
 def compute_points(pred_home, pred_away, act_home, act_away):

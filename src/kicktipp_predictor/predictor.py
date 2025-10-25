@@ -20,7 +20,6 @@ import numpy as np
 import pandas as pd
 from rich.console import Console
 from scipy.stats import poisson
-from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.utils.class_weight import compute_sample_weight
@@ -212,7 +211,7 @@ class MatchPredictor:
         self.away_goals_model: XGBRegressor | None = None
         self.feature_columns: list[str] = []
         self.label_encoder = LabelEncoder()
-        self.train_class_prior: np.ndarray | None = None
+
         self.console = Console()
 
     def _log(self, *args, **kwargs) -> None:
@@ -331,11 +330,7 @@ class MatchPredictor:
         with self.console.status("Training outcome classifier...", spinner="dots"):
             val_ctx = self._train_outcome_model(X, y_result_encoded, time_weights)
 
-        # Store class prior from full training labels (for optional prior anchoring)
-        prior = np.zeros(3, dtype=float)
-        for i, lab in enumerate(self.label_encoder.classes_):
-            prior[i] = float(np.mean(y_result.values == lab))
-        self.train_class_prior = prior / max(1e-15, prior.sum())
+
 
 
         self._log("Training completed.")
@@ -458,7 +453,7 @@ class MatchPredictor:
             raise ValueError("Models must be trained or loaded before prediction.")
 
         X = self._prepare_features(features_df)
-        classifier_probs = self._get_calibrated_probabilities(X)
+        classifier_probs = self.outcome_model.predict_proba(X)
         home_lambdas = np.maximum(
             self.home_goals_model.predict(X), self.MIN_LAMBDA
         )
@@ -466,7 +461,6 @@ class MatchPredictor:
             self.away_goals_model.predict(X), self.MIN_LAMBDA
         )
 
-        # Final blended probabilities (with optional calibration & anchoring)
         final_probs, diag = self._derive_final_probabilities(
             classifier_probs, home_lambdas, away_lambdas
         )
@@ -505,22 +499,7 @@ class MatchPredictor:
                 df[col] = 0.0
         return df[self.feature_columns].fillna(0)
 
-    def _get_calibrated_probabilities(self, X: pd.DataFrame) -> np.ndarray:
-        """Applies temperature scaling and prior blending to classifier probabilities."""
-        probs = self.outcome_model.predict_proba(X)
-        temp = float(self.config.model.proba_temperature)
-        if temp != 1.0:
-            with np.errstate(over="ignore"):
-                logits = np.log(np.clip(probs, 1e-15, 1.0)) / max(1e-6, temp)
-                probs = np.exp(logits)
-                probs /= probs.sum(axis=1, keepdims=True)
 
-        alpha = float(self.config.model.prior_blend_alpha)
-        if alpha > 0.0 and self.config.model.prob_source == "classifier":
-            prior = np.full(3, 1.0 / 3.0)
-            probs = (1.0 - alpha) * probs + alpha * prior
-            probs /= probs.sum(axis=1, keepdims=True)
-        return probs
 
     def _compute_scorelines(self, outcomes, home_lambdas, away_lambdas, workers):
         """Computes the most likely scoreline for each match in parallel."""
@@ -567,47 +546,36 @@ class MatchPredictor:
         ]
 
     def _derive_final_probabilities(self, classifier_probs, home_lambdas, away_lambdas):
-        """Blend classifier and Poisson probabilities, then calibrate and anchor."""
-        prob_source = self.config.model.prob_source
-        pois_probs = self._calculate_poisson_outcome_probs(home_lambdas, away_lambdas)
+        """Derives final outcome probabilities based on the configured source.
 
-        if prob_source == "classifier":
-            blend = classifier_probs
-            weights = np.zeros(len(classifier_probs))
-            entropy = -np.sum(
-                np.clip(classifier_probs, 1e-15, 1.0)
-                * np.log(np.clip(classifier_probs, 1e-15, 1.0)),
-                axis=1,
-            ) / np.log(3.0)
-        elif prob_source == "poisson":
-            blend = pois_probs
-            weights = np.ones(len(pois_probs))
-            entropy = -np.sum(
-                np.clip(classifier_probs, 1e-15, 1.0)
-                * np.log(np.clip(classifier_probs, 1e-15, 1.0)),
-                axis=1,
-            ) / np.log(3.0)
-        else:
-            # Hybrid (fixed-weight blending only)
-            w = float(self.config.model.hybrid_poisson_weight)
-            if not (0.0 <= w <= 1.0):
-                raise ValueError(f"hybrid_poisson_weight must be in [0,1], got {w}")
-            weights = np.full(len(classifier_probs), w)
-            blend = self._blend_probs(classifier_probs, pois_probs, weights)
-            entropy = -np.sum(
-                np.clip(classifier_probs, 1e-15, 1.0)
-                * np.log(np.clip(classifier_probs, 1e-15, 1.0)),
-                axis=1,
-            ) / np.log(3.0)
+        This method supports three sources:
+        - 'classifier': Uses the raw probabilities from the XGBoost classifier.
+        - 'poisson': Derives probabilities from the Poisson goal regressors.
+        - 'hybrid': Blends classifier and Poisson probabilities using a fixed weight.
 
-        diag = {
-            "weights": weights,
-            "classifier_probs": classifier_probs,
-            "poisson_probs": pois_probs,
-            "precalibrated": blend,
-            "postcalibrated": blend,
-        }
-        return blend, diag
+        Returns:
+            A tuple containing the final probabilities and a dictionary with
+            diagnostic information.
+        """
+        source = self.config.model.prob_source.lower()
+        diag = {"classifier_probs": classifier_probs, "poisson_probs": np.zeros_like(classifier_probs)}
+
+        if source == "classifier":
+            return classifier_probs, diag
+
+        poisson_probs = self._calculate_poisson_outcome_probs(home_lambdas, away_lambdas)
+        diag["poisson_probs"] = poisson_probs
+
+        if source == "poisson":
+            return poisson_probs, diag
+
+        if source == "hybrid":
+            weight = self.config.model.hybrid_poisson_weight
+            diag["weights"] = np.full(len(classifier_probs), weight)
+            blended = self._blend_probs(classifier_probs, poisson_probs, weights=weight)
+            return blended, diag
+
+        return classifier_probs, diag
 
 
     def _blend_probs(
@@ -740,7 +708,7 @@ class MatchPredictor:
         metadata = {
             "feature_columns": self.feature_columns,
             "label_encoder": self.label_encoder,
-            "train_class_prior": self.train_class_prior,
+
         }
         joblib.dump(metadata, self.config.paths.models_dir / "metadata.joblib")
         self._log("Models saved successfully.")
@@ -760,7 +728,7 @@ class MatchPredictor:
         metadata = joblib.load(self.config.paths.models_dir / "metadata.joblib")
         self.feature_columns = metadata["feature_columns"]
         self.label_encoder = metadata["label_encoder"]
-        self.train_class_prior = metadata.get("train_class_prior")
+
         self._log("Models loaded successfully.")
 
     def evaluate(self, test_df: pd.DataFrame) -> dict:

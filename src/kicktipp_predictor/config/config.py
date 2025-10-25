@@ -103,7 +103,6 @@ class ModelConfig:
 
     # Feature engineering knobs
     form_last_n: int = 5
-    momentum_decay: float = 0.83
 
     # Threading
     n_jobs: int = field(
@@ -120,7 +119,7 @@ class ModelConfig:
     # Temperature < 1 sharpens, > 1 softens
     proba_temperature: float = 1.0
     # Blend with empirical prior from training window
-    prior_blend_alpha: float = 0.0
+
 
     # Outcome probability source for evaluation and reporting
     # One of: 'classifier' (default), 'poisson', 'hybrid'
@@ -211,10 +210,7 @@ class Config:
                         config.model.proba_temperature = float(
                             params["proba_temperature"]
                         )
-                    if "prior_blend_alpha" in params:
-                        config.model.prior_blend_alpha = float(
-                            params["prior_blend_alpha"]
-                        )
+
                     if "prob_source" in params:
                         config.model.prob_source = (
                             str(params["prob_source"]).strip().lower()
@@ -240,8 +236,6 @@ class Config:
                         )
                     if "form_last_n" in params:
                         config.model.form_last_n = int(params["form_last_n"])
-                    if "momentum_decay" in params:
-                        config.model.momentum_decay = float(params["momentum_decay"])
 
                     # Outcome classifier hyperparameters
                     if "outcome_n_estimators" in params:
