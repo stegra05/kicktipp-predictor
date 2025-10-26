@@ -188,11 +188,33 @@ class GoalDifferencePredictor:
             self.feature_columns = [c for c in numeric_cols if c not in exclude]
         X = features_df.reindex(columns=self.feature_columns).fillna(0.0)
         pred_gd = self.model.predict(X)
-        # Probabilistic bridge using Normal around predicted GD
-        stddev = float(self.config.model.gd_uncertainty_stddev)
-        p_home = 1 - norm.cdf(0.5, loc=pred_gd, scale=stddev)
-        p_away = norm.cdf(-0.5, loc=pred_gd, scale=stddev)
-        p_draw = norm.cdf(0.5, loc=pred_gd, scale=stddev) - p_away
+        # Probabilistic bridge using Normal around predicted GD (dynamic stddev)
+
+        base = float(getattr(self.config.model, "gd_uncertainty_base_stddev", self.config.model.gd_uncertainty_stddev))
+        scale = float(getattr(self.config.model, "gd_uncertainty_scale", 0.0))
+        min_std = float(getattr(self.config.model, "gd_uncertainty_min_stddev", 0.2))
+        max_std = float(getattr(self.config.model, "gd_uncertainty_max_stddev", 4.0))
+        # Validate parameters
+        if not np.isfinite(base) or base <= 0:
+            base = max(1e-6, float(self.config.model.gd_uncertainty_stddev))
+        if not np.isfinite(scale) or scale < 0:
+            scale = 0.0
+        if not np.isfinite(min_std) or min_std <= 0:
+            min_std = 1e-6
+        if not np.isfinite(max_std) or max_std <= min_std:
+            max_std = max(min_std * 2.0, 1.0)
+        # Dynamic stddev by predicted goal difference magnitude
+        dynamic_stddev = base + scale * np.abs(pred_gd)
+        # Clamp bounds for numerical stability
+        dynamic_stddev = np.clip(dynamic_stddev, min_std, max_std)
+        # Draw margin parameterization with validation
+        draw_margin = float(getattr(self.config.model, "draw_margin", 0.5))
+        if not np.isfinite(draw_margin):
+            draw_margin = 0.5
+        draw_margin = float(np.clip(draw_margin, 0.1, 1.0))
+        p_home = 1 - norm.cdf(draw_margin, loc=pred_gd, scale=dynamic_stddev)
+        p_away = norm.cdf(-draw_margin, loc=pred_gd, scale=dynamic_stddev)
+        p_draw = norm.cdf(draw_margin, loc=pred_gd, scale=dynamic_stddev) - p_away
         probs = np.vstack([p_home, p_draw, p_away]).T
         probs = np.clip(probs, 1e-12, 1.0)
         probs /= probs.sum(axis=1, keepdims=True)
@@ -205,6 +227,19 @@ class GoalDifferencePredictor:
             home = max(0, int(round((T + gd) / 2.0)))
             away = max(0, int(round((T - gd) / 2.0)))
             predicted_scores.append((home, away))
+        # Monitoring: uncertainty correlation and bounds
+        try:
+            abs_gd = np.abs(pred_gd)
+            corr = float(np.corrcoef(abs_gd, dynamic_stddev)[0, 1]) if len(abs_gd) > 1 else float("nan")
+            self.last_metrics = {
+                "uncertainty_corr_abs_gd": corr,
+                "stddev_mean": float(np.mean(dynamic_stddev)),
+                "stddev_min": float(np.min(dynamic_stddev)),
+                "stddev_max": float(np.max(dynamic_stddev)),
+                "draw_margin": draw_margin,
+            }
+        except Exception:
+            pass
         # Format predictions
         predictions: list[dict] = []
         for i in range(len(features_df)):
@@ -219,6 +254,8 @@ class GoalDifferencePredictor:
                 "home_win_probability": float(probs[i, 0]),
                 "draw_probability": float(probs[i, 1]),
                 "away_win_probability": float(probs[i, 2]),
+                "uncertainty_stddev": float(dynamic_stddev[i]),
+                "draw_margin_used": float(draw_margin),
             }
             # Add derived predicted result label for CLI display
             try:

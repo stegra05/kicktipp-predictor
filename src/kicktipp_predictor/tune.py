@@ -141,6 +141,16 @@ def run_tuning(
         cfg.model.gd_colsample_bytree = trial.suggest_float("gd_colsample_bytree", 0.6, 1.0)
         # --- Architecture-specific uncertainty ---
         cfg.model.gd_uncertainty_stddev = trial.suggest_float("gd_uncertainty_stddev", 0.5, 3.0)
+        # Dynamic uncertainty parameters
+        cfg.model.gd_uncertainty_base_stddev = trial.suggest_float("gd_uncertainty_base_stddev", 0.5, 3.0)
+        cfg.model.gd_uncertainty_scale = trial.suggest_float("gd_uncertainty_scale", 0.0, 1.5)
+        cfg.model.gd_uncertainty_min_stddev = trial.suggest_float("gd_uncertainty_min_stddev", 0.05, 1.0)
+        cfg.model.gd_uncertainty_max_stddev = trial.suggest_float("gd_uncertainty_max_stddev", 1.0, 6.0)
+        # Ensure bounds are consistent; otherwise prune
+        if cfg.model.gd_uncertainty_max_stddev <= cfg.model.gd_uncertainty_min_stddev:
+            raise optuna.TrialPruned("Invalid stddev bounds: max <= min")
+        # Draw margin tuning
+        cfg.model.draw_margin = trial.suggest_float("draw_margin", 0.1, 1.0)
         # Keep gamma at default (not tuned)
         cfg.model.gd_gamma = 0.0
 
@@ -178,6 +188,12 @@ def run_tuning(
         trial.set_user_attr("accuracy", acc)
         trial.set_user_attr("log_loss", ll)
         trial.set_user_attr("n_val", int(len(y_true)))
+        # Draw stats
+        pred_labels = np.argmax(proba, axis=1)
+        predicted_draw_rate = float(np.mean(pred_labels == 1)) if len(pred_labels) else float("nan")
+        mean_draw_prob = float(np.mean(proba[:, 1])) if proba.size else float("nan")
+        trial.set_user_attr("predicted_draw_rate", predicted_draw_rate)
+        trial.set_user_attr("mean_draw_prob", mean_draw_prob)
 
         return acc, ll
 
@@ -238,8 +254,14 @@ def run_tuning(
         "gd_colsample_bytree": float(params.get("gd_colsample_bytree", cfg.model.gd_colsample_bytree)),
         # Not tuned; explicit default retained for clarity
         "gd_gamma": float(cfg.model.gd_gamma),
-        # Architecture uncertainty
+        # Uncertainty parameters
         "gd_uncertainty_stddev": float(params.get("gd_uncertainty_stddev", cfg.model.gd_uncertainty_stddev)),
+        "gd_uncertainty_base_stddev": float(params.get("gd_uncertainty_base_stddev", cfg.model.gd_uncertainty_base_stddev)),
+        "gd_uncertainty_scale": float(params.get("gd_uncertainty_scale", cfg.model.gd_uncertainty_scale)),
+        "gd_uncertainty_min_stddev": float(params.get("gd_uncertainty_min_stddev", cfg.model.gd_uncertainty_min_stddev)),
+        "gd_uncertainty_max_stddev": float(params.get("gd_uncertainty_max_stddev", cfg.model.gd_uncertainty_max_stddev)),
+        # Draw margin
+        "draw_margin": float(params.get("draw_margin", cfg.model.draw_margin)),
     }
 
     # Persist to YAML under package config directory for easy loading
@@ -277,6 +299,8 @@ def run_tuning(
                 "params": t.params,
                 "accuracy": float(t.user_attrs.get("accuracy", float("nan"))),
                 "log_loss": float(t.user_attrs.get("log_loss", float("nan"))),
+                "predicted_draw_rate": float(t.user_attrs.get("predicted_draw_rate", float("nan"))),
+                "mean_draw_prob": float(t.user_attrs.get("mean_draw_prob", float("nan"))),
             }
             for t in pareto
         ],

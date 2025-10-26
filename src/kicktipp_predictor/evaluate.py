@@ -392,19 +392,9 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
                 "away_team": pred.get("away_team"),
                 "predicted_home_score": pred.get("predicted_home_score"),
                 "predicted_away_score": pred.get("predicted_away_score"),
-                "home_expected_goals": pred.get("home_expected_goals"),
-                "away_expected_goals": pred.get("away_expected_goals"),
                 "home_win_probability": pred.get("home_win_probability"),
                 "draw_probability": pred.get("draw_probability"),
                 "away_win_probability": pred.get("away_win_probability"),
-                "entropy": pred.get("entropy"),
-                "blend_weight": pred.get("blend_weight"),
-                "cls_p_H": pred.get("cls_p_H"),
-                "cls_p_D": pred.get("cls_p_D"),
-                "cls_p_A": pred.get("cls_p_A"),
-                "pois_p_H": pred.get("pois_p_H"),
-                "pois_p_D": pred.get("pois_p_D"),
-                "pois_p_A": pred.get("pois_p_A"),
                 "actual_home_score": pred.get("actual_home_score"),
                 "actual_away_score": pred.get("actual_away_score"),
                 "points_earned": pred.get("points_earned"),
@@ -412,6 +402,9 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
                 "winner_pred": pred.get("winner_pred"),
                 "winner_correct": pred.get("winner_correct"),
                 "winner_pred_prob": pred.get("winner_pred_prob"),
+                "predicted_goal_difference": pred.get("predicted_goal_difference"),
+                "uncertainty_stddev": pred.get("uncertainty_stddev"),
+                "draw_margin_used": pred.get("draw_margin_used"),
             }
             debug_rows.append(row)
         if debug_rows:
@@ -681,6 +674,54 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
         points_table.add_row(str(point_value), str(count), f"{(count/total):.1%}")
 
     console.print(Columns([dist_table, points_table], equal=True))
+
+    # Additional monitoring: draw statistics and uncertainty scaling
+    try:
+        total_matches = max(1, metrics["n"])
+        actual_draw_rate = float(label_counts.get("D", 0)) / float(total_matches)
+        predicted_draw_rate = float(pred_counts.get("D", 0)) / float(total_matches)
+        avg_draw_prob = float(np.mean(prob_matrix[:, 1]))
+        target_ok = 0.15 <= predicted_draw_rate <= 0.30
+
+        draw_table = Table(title="Draw Stats", box=box.SIMPLE_HEAVY)
+        draw_table.add_column("Metric", justify="left")
+        draw_table.add_column("Value", justify="right")
+        draw_table.add_row("Actual draw rate", f"{actual_draw_rate:.3f}")
+        draw_table.add_row("Predicted draw rate", f"{predicted_draw_rate:.3f}")
+        draw_table.add_row("Avg draw probability", f"{avg_draw_prob:.3f}")
+        draw_table.add_row("Within 15–30% target", "Yes" if target_ok else "No")
+
+        # Uncertainty scaling stats from predictions
+        gd_abs = np.array([
+            abs(float(p.get("predicted_goal_difference", 0.0))) for p in all_predictions
+        ], dtype=float)
+        stddevs = np.array([
+            float(p.get("uncertainty_stddev", float("nan"))) for p in all_predictions
+        ], dtype=float)
+        if len(gd_abs) > 1 and np.all(np.isfinite(stddevs)):
+            corr = float(np.corrcoef(gd_abs, stddevs)[0, 1])
+        else:
+            corr = float("nan")
+        std_mean = float(np.nanmean(stddevs))
+        std_min = float(np.nanmin(stddevs))
+        std_max = float(np.nanmax(stddevs))
+        # draw margin used (assumes static)
+        dm_values = [p.get("draw_margin_used") for p in all_predictions]
+        dm_values = [float(x) for x in dm_values if x is not None]
+        draw_margin_used = float(dm_values[0]) if dm_values else float("nan")
+
+        unc_table = Table(title="Uncertainty Stats", box=box.SIMPLE_HEAVY)
+        unc_table.add_column("Metric", justify="left")
+        unc_table.add_column("Value", justify="right")
+        unc_table.add_row("Stddev mean", f"{std_mean:.3f}")
+        unc_table.add_row("Stddev min", f"{std_min:.3f}")
+        unc_table.add_row("Stddev max", f"{std_max:.3f}")
+        unc_table.add_row("corr(|pred GD|, stddev)", f"{corr:.3f}")
+        unc_table.add_row("Draw margin used", f"{draw_margin_used:.3f}")
+
+        console.print(Columns([draw_table, unc_table], equal=True))
+    except Exception:
+        pass
 
     # Top scorelines
     top_table = Table(

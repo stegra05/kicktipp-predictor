@@ -103,6 +103,11 @@ def _apply_model_params_from_dict(config: "Config", params: dict[str, Any]) -> N
         "gd_gamma": float,
         # Probabilistic translation
         "gd_uncertainty_stddev": float,
+        "gd_uncertainty_base_stddev": float,
+        "gd_uncertainty_scale": float,
+        "gd_uncertainty_min_stddev": float,
+        "gd_uncertainty_max_stddev": float,
+        "draw_margin": float,
         # Training helpers
         "gd_early_stopping_rounds": int,
         # Scoreline smoothing
@@ -218,9 +223,14 @@ class ModelConfig:
     - gd_min_child_weight (float): Minimum sum of instance weight in a child. Range 0.1–10.
     - gd_colsample_bytree (float): Column subsample fraction per tree. Range 0.5–1.0.
     - gd_gamma (float): Minimum loss reduction required to make a split. Range 0.0–10.0.
-    - gd_uncertainty_stddev (float): Stddev for probabilistic translation of goal
-      difference to scoreline/outcome; higher values produce flatter probabilities.
-      Typical range 0.5–3.0. Default 1.5.
+    - gd_uncertainty_stddev (float): Legacy fixed stddev for probabilistic translation of goal
+      difference to scoreline/outcome. Used when dynamic parameters are not set.
+    - gd_uncertainty_base_stddev (float): Base stddev for dynamic uncertainty; must be > 0.
+    - gd_uncertainty_scale (float): Scale factor for dynamic stddev w.r.t. |predicted_gd|; must be ≥ 0.
+    - gd_uncertainty_min_stddev (float): Lower bound clamp for dynamic stddev. Default 0.2.
+    - gd_uncertainty_max_stddev (float): Upper bound clamp for dynamic stddev. Default 4.0.
+    - draw_margin (float): Half-width around 0 goal difference treated as draw in Normal CDF
+      calculation; typical range 0.1–1.0. Default 0.5.
 
     General training knobs:
     - max_goals (int): Upper bound for translation grid. Range 4–10.
@@ -246,6 +256,11 @@ class ModelConfig:
 
     # Probabilistic translation
     gd_uncertainty_stddev: float = 1.5
+    gd_uncertainty_base_stddev: float = 1.5
+    gd_uncertainty_scale: float = 0.3
+    gd_uncertainty_min_stddev: float = 0.2
+    gd_uncertainty_max_stddev: float = 4.0
+    draw_margin: float = 0.5
 
     # Translation grid / general knobs
     max_goals: int = 8
