@@ -420,37 +420,8 @@ class DataLoader:
         ]
         features_df = self._merge_history_features(base, long_df, hist_cols)
 
-        # Elo ratings joined per match for normalization
-        try:
-            match_elos, _ = self._compute_elos_from_matches(matches)
-            features_df = features_df.merge(
-                match_elos, left_on="match_id", right_on="match_id", how="left"
-            )
-            # Derived Elo difference (home - away)
-            features_df["elo_diff"] = (
-                features_df.get("home_elo", 0.0) - features_df.get("away_elo", 0.0)
-            )
-            # Normalize elo_diff by average matches played prior
-            home_mp = features_df.get("home_matches_played", pd.Series(0)).fillna(0)
-            away_mp = features_df.get("away_matches_played", pd.Series(0)).fillna(0)
-            avg_matches = (home_mp + away_mp) / 2.0
-            scale_factor = 1.0 + avg_matches * 0.01
-            features_df["normalized_elo_diff"] = (
-                features_df["elo_diff"].fillna(0).astype(float) / scale_factor
-            )
-            # Compute tamed Elo feature before dropping transient columns
-            features_df = self._compute_tanh_tamed_elo(features_df)
-            # Transient Elo features: created briefly and then removed to prevent leakage/bias
-            features_df.drop(
-                columns=["home_elo", "away_elo", "elo_diff"],
-                errors="ignore",
-                inplace=True,
-            )
-        except Exception:
-            # Elo is optional; continue gracefully
-            # Ensure feature exists even if Elo computation failed
-            features_df = self._compute_tanh_tamed_elo(features_df)
-            pass
+        # Compute tamed Elo feature (without storing raw Elo data)
+        features_df = self._compute_tanh_tamed_elo(features_df)
 
         # Derived form diffs
         features_df["abs_weighted_form_points_diff"] = (
@@ -590,59 +561,8 @@ class DataLoader:
                 inplace=True,
             )
 
-        # Elo ratings as-of the match date (from historical only)
-        try:
-            _, elo_long_df = self._compute_elos_from_matches(historical_matches)
-        except Exception:
-            elo_long_df = None
-        if elo_long_df is not None and not elo_long_df.empty:
-            try:
-                # Prepare home/away elo frames
-                home_elo = elo_long_df.rename(
-                    columns={"team": "home_team", "elo": "home_elo"}
-                )[["home_team", "date", "home_elo"]].sort_values(["date"])
-                away_elo = elo_long_df.rename(
-                    columns={"team": "away_team", "elo": "away_elo"}
-                )[["away_team", "date", "away_elo"]].sort_values(["date"])
-                features_df = pd.merge_asof(
-                    features_df.sort_values("date"),
-                    home_elo,
-                    left_on="date",
-                    right_on="date",
-                    left_by="home_team",
-                    right_by="home_team",
-                    direction="backward",
-                )
-                features_df = pd.merge_asof(
-                    features_df.sort_values("date"),
-                    away_elo,
-                    left_on="date",
-                    right_on="date",
-                    left_by="away_team",
-                    right_by="away_team",
-                    direction="backward",
-                )
-                features_df["elo_diff"] = (
-                    features_df.get("home_elo", 0.0)
-                    - features_df.get("away_elo", 0.0)
-                )
-                # Normalize and compute tamed Elo for upcoming matches
-                home_mp = features_df.get("home_matches_played", pd.Series(0)).fillna(0)
-                away_mp = features_df.get("away_matches_played", pd.Series(0)).fillna(0)
-                avg_matches = (home_mp + away_mp) / 2.0
-                scale_factor = 1.0 + avg_matches * 0.01
-                features_df["normalized_elo_diff"] = (
-                    pd.to_numeric(features_df.get("elo_diff", 0.0), errors="coerce").fillna(0.0)
-                    / scale_factor
-                )
-                features_df = self._compute_tanh_tamed_elo(features_df)
-            except Exception:
-                # If Elo merge fails, still ensure feature exists
-                features_df = self._compute_tanh_tamed_elo(features_df)
-                pass
-        else:
-            # No Elo available; still create a safe default feature
-            features_df = self._compute_tanh_tamed_elo(features_df)
+        # Compute tamed Elo feature (without storing raw Elo data)
+        features_df = self._compute_tanh_tamed_elo(features_df)
 
         # Derived diffs
         features_df["abs_weighted_form_points_diff"] = (
@@ -778,58 +698,7 @@ class DataLoader:
         )
         return long_df
 
-    def _compute_elos_from_matches(
-        self, matches: list[dict], K: float | int = 20, home_adv: float | int = 90
-    ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Compute Elo ratings chronologically.
-
-        Returns:
-            match_elos: DataFrame with columns ['match_id','home_elo','away_elo']
-                (pre-match ratings)
-            elo_long: DataFrame with columns ['team','date','elo'] giving
-                pre-match Elo per team per match
-        """
-        if not matches:
-            return pd.DataFrame(), pd.DataFrame()
-
-        df = pd.DataFrame(matches).copy()
-        if df.empty:
-            return pd.DataFrame(), pd.DataFrame()
-        df = df.sort_values(["date", "match_id"])  # chronological
-
-        ratings: dict[str, float] = defaultdict(lambda: 1500.0)
-        rows_match: list[dict] = []
-        rows_long: list[dict] = []
-
-        for _, m in df.iterrows():
-            mid = m.get("match_id")
-            date = m.get("date")
-            home = m.get("home_team")
-            away = m.get("away_team")
-            hs = m.get("home_score")
-            as_ = m.get("away_score")
-            r_h = float(ratings[home])
-            r_a = float(ratings[away])
-
-            rows_match.append({"match_id": mid, "home_elo": r_h, "away_elo": r_a})
-            rows_long.append({"team": home, "date": date, "elo": r_h})
-            rows_long.append({"team": away, "date": date, "elo": r_a})
-
-            if pd.notnull(hs) and pd.notnull(as_):
-                s_h = 1.0 if hs > as_ else (0.5 if hs == as_ else 0.0)
-                exp_h = 1.0 / (1.0 + 10 ** (-(r_h + float(home_adv) - r_a) / 400.0))
-                delta_h = float(K) * (s_h - exp_h)
-                ratings[home] = r_h + delta_h
-                ratings[away] = r_a - delta_h
-
-        match_elos = pd.DataFrame(rows_match).drop_duplicates(
-            subset=["match_id"], keep="last"
-        )
-        elo_long = pd.DataFrame(rows_long)
-        elo_long["date"] = (
-            pd.to_datetime(elo_long["date"]) if len(elo_long) else elo_long
-        )
-        return match_elos, elo_long
+    # ELO computation removed; tanh_tamed_elo does not require raw Elo storage
 
     def _compute_team_history_features(self, long_df: pd.DataFrame) -> pd.DataFrame:
         """Compute leakage-safe per-team expanding/rolling and momentum features.

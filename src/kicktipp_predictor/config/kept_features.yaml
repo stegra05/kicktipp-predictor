@@ -6,10 +6,6 @@
 # DIFFERENCES: Simple differences/ratios that proved robust in SHAP/ablation
 - abs_weighted_form_points_diff
 - weighted_form_points_difference
-# Removed dead momentum features from selection: abs_momentum_score_diff, momentum_score_difference
-
-# VENUE DELTAS removed (dead code cleanup)
-
 
 # --- Base Averages / Long-Term Strength (The Stable Signals) ---
 
@@ -54,6 +50,7 @@
 # AWAY TEAM FORM
 - away_form_points_weighted_by_opponent_rank
 - away_form_points_per_game
+
 # Multi-window points (unweighted and weighted)
 - away_form_points_L3
 - away_form_points_L5
@@ -67,6 +64,7 @@
 - away_form_goals_scored
 - away_form_goals_conceded
 - away_form_goal_diff
+
 # Multi-window goal diff
 - away_form_goal_diff_L3
 - away_form_goal_diff_L5
