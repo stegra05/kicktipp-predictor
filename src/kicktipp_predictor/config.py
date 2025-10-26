@@ -23,8 +23,9 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 def _resolve_config_file(paths: "PathConfig", override: str | None) -> Path:
     """Resolve configuration file path.
 
-    Prefers the `override` path when provided and exists; otherwise uses the
-    default file in `paths.config_dir`.
+    Prefers the `override` path when provided and exists; otherwise checks the
+    package config directory (`src/kicktipp_predictor/config`) for `best_params.yaml`.
+    Falls back to the project-level `paths.config_dir`.
 
     Args:
         paths: Path configuration.
@@ -37,6 +38,11 @@ def _resolve_config_file(paths: "PathConfig", override: str | None) -> Path:
         candidate = Path(override)
         if candidate.exists():
             return candidate
+    # Prefer packaged config file under src for easy distribution
+    pkg_config_file = Path(__file__).parent / "config" / "best_params.yaml"
+    if pkg_config_file.exists():
+        return pkg_config_file
+    # Fallback to project config directory
     return paths.config_dir / "best_params.yaml"
 
 

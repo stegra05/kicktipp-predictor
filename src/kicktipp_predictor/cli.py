@@ -148,5 +148,36 @@ def web(host: str = "127.0.0.1", port: int = 8000):
 
     flask_app.run(host=host, port=port)
 
+@app.command()
+def tune(
+    n_trials: int = typer.Option(100, help="Number of Optuna trials to run"),
+    seasons_back: int = typer.Option(5, help="Number of seasons back for training"),
+    storage: str | None = typer.Option(
+        None,
+        help="Optuna storage URL (e.g., sqlite:///path/to/optuna.db). Defaults to project data dir.",
+    ),
+    study_name: str = typer.Option("gd_v3_tuning", help="Optuna study name"),
+    timeout: int | None = typer.Option(None, help="Timeout in seconds for optimize()"),
+):
+    """Run Optuna multi-objective tuning for the V3 goal-difference model."""
+    from kicktipp_predictor.tune import run_tuning
+
+    print("=" * 80)
+    print("OPTUNA TUNING")
+    print("=" * 80)
+    print()
+
+    try:
+        run_tuning(
+            n_trials=n_trials,
+            seasons_back=seasons_back,
+            storage=storage,
+            study_name=study_name,
+            timeout=timeout,
+        )
+    except RuntimeError as e:
+        print(f"ERROR: {e}")
+        raise typer.Exit(code=1)
+
 if __name__ == "__main__":
     app()
