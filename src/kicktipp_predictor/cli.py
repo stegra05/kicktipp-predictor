@@ -11,7 +11,7 @@ def train(
 ):
     """Train the match predictor on historical data."""
     from kicktipp_predictor.data import DataLoader
-    from kicktipp_predictor.predictor import MatchPredictor
+    from kicktipp_predictor.predictor import GoalDifferencePredictor
 
     print("=" * 80)
     print("TRAINING MATCH PREDICTOR")
@@ -37,12 +37,12 @@ def train(
 
     # Train predictor
     print("\nTraining predictor...")
-    predictor = MatchPredictor()
+    predictor = GoalDifferencePredictor()
     predictor.train(features_df)
 
     # Save models
     print("\nSaving models...")
-    predictor.save_models()
+    predictor.save_model()
 
     print("\n" + "=" * 80)
     print("TRAINING COMPLETE")
@@ -56,7 +56,7 @@ def predict(
 ):
     """Make predictions for upcoming matches."""
     from kicktipp_predictor.data import DataLoader
-    from kicktipp_predictor.predictor import MatchPredictor
+    from kicktipp_predictor.predictor import GoalDifferencePredictor
 
     print("=" * 80)
     print("MATCH PREDICTIONS")
@@ -66,11 +66,11 @@ def predict(
 
     # Load data
     loader = DataLoader()
-    predictor = MatchPredictor()
+    predictor = GoalDifferencePredictor()
 
     # Load trained models
     try:
-        predictor.load_models()
+        predictor.load_model()
     except FileNotFoundError:
         print("ERROR: No trained models found. Run 'train' command first.")
         raise typer.Exit(code=1)
