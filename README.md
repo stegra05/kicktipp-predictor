@@ -1,204 +1,81 @@
-# Kicktipp Predictor
+### Analysis and Blueprint for the Kicktipp Predictor V3 Architecture
 
-Hey there! This is my little side project while juggling studies – a football match predictor for the German 3. Liga. I built it to dominate my Kicktipp games with friends using some machine learning wizardry: an XGBoost outcome classifier, goal regressors, and Poisson scoreline selection. It comes with a handy CLI, caching, evaluation tools, and an API. :)
+#### Executive Summary
 
-## Features
-- Train outcome and goal models from OpenLigaDB season data
-- Predict upcoming matches with scorelines and H/D/A probabilities
-- Hybrid probability blending: classifier + Poisson with fixed weight
-- Configurable feature selection via `kept_features.yaml`
-- Season-long dynamic evaluation with expanding-window retraining
-- Simple persistence: `data/models/*.joblib` + `metadata.joblib` ^_^
+The project is undergoing a strategic pivot. Analysis of the V2 architecture revealed that despite its sophistication, it had reached a performance ceiling, often producing biased or low-accuracy results. The complexity of its multi-model pipeline (outcome classifier, two goal regressors, blending logic) created multiple points of failure and made true optimization difficult.
 
-## Installation
-- Requirements: Python `>=3.10`
-- Create and activate a virtual environment, then install:
-  ```bash
-  python -m venv .venv
-  source .venv/bin/activate
-  pip install -e .
-  # Optional extras
-  pip install -e .[dev]        # ruff, mypy, pre-commit
-  pip install -e .[tuning]     # optuna
-  pip install -e .[plots]      # shap
-  ```
-- The CLI entrypoint is installed as `kicktipp-predictor`. You can also run:
-  ```bash
-  python -m kicktipp_predictor --help
-  ```
+The new V3 architecture represents a radical simplification designed to overcome these fundamental issues. We are moving from a complex, multi-class classification approach to a more elegant and powerful **ordinal regression framework.** The core of the project will be a single, focused model trained to predict **goal difference**. This change better reflects the nature of the problem, solves inherent class imbalance issues, and provides a much stronger foundation for achieving high accuracy.
 
-## Quickstart (CLI)
-- Show help:
-  ```bash
-  kicktipp-predictor --help
-  ```
-- Train models (past seasons window):
-  ```bash
-  kicktipp-predictor train --seasons-back 5
-  ```
-- Predict upcoming matches (next N days or a specific matchday):
-  ```bash
-  # Next 7 days
-  kicktipp-predictor predict --days 7
-  
-  # Or predict a specific matchday
-  kicktipp-predictor predict --matchday 12
-  ```
-  Notes:
-  - Outcome probabilities use hybrid blending (classifier + Poisson) with a fixed internal weight.
-  - Scorelines are selected via Expected Points (EP) maximization under a Poisson grid.
-- Evaluate a current season with expanding-window retraining:
-  ```bash
-  kicktipp-predictor evaluate --retrain-every 1
-  ```
-  Outputs season metrics and per-matchday breakdowns to `data/predictions/`.
+---
 
-## Configuration
-Configuration is centralized in `src/kicktipp_predictor/config.py` and loaded optionally from YAML.
+#### 1. Post-Mortem: Core Limitations of the V2 Architecture
 
-- YAML location: by default `config/best_params.yaml` at project root. Override via env var:
-  ```bash
-  export KTP_CONFIG_FILE=path/to/your_params.yaml
-  ```
-- Paths (`PathConfig`):
-  - `data_dir`: `data/`
-  - `models_dir`: `data/models/`
-  - `cache_dir`: `data/cache/`
-  - `config_dir`: `config/` (create this directory at project root to use YAMLs)
-- API (`APIConfig`): `base_url`, `league_code` (default `bl3`), `cache_ttl`, `request_timeout`.
-- Model (`ModelConfig`): key options (see code for full list)
-  - Outcome classifier: `outcome_n_estimators`, `outcome_max_depth`, `outcome_learning_rate`, `outcome_subsample`, `outcome_reg_lambda`, `outcome_min_child_weight`
-  - Goal regressors: `goals_n_estimators`, `goals_max_depth`, `goals_learning_rate`, `goals_subsample`, `goals_reg_lambda`, `goals_min_child_weight`, `goals_early_stopping_rounds`
-  - Training: `random_state`, `val_fraction`, `min_training_matches`
-  - Feature/recency: `use_time_decay`, `time_decay_half_life_days`, `form_last_n`
-  - Probability config: `draw_boost` (training class weight), `proba_temperature` (reserved)
-  - Scoreline selection: `max_goals`
-  - Feature selection file: `selected_features_file` (default `kept_features.yaml`)
+Our decision to rebuild is rooted in a clear understanding of the previous architecture's weaknesses:
 
-Example YAML (`config/best_params.yaml`):
-```yaml
-# Training and features
-use_time_decay: true
-time_decay_half_life_days: 330.0
-form_last_n: 5
+*   **Problem-Framing Mismatch:** It treated "Home Win," "Draw," and "Away Win" as independent, nominal classes. In reality, they are ordered points on a continuum. A 3-0 win is an amplified version of a 1-0 win, a piece of information the standard classifier cannot use.
+*   **The "Draw" Problem:** The "Draw" outcome is typically the least frequent and most difficult to predict, leading to significant class imbalance. The V2 architecture tried to solve this with a `draw_boost` parameter—a crude patch on a fundamental problem. This often led to the observed trade-off between a balanced model (with low accuracy) and a biased one (ignoring draws to improve points per game).
+*   **Complexity and Error Propagation:** The pipeline involved three separate models. An error or bias in any one of them could negatively impact the final prediction. The blending logic and conditional scoreline selection added further layers of complexity and hard-coded assumptions (like the fixed `HYBRID_WEIGHT`).
+*   **Indirect Prediction:** The model predicted the final outcome indirectly. It was an assembly of parts, not a single coherent prediction. This made it difficult to answer a simple question: "Why does the model think this will be a home win?"
 
-# Outcome classifier
-outcome_n_estimators: 1150
-outcome_max_depth: 6
-outcome_learning_rate: 0.1
-outcome_subsample: 0.8
-outcome_reg_lambda: 1.0
-outcome_min_child_weight: 0.1587
+---
 
-# Goal regressors
-goals_n_estimators: 800
-goals_max_depth: 6
-goals_learning_rate: 0.1
-goals_subsample: 0.8
-goals_reg_lambda: 1.0
-goals_min_child_weight: 1.6919
+#### 2. The New V3 Architecture: A Blueprint for "Goal Difference Regression"
 
-# Scorelines
-max_goals: 8
+The V3 architecture is built on a single, powerful premise: **the most direct path to predicting the outcome is to predict the goal difference.**
 
-# Class weighting & temperature
-draw_boost: 1.7
-proba_temperature: 1.0
-```
+**A. The Central Component: A Single Regression Model**
 
-Feature selection (`kept_features.yaml`): place this file under `config/` at the project root. If present, only essential columns and the listed features are kept for training and prediction feature frames.
+The multi-model pipeline in `predictor.py` is replaced by a single class, the `GoalDifferencePredictor`.
 
-## Programmatic API
-Train, save, load, and predict in Python:
-```python
-from kicktipp_predictor.data import DataLoader
-from kicktipp_predictor.predictor import MatchPredictor
-from kicktipp_predictor.config import get_config
+*   **Model:** A single `xgboost.XGBRegressor`.
+*   **Target Variable:** The model is trained directly on the `goal_difference` column (`home_score - away_score`), a continuous numerical target.
+*   **Input Features:** It uses the same rich feature set generated by `data.py` (Elo, form metrics, etc.).
 
-# Optional: tweak config in code
-cfg = get_config()
+**B. The Probabilistic Bridge: From Regression to Classification**
 
-loader = DataLoader()
-current = loader.get_current_season()
-all_matches = loader.fetch_historical_seasons(current - 5, current)
-train_df = loader.create_features_from_matches(all_matches)
+A raw goal difference prediction (e.g., `+0.67`) is not enough; we need H/D/A probabilities for robust evaluation and betting-style applications. The "Probabilistic Bridge" is a new, crucial component that translates the regressor's output into a full probability distribution.
 
-predictor = MatchPredictor()
-predictor.train(train_df)
-predictor.save_models()
+1.  **Initial Implementation (Thresholding):** For a quick, working baseline, we will use simple thresholds:
+    *   Predicted `goal_diff > 0.5` → Home Win
+    *   Predicted `goal_diff < -0.5` → Away Win
+    *   Otherwise → Draw
+    *(Note: The `0.5` boundary is a sensible starting point but can be tuned).*
 
-# Later: load and predict upcoming
-predictor.load_models()
-upcoming = loader.get_upcoming_matches(days=7)
-historical = loader.fetch_season_matches(current)
-features = loader.create_prediction_features(upcoming, historical)
-preds = predictor.predict(features)
-for p in preds:
-    print(p["home_team"], "vs", p["away_team"], p["predicted_home_score"], "-", p["predicted_away_score"])  # noqa: E501
-```
+2.  **Definitive Implementation (Probabilistic Translation):** The core innovation is to treat the regressor's output not as a point estimate, but as the *mean* (`μ`) of a probability distribution. This acknowledges the uncertainty in the prediction. We then calculate the probabilities by integrating over the relevant parts of the distribution.
 
-## Evaluation Outputs
-The `evaluate` command writes season artifacts to `data/predictions/`:
-- `metrics_season.json`: overall metrics (Brier, log loss, RPS, accuracy, points, bootstrap CI)
-- `per_matchday_metrics_season.csv`: per-matchday breakdown
-- `blend_debug.csv`: optional diagnostics if available (classifier vs. Poisson probs and blend weight)
+    *   **Distribution Choice:** We can use a Normal distribution (`scipy.stats.norm`) or, more appropriately, a Skellam distribution (`scipy.stats.skellam`), which models the difference between two Poisson variables.
+    *   **Calculation:**
+        *   `P(Home Win) = 1 - CDF(0.5)`
+        *   `P(Away Win) = CDF(-0.5)`
+        *   `P(Draw) = CDF(0.5) - CDF(-0.5)`
+    *   **New Hyperparameter:** The standard deviation (`σ`) of this distribution becomes a key, tunable hyperparameter that controls the model's confidence.
 
-## Performance & Profiling
-Recent optimizations improve training speed and I/O:
-- Parallel season fetching when `model.n_jobs > 1` (threaded)
-- Vectorized and optionally parallel sample-weight assembly during outcome training
-- Conditional validation probability computation (disable by default via `model.compute_val_probs = false`)
-- Lightweight time/memory profiling logged to `data/perf/outcome_training_profile.jsonl`
+**C. Retained Assets: What Stays the Same**
 
-Config toggles (in `ModelConfig`):
-- `n_jobs`: overall threading level
-- `use_parallel_preprocessing`: enable threaded sample-weight assembly
-- `parallel_min_rows`: minimum row threshold to parallelize
-- `compute_val_probs`: compute validation `predict_proba` (off by default)
+This is a strategic rebuild, not a complete rewrite. We will retain the high-quality engineering components:
+*   **`data.py`:** The data loading, caching, and sophisticated feature engineering logic (especially the Elo system) are preserved.
+*   **`evaluate.py`:** The dynamic, expanding-window evaluation framework remains perfectly suited to the task, as it consumes the H/D/A probabilities produced by our new "Probabilistic Bridge."
+*   **`cli.py`:** The user-facing command-line interface will be re-wired to the new predictor but will maintain its familiar `train`, `predict`, and `evaluate` commands.
 
-Benchmark tips:
-- Inspect `data/perf/outcome_training_profile.jsonl` during `train()`; sections include `to_numpy`, `train_val_split`, `compute_class_weights`, `assemble_sample_weights`, `xgb_fit`.
-- Track training-time reductions and memory deltas across commits; aim for ≥20–30% speedup on mid-size datasets without harming accuracy.
+---
 
-## Web Command (optional)
-A `web` command exists in the CLI and expects a Flask app at `kicktipp_predictor.web.app`. If this module is not present in your local checkout, running `kicktipp-predictor web` will fail. Some distributions may include the subpackage.
+#### 3. Summary of Key Decisions and Strategic Advantages
 
-## Paths & Artifacts
-- Models are saved under `data/models/`:
-  - `outcome_classifier.joblib`, `home_goals_regressor.joblib`, `away_goals_regressor.joblib`
-  - `metadata.joblib` (feature columns, label encoder)
-- API cache uses `data/cache/`.
+This new architecture is a direct response to the failings of the old one. Here is a summary of our decisions:
 
-## Contributing
-As a student side project, I'm thrilled if anyone wants to contribute! 
-- Setup:
-  ```bash
-  python -m venv .venv && source .venv/bin/activate
-  pip install -e .[dev]
-  pre-commit install
-  ```
-- Run checks:
-  ```bash
-  ruff check .
-  ruff format .
-  pytest -q
-  ```
-- Guidelines:
-  - Keep changes focused and minimal
-  - Match existing style; prefer small, composable functions
-  - Avoid unrelated fixes in PRs; mention known issues separately
+1.  **DECISION: Shift from Multi-Class Classification to Goal Difference Regression.**
+    *   **ADVANTAGE:** Aligns the model's objective with the ordinal nature of football outcomes, providing a more natural and powerful problem formulation.
 
-I'm super thankful for every bit of time you spend looking at or improving this project – it means the world to me! :)
+2.  **DECISION: Replace the three-model prediction pipeline with a single `XGBRegressor`.**
+    *   **ADVANTAGE:** Radically simplifies the architecture, eliminating error propagation and making the model easier to tune, debug, and interpret.
 
-## Troubleshooting
-- "No trained models found": run `kicktipp-predictor train` first.
-- "Could not create features": early-season data may be insufficient; try a later matchday.
-- OpenLigaDB errors/timeouts: retry later; cached data may be used if available.
-- `web` import error: ensure the `kicktipp_predictor.web` subpackage exists; not all checkouts include it.
-- Evaluate probability options: the `evaluate` command currently uses config defaults; adjust via YAML or programmatic config before running.
+3.  **DECISION: Create a "Probabilistic Bridge" to translate regression output into H/D/A probabilities.**
+    *   **ADVANTAGE:** Solves the "Draw" class imbalance problem elegantly. Draws are no longer a difficult minority class to predict but are simply the natural outcome when the predicted goal difference is near zero. This component also provides a principled way to model uncertainty.
 
-## License
-Licensed under the MIT License. See `LICENSE` for details.
+4.  **DECISION: Postpone further feature engineering and scoreline selection until the core model is perfected.**
+    *   **ADVANTAGE:** Enforces focus. By establishing a robust and accurate core model first, any future additions (like market data or a scoreline generator) will be built upon a solid foundation.
 
-## Thanks!
-A huge shoutout to everyone who checks out this project. Your interest keeps me motivated during late-night coding sessions. If it helps you win your Kicktipp group, drop me a line – I'd love to hear! :)
+5.  **DECISION: Retain and repurpose existing modules for data, evaluation, and the CLI.**
+    *   **ADVANTAGE:** Maximizes development efficiency by leveraging the strongest parts of the existing project.
+
+In conclusion, the V3 Alpha is not just an incremental improvement; it is a fundamental rethinking of the project's core. By simplifying the architecture and choosing a more appropriate mathematical framework, we are creating a system that is more robust, less prone to bias, and has a significantly higher ceiling for predictive accuracy. This is the right path forward.
