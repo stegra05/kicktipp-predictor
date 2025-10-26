@@ -405,6 +405,17 @@ class DataLoader:
         # Ensure proper dtypes and ordering
         long_hist["date"] = pd.to_datetime(long_hist["date"])
         long_hist = long_hist.sort_values(["team", "date", "match_id"]).reset_index(drop=True)
+        # Normalize key dtypes to avoid merge mismatches (e.g., int vs str)
+        if "match_id" in long_hist.columns:
+            try:
+                long_hist["match_id"] = long_hist["match_id"].astype(str)
+            except Exception:
+                pass
+        if "team" in long_hist.columns:
+            try:
+                long_hist["team"] = long_hist["team"].astype(str)
+            except Exception:
+                pass
         # Prior matches played per team (leakage-safe count)
         long_hist["matches_played_prior"] = long_hist.groupby("team", group_keys=False).cumcount()
         # Cache current standings for opponent rank weighting

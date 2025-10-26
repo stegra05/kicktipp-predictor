@@ -122,3 +122,46 @@ def test_training_features_handles_string_match_ids_consistently():
     # Merge on match_id and teams should succeed and produce home_* and away_* history columns
     assert any(col.startswith("home_form_") for col in df.columns)
     assert any(col.startswith("away_form_") for col in df.columns)
+
+
+def test_training_features_numeric_match_ids_merge_ok():
+    dl = DataLoader()
+    base_date = datetime(2022, 8, 1)
+    matches = [
+        {
+            "match_id": 101,
+            "season": 2022,
+            "date": (base_date + timedelta(days=1)).isoformat(),
+            "matchday": 1,
+            "home_team": "Alpha",
+            "away_team": "Beta",
+            "home_score": 2,
+            "away_score": 1,
+            "is_finished": True,
+        },
+        {
+            "match_id": 102,
+            "season": 2022,
+            "date": (base_date + timedelta(days=2)).isoformat(),
+            "matchday": 1,
+            "home_team": "Gamma",
+            "away_team": "Alpha",
+            "home_score": 0,
+            "away_score": 0,
+            "is_finished": True,
+        },
+    ]
+    df = dl.create_features_from_matches(matches)
+    assert isinstance(df, pd.DataFrame)
+    assert not df.empty
+    # Ensure home/away history columns merged without NaNs due to dtype mismatch
+    cols = [
+        "home_form_points_per_game",
+        "away_form_points_per_game",
+        "home_matches_played",
+        "away_matches_played",
+    ]
+    for c in cols:
+        assert c in df.columns
+        # At least some rows should have non-null values (successful merge)
+        assert df[c].notna().any()
