@@ -185,7 +185,6 @@ class DataLoader:
                 print(f"Fetching season {season}/{season + 1}...")
             matches = self.fetch_season_matches(season)
             all_matches.extend(matches)
-            time.sleep(0.5)  # Be nice to the API
 
         return all_matches
 

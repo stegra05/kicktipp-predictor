@@ -46,6 +46,17 @@ def compute_ep_scoreline(
     return _compute(home_lambda, away_lambda, max_goals)
 
 
+def compute_ep_scoreline_conditional(
+    home_lambda: float,
+    away_lambda: float,
+    max_goals: int,
+    outcome: str,
+) -> tuple[int, int]:
+    """Delegate to scoring.compute_ep_scoreline_conditional for outcome-constrained EP selection."""
+    from .scoring import compute_ep_scoreline_conditional as _compute_cond
+    return _compute_cond(home_lambda, away_lambda, max_goals, outcome)
+
+
 # === MatchPredictor ===
 class MatchPredictor:
     """A two-step predictor for match outcomes and scorelines.
@@ -233,6 +244,7 @@ class MatchPredictor:
 
 
 
+
         self._log("Training completed.")
 
     # --- Training Utilities ---
@@ -388,9 +400,9 @@ class MatchPredictor:
 
         outcomes = self.label_encoder.inverse_transform(outcomes_idx)
 
-        # Compute scorelines using EP-only selection
+        # Compute scorelines using outcome-constrained EP selection
         scorelines = self._compute_ep_scorelines(
-            home_lambdas, away_lambdas
+            home_lambdas, away_lambdas, outcomes
         )
 
         return self._format_predictions(
@@ -413,12 +425,12 @@ class MatchPredictor:
 
 
     # --- New: EP scoreline computation ---
-    def _compute_ep_scorelines(self, home_lambdas, away_lambdas):
-        """Computes EP-maximizing scorelines for each match (no parallelism)."""
+    def _compute_ep_scorelines(self, home_lambdas, away_lambdas, outcomes):
+        """Computes EP-maximizing scorelines for each match, constrained by outcome."""
         G = int(self.config.model.max_goals)
         n = len(home_lambdas)
         return [
-            compute_ep_scoreline(home_lambdas[i], away_lambdas[i], G)
+            compute_ep_scoreline_conditional(home_lambdas[i], away_lambdas[i], G, outcomes[i])
             for i in range(n)
         ]
 
@@ -512,6 +524,11 @@ class MatchPredictor:
                 "home_expected_goals": float(home_lambdas[i]),
                 "away_expected_goals": float(away_lambdas[i]),
                 "predicted_result": (
+                    "H" if scorelines[i][0] > scorelines[i][1]
+                    else ("A" if scorelines[i][1] > scorelines[i][0] else "D")
+                ),
+                "predicted_outcome_class": outcomes[i],
+                "predicted_result_aligned": outcomes[i] == (
                     "H" if scorelines[i][0] > scorelines[i][1]
                     else ("A" if scorelines[i][1] > scorelines[i][0] else "D")
                 ),
