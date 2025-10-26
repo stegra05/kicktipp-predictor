@@ -316,27 +316,49 @@ class MatchPredictor:
     def _train_outcome_model(
         self, X: pd.DataFrame, y_result_encoded: np.ndarray, time_weights: np.ndarray
     ):
-        """Trains the outcome classification model."""
+        """Trains the outcome classification model with vectorized preprocessing."""
         start = time.perf_counter()
 
-        X_train, X_val, y_train, y_val, tw_train, tw_val = train_test_split(
-            X,
-            y_result_encoded,
-            time_weights,
+        # Convert once to contiguous float32 arrays for faster XGBoost ingestion
+        X_np = np.ascontiguousarray(X.to_numpy(dtype=np.float32))
+        y_np = np.asarray(y_result_encoded, dtype=np.int32)
+        tw_np = np.asarray(time_weights, dtype=np.float64)
+
+        # Split by indices to avoid expensive DataFrame splitting
+        n = X_np.shape[0]
+        idx = np.arange(n, dtype=np.int32)
+        tr_idx, val_idx = train_test_split(
+            idx,
             train_size=1.0 - self.config.model.val_fraction,
             random_state=self.config.model.random_state,
-            stratify=y_result_encoded,
+            stratify=y_np,
         )
 
-        balanced_weights = compute_sample_weight("balanced", y=y_train)
+        X_train = X_np[tr_idx]
+        X_val_arr = X_np[val_idx]
+        y_train = y_np[tr_idx]
+        y_val = y_np[val_idx]
+        tw_train = tw_np[tr_idx]
+
+        # Balanced class weights (replicates sklearn's 'balanced' setting)
+        # w_c = n_samples / (n_classes * count_c)
+        n_samples = y_train.shape[0]
+        classes = np.unique(y_train)
+        n_classes = int(classes.size)
+        counts = np.bincount(y_train, minlength=int(classes.max()) + 1)
+        with np.errstate(divide="ignore"):
+            class_weights = (n_samples / (n_classes * counts)).astype(np.float64)
+        balanced_weights = class_weights[y_train]
+
+        # Draw boost (vectorized)
         draw_boost = float(self.config.model.draw_boost)
         if "D" in self.label_encoder.classes_ and draw_boost != 1.0:
-            draw_class_label = np.where(self.label_encoder.classes_ == "D")[0][0]
+            draw_class_label = int(np.where(self.label_encoder.classes_ == "D")[0][0])
             boost_weights = np.where(y_train == draw_class_label, draw_boost, 1.0)
         else:
-            boost_weights = np.ones(len(y_train))
+            boost_weights = np.ones(n_samples, dtype=np.float64)
 
-        sample_weights = balanced_weights * tw_train * boost_weights
+        sample_weights = (balanced_weights * tw_train * boost_weights).astype(np.float64)
 
         # Hardcode low-impact params to defaults for simplicity
         outcome_params = {
@@ -351,12 +373,14 @@ class MatchPredictor:
         )
 
         self._log(f"Outcome classifier trained in {time.perf_counter() - start:.2f}s")
-        # Return validation context for calibrator fitting
+        # Return validation context for calibrator fitting (keep API identical)
         try:
-            cls_val_probs = self.outcome_model.predict_proba(X_val)
+            cls_val_probs = self.outcome_model.predict_proba(X_val_arr)
         except Exception:
             cls_val_probs = None
-        return {"X_val": X_val, "y_val_enc": y_val, "cls_val_probs": cls_val_probs}
+        # Preserve DataFrame type for X_val in return payload
+        X_val_df = X.iloc[val_idx]
+        return {"X_val": X_val_df, "y_val_enc": y_val, "cls_val_probs": cls_val_probs}
 
     MIN_LAMBDA: float = 0.2  # clamp for expected goals to avoid degenerate predictions
 
@@ -611,3 +635,4 @@ class MatchPredictor:
         self.label_encoder = metadata["label_encoder"]
 
         self._log("Models loaded successfully.")
+        

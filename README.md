@@ -143,6 +143,23 @@ The `evaluate` command writes season artifacts to `data/predictions/`:
 - `per_matchday_metrics_season.csv`: per-matchday breakdown
 - `blend_debug.csv`: optional diagnostics if available (classifier vs. Poisson probs and blend weight)
 
+## Performance & Profiling
+Recent optimizations improve training speed and I/O:
+- Parallel season fetching when `model.n_jobs > 1` (threaded)
+- Vectorized and optionally parallel sample-weight assembly during outcome training
+- Conditional validation probability computation (disable by default via `model.compute_val_probs = false`)
+- Lightweight time/memory profiling logged to `data/perf/outcome_training_profile.jsonl`
+
+Config toggles (in `ModelConfig`):
+- `n_jobs`: overall threading level
+- `use_parallel_preprocessing`: enable threaded sample-weight assembly
+- `parallel_min_rows`: minimum row threshold to parallelize
+- `compute_val_probs`: compute validation `predict_proba` (off by default)
+
+Benchmark tips:
+- Inspect `data/perf/outcome_training_profile.jsonl` during `train()`; sections include `to_numpy`, `train_val_split`, `compute_class_weights`, `assemble_sample_weights`, `xgb_fit`.
+- Track training-time reductions and memory deltas across commits; aim for ≥20–30% speedup on mid-size datasets without harming accuracy.
+
 ## Web Command (optional)
 A `web` command exists in the CLI and expects a Flask app at `kicktipp_predictor.web.app`. If this module is not present in your local checkout, running `kicktipp-predictor web` will fail. Some distributions may include the subpackage.
 
