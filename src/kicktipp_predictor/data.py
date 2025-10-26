@@ -523,9 +523,7 @@ class DataLoader:
             np.where(features_df["goal_difference"] < 0, "A", "D"),
         )
 
-        # Optionally reduce to selected features if selection exists
         features_df = self._apply_selected_features(features_df)
-
         return features_df
 
     def create_prediction_features(
@@ -680,6 +678,7 @@ class DataLoader:
             "home_form_points_weighted_by_opponent_rank", 0
         ) - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
 
+        features_df = self._apply_selected_features(features_df)
         return features_df
 
     def _apply_selected_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -689,9 +688,7 @@ class DataLoader:
         If the selection file is absent or unreadable, returns df unchanged.
         """
         try:
-            sel_filename = getattr(
-                self.config.model, "selected_features_file", "kept_features.yaml"
-            )
+            sel_filename = self.config.model.selected_features_file
             sel_path = self.config.paths.config_dir / sel_filename
             if not sel_path.exists():
                 return df

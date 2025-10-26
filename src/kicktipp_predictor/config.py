@@ -97,6 +97,11 @@ def _apply_model_params_from_dict(config: "Config", params: dict[str, Any]) -> N
         "gd_gamma": float,
         # Probabilistic translation
         "gd_uncertainty_stddev": float,
+        # Training helpers
+        "gd_early_stopping_rounds": int,
+        # Scoreline smoothing
+        "avg_total_goals": float,
+        "gd_score_alpha": float,
     }
 
     for key, caster in casts.items():
@@ -238,11 +243,15 @@ class ModelConfig:
 
     # Translation grid / general knobs
     max_goals: int = 8
+    # Scoreline smoothing knobs
+    avg_total_goals: float = 2.6
+    gd_score_alpha: float = 0.3
 
     # Training
     random_state: int = 42
     min_training_matches: int = 50
     val_fraction: float = 0.1
+    gd_early_stopping_rounds: int = 0
 
     # Time-decay weighting (recency)
     use_time_decay: bool = True
