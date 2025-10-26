@@ -39,9 +39,13 @@ class DataLoader:
         self.cache_ttl = self.config.api.cache_ttl
         self.timeout = self.config.api.request_timeout
 
-    # =================================================================
-    # Internal helpers (caching & requests)
-    # =================================================================
+        # Elo settings (defaults; can be tuned later via config)
+        self._elo_base = 1500.0
+        self._elo_k = 20.0
+        self._elo_home_adv = 50.0
+        self._elo_avg_k = 4  # average over top/bottom K teams
+        self._elo_history: dict = {}
+
     def _is_cache_valid(self, cache_file: str) -> bool:
         """Return True if cache file exists and is within TTL."""
         try:
@@ -110,6 +114,12 @@ class DataLoader:
         try:
             matches_raw = self._request_matches(url)
             matches = self._parse_matches(matches_raw)
+            # Attach season to each parsed match for downstream Elo and features
+            for m in matches:
+                try:
+                    m["season"] = season
+                except Exception:
+                    pass
             self._save_cached_matches(cache_file, matches)
             return matches
         except Exception as e:
@@ -136,7 +146,14 @@ class DataLoader:
         )
         try:
             matches_raw = self._request_matches(url)
-            return self._parse_matches(matches_raw)
+            parsed = self._parse_matches(matches_raw)
+            # Attach season to each parsed match for downstream Elo and features
+            for m in parsed:
+                try:
+                    m["season"] = season
+                except Exception:
+                    pass
+            return parsed
         except Exception as e:
             print(f"Error fetching matchday {matchday}: {e}")
             return []
@@ -267,6 +284,12 @@ class DataLoader:
 
             col = elo_diff_col
             if col not in df.columns:
+                # Attempt to derive elo_diff from home/away elos if available
+                if "elo_diff" not in df.columns and {"home_elo", "away_elo"}.issubset(df.columns):
+                    df["elo_diff"] = (
+                        pd.to_numeric(df["home_elo"], errors="coerce").fillna(0.0)
+                        - pd.to_numeric(df["away_elo"], errors="coerce").fillna(0.0)
+                    )
                 # Attempt to derive normalized diff from raw Elo difference
                 if "elo_diff" in df.columns:
                     home_mp = df.get("home_matches_played", pd.Series(0)).fillna(0)
@@ -349,6 +372,76 @@ class DataLoader:
 
         return features_df
 
+    def _create_features(
+        self,
+        matches_df: pd.DataFrame,
+        context_df: pd.DataFrame,
+    ) -> tuple[pd.DataFrame, list[str]]:
+        """Build team history features from context with shared logic.
+
+        Args:
+            matches_df: Base matches DataFrame for which features are being created.
+                        Not used directly for history, but included for API symmetry.
+            context_df: Context matches DataFrame used to compute historical team features.
+                        Should include finished matches with valid scores and dates.
+
+        Returns:
+            A tuple of (long_hist, hist_cols):
+            - long_hist: Long-format per-team history features DataFrame with computed stats.
+            - hist_cols: List of history feature column names to merge per side.
+
+        Notes:
+            - Handles empty or malformed context by returning an empty DataFrame.
+            - Normalizes date types and sorts for consistent cumcount and merges.
+        """
+        # Build long-format frame from context matches (finished only)
+        try:
+            context_records = context_df.to_dict(orient="records") if not context_df.empty else []
+        except Exception:
+            context_records = []
+        long_hist = self._build_team_long_df(context_records)
+        if long_hist.empty:
+            return long_hist, []
+        # Ensure proper dtypes and ordering
+        long_hist["date"] = pd.to_datetime(long_hist["date"])
+        long_hist = long_hist.sort_values(["team", "date", "match_id"]).reset_index(drop=True)
+        # Prior matches played per team (leakage-safe count)
+        long_hist["matches_played_prior"] = long_hist.groupby("team", group_keys=False).cumcount()
+        # Cache current standings for opponent rank weighting
+        try:
+            self._current_table = self._calculate_table(context_records)
+        except Exception:
+            self._current_table = {}
+        # Compute team history features
+        long_hist = self._compute_team_history_features(long_hist)
+        # Shared history columns list
+        hist_cols = [
+            "avg_goals_for",
+            "avg_goals_against",
+            "avg_points",
+            "form_points_weighted_by_opponent_rank",
+            "form_points_per_game",
+            "form_points_L3",
+            "form_points_L5",
+            "form_points_L10",
+            "wform_points_L3",
+            "wform_points_L5",
+            "wform_points_L10",
+            "form_wins",
+            "form_draws",
+            "form_losses",
+            "form_goals_scored",
+            "form_goals_conceded",
+            "form_goal_diff",
+            "form_goal_diff_L3",
+            "form_goal_diff_L5",
+            "form_goal_diff_L10",
+            "form_avg_goals_scored",
+            "form_avg_goals_conceded",
+            "matches_played_prior",
+        ]
+        return long_hist, hist_cols
+
     def create_features_from_matches(self, matches: list[dict]) -> pd.DataFrame:
         """Create feature dataset from match data using vectorized pandas ops.
 
@@ -372,53 +465,30 @@ class DataLoader:
             return pd.DataFrame()
         base["date"] = pd.to_datetime(base["date"])
 
-        # Precompute team-long frame and vectorized history features
-        long_df = self._build_team_long_df(matches)
-        if long_df.empty:
+        # Compute Elo history and attach pre-match elo_diff to base
+        try:
+            elo_hist = self._compute_elo_history(matches)
+            by_match = elo_hist.get("by_match", {})
+            if by_match:
+                elo_df = pd.DataFrame(
+                    [{"match_id": k, **v} for k, v in by_match.items()]
+                )
+                # Normalize key type for safe merge
+                base["match_id"] = base["match_id"].astype(str)
+                elo_df["match_id"] = elo_df["match_id"].astype(str)
+                base = base.merge(elo_df, on="match_id", how="left")
+            else:
+                base["elo_diff"] = 0.0
+        except Exception:
+            base["elo_diff"] = base.get("elo_diff", 0.0)
+
+        # Shared history features via helper
+        matches_df = pd.DataFrame(matches)
+        long_hist, hist_cols = self._create_features(matches_df, matches_df)
+        if long_hist.empty:
             return pd.DataFrame()
-        long_df["date"] = pd.to_datetime(long_df["date"])
-        long_df = long_df.sort_values(["team", "date", "match_id"]).reset_index(
-            drop=True
-        )
-        grp = long_df.groupby("team", group_keys=False)
-
-        # Prior matches played per team (leakage-safe count)
-        long_df["matches_played_prior"] = grp.cumcount()
-
-        # Cache current standings for opponent rank weighting
-        self._current_table = self._calculate_table(matches)
-        long_df = self._compute_team_history_features(long_df)
-
         # Assemble match-level features by merging home/away history rows
-        hist_cols = [
-            "avg_goals_for",
-            "avg_goals_against",
-            "avg_points",
-            "form_points_weighted_by_opponent_rank",
-            "form_points_per_game",
-            # Multi-window points (unweighted and weighted)
-            "form_points_L3",
-            "form_points_L5",
-            "form_points_L10",
-            "wform_points_L3",
-            "wform_points_L5",
-            "wform_points_L10",
-            "form_wins",
-            "form_draws",
-            "form_losses",
-            "form_goals_scored",
-            "form_goals_conceded",
-            "form_goal_diff",
-            # Multi-window goal diff
-            "form_goal_diff_L3",
-            "form_goal_diff_L5",
-            "form_goal_diff_L10",
-            "form_avg_goals_scored",
-            "form_avg_goals_conceded",
-            # matches played prior (leakage-safe count)
-            "matches_played_prior",
-        ]
-        features_df = self._merge_history_features(base, long_df, hist_cols)
+        features_df = self._merge_history_features(base, long_hist, hist_cols)
 
         # Compute tamed Elo feature (without storing raw Elo data)
         features_df = self._compute_tanh_tamed_elo(features_df)
@@ -465,50 +535,76 @@ class DataLoader:
         upcoming = pd.DataFrame(upcoming_matches).copy()
         upcoming["date"] = pd.to_datetime(upcoming["date"])
 
-        # Build long_df and history features from historical (finished) matches only
-        long_hist = self._build_team_long_df(historical_matches)
+        # Compute Elo diff for upcoming matches from historical Elo state
+        try:
+            elo_hist = self._compute_elo_history(historical_matches)
+            season_current = elo_hist.get("season_current_elos", {})
+            by_season_hist = self._group_matches_by_season(historical_matches)
+            upcoming_seasons = (
+                upcoming["season"].dropna().astype(int).unique().tolist()
+                if "season" in upcoming.columns
+                else []
+            )
+            # Initialize elos for any upcoming season not in current state
+            for s in upcoming_seasons:
+                if s not in season_current:
+                    teams_s = set(
+                        pd.Series(
+                            pd.concat(
+                                [
+                                    upcoming.loc[upcoming["season"] == s, "home_team"],
+                                    upcoming.loc[upcoming["season"] == s, "away_team"],
+                                ]
+                            )
+                        )
+                        .dropna()
+                        .astype(str)
+                        .tolist()
+                    )
+                    prev_teams = self._teams_in_season(by_season_hist.get(s - 1, []))
+                    prior_presence = self._build_prior_presence(
+                        [x for x in sorted(by_season_hist.keys()) if x < s],
+                        by_season_hist,
+                    )
+                    prev_table = (
+                        self._calculate_table(by_season_hist.get(s - 1, []))
+                        if (s - 1) in by_season_hist
+                        else {}
+                    )
+                    prev_final_elos = elo_hist.get("season_final", {}).get(s - 1, {})
+                    season_current[s] = self._compute_initial_elos_for_season(
+                        s,
+                        teams_s,
+                        prev_teams,
+                        prev_final_elos,
+                        prev_table,
+                        prior_presence,
+                        int(self._elo_avg_k),
+                    )
+            # Map per-row elo
+            def _row_elo_diff(r: pd.Series) -> float:
+                s = int(r.get("season")) if pd.notna(r.get("season")) else None
+                he = None
+                ae = None
+                if s is not None and s in season_current:
+                    he = float(season_current[s].get(str(r.get("home_team")), self._elo_base))
+                    ae = float(season_current[s].get(str(r.get("away_team")), self._elo_base))
+                else:
+                    he = float(self._elo_base)
+                    ae = float(self._elo_base)
+                r["home_elo"] = he
+                r["away_elo"] = ae
+                return he - ae
+
+            upcoming["elo_diff"] = upcoming.apply(_row_elo_diff, axis=1)
+        except Exception:
+            upcoming["elo_diff"] = upcoming.get("elo_diff", 0.0)
+
+        # Shared history features via helper
+        hist_df = pd.DataFrame(historical_matches)
+        long_hist, hist_cols = self._create_features(upcoming, hist_df)
         if long_hist.empty:
             return pd.DataFrame()
-        long_hist["date"] = pd.to_datetime(long_hist["date"])
-        long_hist = long_hist.sort_values(["team", "date", "match_id"]).reset_index(
-            drop=True
-        )
-
-        # Cache current standings for opponent rank weighting
-        self._current_table = self._calculate_table(historical_matches)
-        long_hist = self._compute_team_history_features(long_hist)
-
-        # Columns to use for asof merge
-        hist_cols = [
-            "avg_goals_for",
-            "avg_goals_against",
-            "avg_points",
-            "form_points_weighted_by_opponent_rank",
-            "form_points_per_game",
-            # Multi-window points (unweighted and weighted)
-            "form_points_L3",
-            "form_points_L5",
-            "form_points_L10",
-            "wform_points_L3",
-            "wform_points_L5",
-            "wform_points_L10",
-            "form_wins",
-            "form_draws",
-            "form_losses",
-            "form_goals_scored",
-            "form_goals_conceded",
-            "form_goal_diff",
-            # Multi-window goal diff
-            "form_goal_diff_L3",
-            "form_goal_diff_L5",
-            "form_goal_diff_L10",
-            "form_avg_goals_scored",
-            "form_avg_goals_conceded",
-            # matches played prior (leakage-safe count)
-            "matches_played_prior",
-        ]
-        # Compute per-team prior match count for upcoming features
-        long_hist["matches_played_prior"] = long_hist.groupby("team").cumcount()
         hist_merge = long_hist[["team", "date"] + hist_cols].copy()
 
         # Prepare per-side frames for asof merge (requires sorting by date)
@@ -698,7 +794,204 @@ class DataLoader:
         )
         return long_df
 
-    # ELO computation removed; tanh_tamed_elo does not require raw Elo storage
+    # === Elo computation and initialization ===
+    def _group_matches_by_season(self, matches: list[dict]) -> dict[int, list[dict]]:
+        seasons: dict[int, list[dict]] = {}
+        for m in matches:
+            s = m.get("season")
+            if s is None:
+                continue
+            seasons.setdefault(int(s), []).append(m)
+        return seasons
+
+    def _teams_in_season(self, season_matches: list[dict]) -> set[str]:
+        teams: set[str] = set()
+        for m in season_matches:
+            ht = m.get("home_team")
+            at = m.get("away_team")
+            if ht:
+                teams.add(str(ht))
+            if at:
+                teams.add(str(at))
+        return teams
+
+    def _identify_new_teams(self, season_teams: set[str], prev_season_teams: set[str]) -> set[str]:
+        return set(season_teams) - set(prev_season_teams)
+
+    def _build_prior_presence(self, seasons: list[int], by_season: dict[int, list[dict]]) -> set[str]:
+        prior: set[str] = set()
+        for s in seasons:
+            for m in by_season.get(s, []) or []:
+                ht = m.get("home_team")
+                at = m.get("away_team")
+                if ht:
+                    prior.add(str(ht))
+                if at:
+                    prior.add(str(at))
+        return prior
+
+    def _classify_new_teams(
+        self,
+        new_teams: set[str],
+        prior_presence: set[str],
+    ) -> dict[str, str]:
+        """Classify new entrants heuristically: promoted vs relegated.
+
+        Teams seen in earlier seasons of this league but absent last season
+        are treated as 'relegated' (likely stronger). Teams never seen before
+        are treated as 'promoted' (likely weaker).
+        """
+        classes: dict[str, str] = {}
+        for t in new_teams:
+            classes[t] = "relegated" if t in prior_presence else "promoted"
+        return classes
+
+    def _compute_prev_season_bases(
+        self,
+        prev_final_elos: dict[str, float] | None,
+        prev_table: dict | None,
+        k: int,
+    ) -> tuple[float, float]:
+        """Compute base Elo for promoted and relegated using prev season.
+
+        Returns (top_avg_for_relegated, bottom_avg_for_promoted).
+        Fallbacks to overall mean or 1500 when insufficient data.
+        """
+        prev_final_elos = prev_final_elos or {}
+        prev_table = prev_table or {}
+        # Sort teams by final position
+        try:
+            sorted_items = sorted(
+                prev_table.items(), key=lambda x: x[1].get("position", 9999)
+            )
+        except Exception:
+            sorted_items = []
+        top_teams = [t for t, _ in sorted_items[:max(1, k)] if t in prev_final_elos]
+        bottom_teams = [t for t, _ in sorted_items[-max(1, k):] if t in prev_final_elos]
+        if top_teams:
+            top_avg = float(np.mean([prev_final_elos[t] for t in top_teams]))
+        else:
+            top_avg = (
+                float(np.mean(list(prev_final_elos.values())))
+                if prev_final_elos
+                else self._elo_base
+            )
+        if bottom_teams:
+            bottom_avg = float(np.mean([prev_final_elos[t] for t in bottom_teams]))
+        else:
+            bottom_avg = (
+                float(np.mean(list(prev_final_elos.values())))
+                if prev_final_elos
+                else self._elo_base
+            )
+        return top_avg, bottom_avg
+
+    def _compute_initial_elos_for_season(
+        self,
+        season: int,
+        teams_s: set[str],
+        prev_teams: set[str],
+        prev_final_elos: dict[str, float] | None,
+        prev_table: dict | None,
+        prior_presence: set[str],
+        k: int,
+    ) -> dict[str, float]:
+        """Determine starting Elo for all teams in a season with enhanced init."""
+        start: dict[str, float] = {}
+        prev_final_elos = prev_final_elos or {}
+        # Continuing teams keep last season's final Elo if available
+        for t in teams_s & prev_teams:
+            start[t] = float(prev_final_elos.get(t, self._elo_base))
+        new_teams = self._identify_new_teams(teams_s, prev_teams)
+        classes = self._classify_new_teams(new_teams, prior_presence)
+        top_avg, bottom_avg = self._compute_prev_season_bases(prev_final_elos, prev_table, k)
+        for t in new_teams:
+            start[t] = float(bottom_avg if classes.get(t) == "promoted" else top_avg)
+        # Any remaining (e.g., unseen teams) get neutral base
+        for t in teams_s:
+            start.setdefault(t, self._elo_base)
+        return start
+
+    def _compute_elo_history(self, matches: list[dict]) -> dict:
+        """Compute Elo by season and pre-match ratings with enhanced initialization.
+
+        Produces:
+          - by_match: {match_id: {home_elo, away_elo, elo_diff}}
+          - season_initial: {season: {team: elo}}
+          - season_final: {season: {team: elo}}
+          - season_current_elos: {season: {team: elo}} at the last processed match
+        """
+        if not matches:
+            self._elo_history = {
+                "by_match": {},
+                "season_initial": {},
+                "season_final": {},
+                "season_current_elos": {},
+            }
+            return self._elo_history
+
+        by_season = self._group_matches_by_season(matches)
+        seasons_sorted = sorted(by_season.keys())
+        season_initial: dict[int, dict[str, float]] = {}
+        season_final: dict[int, dict[str, float]] = {}
+        by_match: dict[int | str, dict[str, float]] = {}
+        season_current: dict[int, dict[str, float]] = {}
+
+        prev_final_elos: dict[str, float] = {}
+        for s in seasons_sorted:
+            season_matches = sorted(
+                by_season.get(s, []),
+                key=lambda m: (m.get("date"), int(m.get("matchday", 0)), str(m.get("match_id"))),
+            )
+            teams_s = self._teams_in_season(season_matches)
+            prev_teams = self._teams_in_season(by_season.get(s - 1, []))
+            prior_presence = self._build_prior_presence(
+                [x for x in seasons_sorted if x < s], by_season
+            )
+            prev_table = self._calculate_table(by_season.get(s - 1, [])) if (s - 1) in by_season else {}
+
+            # Initial elos for the season
+            start_elos = self._compute_initial_elos_for_season(
+                s, teams_s, prev_teams, prev_final_elos, prev_table, prior_presence, int(self._elo_avg_k)
+            )
+            season_initial[s] = dict(start_elos)
+            current_elos = dict(start_elos)
+
+            # Process matches
+            for m in season_matches:
+                ht = str(m.get("home_team"))
+                at = str(m.get("away_team"))
+                he = float(current_elos.get(ht, self._elo_base))
+                ae = float(current_elos.get(at, self._elo_base))
+                by_match[m.get("match_id")] = {
+                    "home_elo": he,
+                    "away_elo": ae,
+                    "elo_diff": he - ae,
+                }
+                # Update post-match if finished
+                hs = m.get("home_score")
+                as_ = m.get("away_score")
+                if m.get("is_finished") and hs is not None and as_ is not None:
+                    s_home = 1.0 if hs > as_ else (0.5 if hs == as_ else 0.0)
+                    # Expected home score with home advantage
+                    e_home = 1.0 / (
+                        1.0 + 10.0 ** (((ae + float(self._elo_home_adv)) - he) / 400.0)
+                    )
+                    delta = float(self._elo_k) * (s_home - e_home)
+                    current_elos[ht] = he + delta
+                    current_elos[at] = ae - delta
+
+            season_final[s] = dict(current_elos)
+            season_current[s] = dict(current_elos)
+            prev_final_elos = dict(current_elos)
+
+        self._elo_history = {
+            "by_match": by_match,
+            "season_initial": season_initial,
+            "season_final": season_final,
+            "season_current_elos": season_current,
+        }
+        return self._elo_history
 
     def _compute_team_history_features(self, long_df: pd.DataFrame) -> pd.DataFrame:
         """Compute leakage-safe per-team expanding/rolling and momentum features.
