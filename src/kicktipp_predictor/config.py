@@ -92,27 +92,22 @@ def _apply_model_params_from_dict(config: "Config", params: dict[str, Any]) -> N
         "random_state": int,
         "n_jobs": int,
         "selected_features_file": str,
-        # GoalDifferenceRegressor hyperparameters
-        "gd_n_estimators": int,
-        "gd_max_depth": int,
-        "gd_learning_rate": float,
-        "gd_subsample": float,
-        "gd_reg_lambda": float,
-        "gd_min_child_weight": float,
-        "gd_colsample_bytree": float,
-        "gd_gamma": float,
-        # Probabilistic translation
-        "gd_uncertainty_stddev": float,
-        "gd_uncertainty_base_stddev": float,
-        "gd_uncertainty_scale": float,
-        "gd_uncertainty_min_stddev": float,
-        "gd_uncertainty_max_stddev": float,
+        # --- V4 Cascaded Model: Draw Classifier ---
+        "draw_n_estimators": int,
+        "draw_max_depth": int,
+        "draw_learning_rate": float,
+        "draw_subsample": float,
+        "draw_colsample_bytree": float,
+        "draw_scale_pos_weight": float,
+        # --- V4 Cascaded Model: Win Classifier (H vs A) ---
+        "win_n_estimators": int,
+        "win_max_depth": int,
+        "win_learning_rate": float,
+        "win_subsample": float,
+        "win_colsample_bytree": float,
+        # Additional general knobs
         "draw_margin": float,
-        # Training helpers
-        "gd_early_stopping_rounds": int,
-        # Scoreline smoothing
         "avg_total_goals": float,
-        "gd_score_alpha": float,
     }
 
     for key, caster in casts.items():
@@ -206,73 +201,42 @@ class APIConfig:
     )
 
 # === Model Hyperparameters ===
-# Simplified config focusing on GoalDifferenceRegressor
+# V4 cascaded model configuration: draw classifier + win classifier
 @dataclass
 class ModelConfig:
     """Model hyperparameters and training configuration.
 
-    Focuses on a single `GoalDifferenceRegressor` along with settings for
-    training, feature engineering, and probabilistic translation.
+    Defines two cascaded classifiers for V4 architecture:
+    - Draw Classifier: predicts draw vs non-draw.
+    - Win Classifier: predicts home win vs away win given non-draw.
 
-    Parameters:
-    - gd_n_estimators (int): Number of boosting rounds/trees. Typical range 100–2000.
-    - gd_max_depth (int): Maximum tree depth controlling model complexity. Range 3–12.
-    - gd_learning_rate (float): Learning rate (eta) for boosting. Range 0.01–0.3.
-    - gd_subsample (float): Row subsample fraction. Range 0.5–1.0.
-    - gd_reg_lambda (float): L2 regularization strength. Range 0.0–10.0.
-    - gd_min_child_weight (float): Minimum sum of instance weight in a child. Range 0.1–10.
-    - gd_colsample_bytree (float): Column subsample fraction per tree. Range 0.5–1.0.
-    - gd_gamma (float): Minimum loss reduction required to make a split. Range 0.0–10.0.
-    - gd_uncertainty_stddev (float): Legacy fixed stddev for probabilistic translation of goal
-      difference to scoreline/outcome. Used when dynamic parameters are not set.
-    - gd_uncertainty_base_stddev (float): Base stddev for dynamic uncertainty; must be > 0.
-    - gd_uncertainty_scale (float): Scale factor for dynamic stddev w.r.t. |predicted_gd|; must be ≥ 0.
-    - gd_uncertainty_min_stddev (float): Lower bound clamp for dynamic stddev. Default 0.2.
-    - gd_uncertainty_max_stddev (float): Upper bound clamp for dynamic stddev. Default 4.0.
-    - draw_margin (float): Half-width around 0 goal difference treated as draw in Normal CDF
-      calculation; typical range 0.1–1.0. Default 0.5.
-
-    General training knobs:
-    - max_goals (int): Upper bound for translation grid. Range 4–10.
-    - random_state (int): Seed for reproducibility.
-    - min_training_matches (int): Minimum matches before training. Range 10–100.
-    - val_fraction (float): Fraction of data for validation. Range 0.0–0.5.
-    - use_time_decay (bool): Whether to apply recency weighting.
-    - time_decay_half_life_days (float): Half-life for time decay in days.
-    - form_last_n (int): Number of recent matches to compute form features.
-    - n_jobs (int): Parallel threads for training/prediction.
-    - selected_features_file (str): YAML list of features to keep when present.
+    Also includes general training and feature engineering knobs.
     """
 
-    # GoalDifferenceRegressor (XGBoost-like defaults)
-    gd_n_estimators: int = 600
-    gd_max_depth: int = 6
-    gd_learning_rate: float = 0.1
-    gd_subsample: float = 0.8
-    gd_reg_lambda: float = 1.0
-    gd_min_child_weight: float = 1.0
-    gd_colsample_bytree: float = 0.8
-    gd_gamma: float = 0.0
+    # --- V4 Cascaded Model: Draw Classifier ---
+    draw_n_estimators: int = 400
+    draw_max_depth: int = 5
+    draw_learning_rate: float = 0.05
+    draw_subsample: float = 0.7
+    draw_colsample_bytree: float = 0.7
+    draw_scale_pos_weight: float = 3.0  # Ratio of non-draw to draw samples
 
-    # Probabilistic translation
-    gd_uncertainty_stddev: float = 1.5
-    gd_uncertainty_base_stddev: float = 1.5
-    gd_uncertainty_scale: float = 0.3
-    gd_uncertainty_min_stddev: float = 0.2
-    gd_uncertainty_max_stddev: float = 4.0
+    # --- V4 Cascaded Model: Win Classifier (H vs A) ---
+    win_n_estimators: int = 800
+    win_max_depth: int = 6
+    win_learning_rate: float = 0.1
+    win_subsample: float = 0.8
+    win_colsample_bytree: float = 0.8
+
+    # General knobs and probabilistic helpers
     draw_margin: float = 0.5
-
-    # Translation grid / general knobs
     max_goals: int = 8
-    # Scoreline smoothing knobs
     avg_total_goals: float = 2.6
-    gd_score_alpha: float = 0.3
 
     # Training
     random_state: int = 42
     min_training_matches: int = 50
     val_fraction: float = 0.1
-    gd_early_stopping_rounds: int = 0
 
     # Time-decay weighting (recency)
     use_time_decay: bool = True
@@ -291,18 +255,28 @@ class ModelConfig:
     # Feature selection file (optional)
     selected_features_file: str = "kept_features.yaml"
 
+    # --- Parameter dictionaries ---
     @property
-    def gd_params(self) -> dict[str, int | float]:
-        """Return parameters for the GoalDifferenceRegressor as a dictionary."""
+    def draw_params(self) -> dict[str, Any]:
         return {
-            "n_estimators": self.gd_n_estimators,
-            "max_depth": self.gd_max_depth,
-            "learning_rate": self.gd_learning_rate,
-            "subsample": self.gd_subsample,
-            "reg_lambda": self.gd_reg_lambda,
-            "min_child_weight": self.gd_min_child_weight,
-            "colsample_bytree": self.gd_colsample_bytree,
-            "gamma": self.gd_gamma,
+            "n_estimators": self.draw_n_estimators,
+            "max_depth": self.draw_max_depth,
+            "learning_rate": self.draw_learning_rate,
+            "subsample": self.draw_subsample,
+            "colsample_bytree": self.draw_colsample_bytree,
+            "scale_pos_weight": self.draw_scale_pos_weight,
+            "random_state": self.random_state,
+            "n_jobs": self.n_jobs,
+        }
+
+    @property
+    def win_params(self) -> dict[str, Any]:
+        return {
+            "n_estimators": self.win_n_estimators,
+            "max_depth": self.win_max_depth,
+            "learning_rate": self.win_learning_rate,
+            "subsample": self.win_subsample,
+            "colsample_bytree": self.win_colsample_bytree,
             "random_state": self.random_state,
             "n_jobs": self.n_jobs,
         }

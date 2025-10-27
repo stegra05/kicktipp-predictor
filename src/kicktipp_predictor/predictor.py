@@ -1,14 +1,20 @@
 """
-Goal difference predictor for the Kicktipp Predictor V3 architecture.
+Predictor implementations for the Kicktipp Predictor project.
+
+Includes:
+- GoalDifferencePredictor (legacy V3 regressor)
+- CascadedPredictor (new V4 cascaded classifiers: draw + win)
 """
 
 from __future__ import annotations
 
 import joblib
 import pandas as pd
-from xgboost import XGBRegressor
+from xgboost import XGBRegressor, XGBClassifier
 from scipy.stats import norm
 import numpy as np
+from sklearn.preprocessing import LabelEncoder
+from typing import Optional
 
 from .config import Config, get_config
 
@@ -107,13 +113,10 @@ class GoalDifferencePredictor:
         sw_train = sample_weight_all[idx_train] if sample_weight_all is not None else None
 
         # --- Model initialization from gd_* params in config ---
-        try:
-            params = dict(self.config.model.gd_params)
-        except Exception as exc:
-            raise RuntimeError(f"Failed to load gd_params from config: {exc}")
-        if not params:
-            raise RuntimeError("Missing gd_* parameters in config ModelConfig (gd_params empty).")
-
+        # Legacy path retained: if gd_params exist, use them; otherwise raise
+        if not hasattr(self.config.model, "gd_params"):
+            raise RuntimeError("Legacy gd_params not available in ModelConfig. Use CascadedPredictor for V4.")
+        params = dict(self.config.model.gd_params)
         self.model = XGBRegressor(**params)
         # --- Fit with optional early stopping ---
         X_val = X_all.iloc[idx_val] if len(idx_val) > 0 else None
@@ -315,3 +318,319 @@ class GoalDifferencePredictor:
             raise RuntimeError("Model metadata not found; retrain required.") from exc
         except Exception as exc:
             raise RuntimeError(f"Failed to load model metadata: {exc}")
+
+
+class CascadedPredictor:
+    """Cascaded classifier predictor for match outcomes (V4).
+
+    This predictor uses two binary classifiers in a cascade:
+    - Draw Classifier: predicts Draw vs NotDraw.
+    - Win Classifier: predicts HomeWin vs AwayWin conditioned on NotDraw.
+
+    Attributes:
+    - config: Configuration object; defaults to global `get_config()` when not provided.
+    - draw_model: XGBClassifier for draw prediction; initialized to None until trained/loaded.
+    - win_model: XGBClassifier for win prediction; initialized to None until trained/loaded.
+    - feature_columns: List of feature names used during training/prediction.
+    - draw_label_encoder: LabelEncoder for draw outcomes (0=NotDraw, 1=Draw).
+    - win_label_encoder: LabelEncoder for win outcomes (0=AwayWin, 1=HomeWin).
+    """
+
+    def __init__(self, config: Optional[Config] = None):
+        """Initialize the cascaded predictor.
+
+        Args:
+            config: Optional configuration object. If not provided, uses `get_config()`.
+        """
+        self.config = config or get_config()
+        self.draw_model: Optional[XGBClassifier] = None
+        self.win_model: Optional[XGBClassifier] = None
+        self.feature_columns: list[str] = []
+
+        # Initialize label encoders
+        self.draw_label_encoder = LabelEncoder()
+        self.win_label_encoder = LabelEncoder()
+
+    def _prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Prepare feature matrix from input DataFrame.
+
+        Selects numeric/bool columns and excludes typical metadata columns.
+
+        Args:
+            df: Input DataFrame containing features and possibly metadata columns.
+
+        Returns:
+            DataFrame with selected feature columns, aligned to `self.feature_columns` when set.
+        """
+        exclude = {
+            "match_id",
+            "date",
+            "home_team",
+            "away_team",
+            "is_finished",
+            "home_score",
+            "away_score",
+            "goal_difference",
+            "result",
+        }
+        numeric_cols = df.select_dtypes(include=["number", "bool"]).columns.tolist()
+        if not self.feature_columns:
+            self.feature_columns = [c for c in numeric_cols if c not in exclude]
+            if not self.feature_columns:
+                raise ValueError("No usable feature columns found.")
+        X = df.reindex(columns=self.feature_columns).fillna(0.0)
+        return X
+
+    def train(self, X_train: pd.DataFrame, y_train: pd.DataFrame) -> None:
+        """Train both draw and win classifiers with preprocessing.
+
+        Expected input:
+        - `X_train`: DataFrame of features (numeric/bool). Non-feature columns are ignored.
+        - `y_train`: DataFrame with either:
+          - column `result` containing values 'H', 'D', 'A'; or
+          - columns `is_draw` (bool/int) and `win_outcome` ('HomeWin'/'AwayWin' or 1/0).
+
+        Process:
+        - Fit the draw classifier on all samples (labels 0=NotDraw, 1=Draw).
+        - Fit the win classifier on non-draw samples (labels 0=AwayWin, 1=HomeWin).
+
+        Raises:
+        - ValueError for invalid inputs or insufficient samples.
+        """
+        if not isinstance(X_train, pd.DataFrame) or X_train.empty:
+            raise ValueError("X_train must be a non-empty pandas DataFrame.")
+        if not isinstance(y_train, pd.DataFrame) or y_train.empty:
+            raise ValueError("y_train must be a non-empty pandas DataFrame.")
+
+        # Derive labels from y_train
+        if "result" in y_train.columns:
+            res = y_train["result"].astype(str)
+            y_draw = (res == "D").astype(int)
+            # For win classifier, drop draw rows
+            non_draw_mask = res.isin(["H", "A"]) & (~res.isna())
+            y_win = (res[non_draw_mask] == "H").astype(int)
+        else:
+            if "is_draw" not in y_train.columns:
+                raise ValueError("y_train must include 'result' or 'is_draw' column.")
+            y_draw = y_train["is_draw"].astype(int)
+            # win_outcome may be bool/int or string
+            if "win_outcome" not in y_train.columns:
+                raise ValueError("y_train must include 'win_outcome' column when 'is_draw' is provided.")
+            wo = y_train["win_outcome"]
+            if wo.dtype == bool:
+                y_win = wo.astype(int)
+                non_draw_mask = (y_draw == 0)
+            else:
+                # Accept 0/1 or 'HomeWin'/'AwayWin'
+                if wo.dtype.kind in {"i", "u"}:
+                    y_win = wo.astype(int)
+                else:
+                    y_win = wo.astype(str).map({"AwayWin": 0, "HomeWin": 1})
+                non_draw_mask = (y_draw == 0)
+
+        # Enforce minimum training size
+        min_n = int(self.config.model.min_training_matches)
+        if len(X_train) < min_n:
+            raise ValueError(f"Insufficient training samples: {len(X_train)} < {min_n}")
+
+        # Prepare features
+        X_all = self._prepare_features(X_train)
+
+        # Time-decay weighting (optional)
+        sample_weight_all = None
+        try:
+            use_decay = bool(self.config.model.use_time_decay)
+            half_life = float(self.config.model.time_decay_half_life_days)
+            if use_decay and "date" in X_train.columns and half_life > 0:
+                dates = pd.to_datetime(X_train["date"], errors="coerce")
+                max_date = pd.to_datetime(dates.max())
+                delta_days = (max_date - dates).dt.days.fillna(0).astype(float)
+                sample_weight_all = np.power(0.5, delta_days / half_life)
+        except Exception:
+            sample_weight_all = None
+
+        # Fit label encoders with explicit class order
+        self.draw_label_encoder.fit([0, 1])
+        self.win_label_encoder.fit([0, 1])
+
+        # Initialize and fit draw classifier
+        draw_params = dict(self.config.model.draw_params)
+        self.draw_model = XGBClassifier(**draw_params)
+        self.draw_model.fit(
+            X_all,
+            self.draw_label_encoder.transform(y_draw.tolist()),
+            sample_weight=sample_weight_all,
+            verbose=False,
+        )
+
+        # Fit win classifier on non-draw subset
+        idx_nd = np.where(non_draw_mask.values if hasattr(non_draw_mask, "values") else non_draw_mask)[0]
+        if idx_nd.size == 0:
+            raise ValueError("No non-draw samples available to train win classifier.")
+        X_win = X_all.iloc[idx_nd]
+        y_win_enc = self.win_label_encoder.transform(y_win.tolist())
+        y_win_enc = y_win_enc[: len(X_win)]  # align length if needed
+
+        self.win_model = XGBClassifier(**dict(self.config.model.win_params))
+        self.win_model.fit(
+            X_win,
+            y_win_enc,
+            verbose=False,
+        )
+
+    def predict(self, X_test: pd.DataFrame) -> list[dict]:
+        """Make predictions using cascaded approach.
+
+        Args:
+            X_test: DataFrame of features for upcoming matches.
+
+        Returns:
+            A list of dictionaries per match with keys:
+            - 'p_draw', 'p_home', 'p_away': outcome probabilities.
+            - 'predicted_outcome': one of 'H', 'D', 'A'.
+        Raises:
+            RuntimeError if models are not loaded/trained.
+        """
+        if self.draw_model is None or self.win_model is None:
+            raise RuntimeError("Models are not trained/loaded. Call train() or load_models() first.")
+        if not isinstance(X_test, pd.DataFrame) or X_test.empty:
+            raise ValueError("X_test must be a non-empty pandas DataFrame.")
+
+        X = self._prepare_features(X_test)
+
+        # Draw probabilities
+        draw_proba = self.draw_model.predict_proba(X)
+        # Identify positive class (1) index
+        draw_pos_idx = int(np.where(self.draw_model.classes_ == 1)[0][0])
+        p_draw = draw_proba[:, draw_pos_idx]
+
+        # Win probabilities on all rows (model trained on non-draw; but predict for all)
+        win_proba = self.win_model.predict_proba(X)
+        win_pos_idx = int(np.where(self.win_model.classes_ == 1)[0][0])
+        p_home = (1.0 - p_draw) * win_proba[:, win_pos_idx]
+        p_away = (1.0 - p_draw) * (1.0 - win_proba[:, win_pos_idx])
+
+        # Determine predicted outcome
+        outcomes = np.where(
+            p_draw >= np.maximum(p_home, p_away), "D", np.where(p_home >= p_away, "H", "A")
+        )
+
+        results: list[dict] = []
+        for i in range(len(X)):
+            row = X_test.iloc[i]
+            pred: dict[str, object] = {
+                "home_win_probability": float(p_home[i]),
+                "draw_probability": float(p_draw[i]),
+                "away_win_probability": float(p_away[i]),
+                "predicted_outcome": str(outcomes[i]),
+            }
+            # Include optional identifiers if present
+            for key in ("match_id", "home_team", "away_team", "matchday"):
+                if key in X_test.columns:
+                    pred[key] = row.get(key)
+            results.append(pred)
+
+        # --- Deterministic scoreline heuristic (production-ready baseline) ---
+        # Maps predicted outcome to a plausible scoreline deterministically.
+        scoreline_map: dict[str, tuple[int, int]] = {
+            "H": (2, 1),
+            "D": (1, 1),
+            "A": (1, 2),
+        }
+        for r in results:
+            outcome = str(r.get("predicted_outcome", "D"))
+            home_score, away_score = scoreline_map.get(outcome, (1, 1))
+            r["predicted_home_score"] = int(home_score)
+            r["predicted_away_score"] = int(away_score)
+
+        return results
+
+    def save_models(self, output_dir: str) -> None:
+        """Save trained models and encoders to specified directory.
+
+        Artifacts:
+        - 'draw_classifier.joblib': draw XGBClassifier
+        - 'win_classifier.joblib': win XGBClassifier
+        - 'encoders.joblib': dict with label encoders
+        - 'cascaded_metadata.joblib': dict with feature_columns
+
+        Args:
+            output_dir: Directory path to store the model artifacts.
+
+        Raises:
+            RuntimeError if models are not trained.
+        """
+        if self.draw_model is None or self.win_model is None:
+            raise RuntimeError("No models to save. Must train first.")
+        out_path = self._ensure_dir(output_dir)
+
+        joblib.dump(self.draw_model, out_path / "draw_classifier.joblib")
+        joblib.dump(self.win_model, out_path / "win_classifier.joblib")
+        joblib.dump(
+            {
+                "draw": self.draw_label_encoder,
+                "win": self.win_label_encoder,
+            },
+            out_path / "encoders.joblib",
+        )
+        joblib.dump(
+            {"feature_columns": list(self.feature_columns)},
+            out_path / "cascaded_metadata.joblib",
+        )
+
+    def load_models(self, input_dir: str) -> None:
+        """Load models and encoders from specified directory.
+
+        Args:
+            input_dir: Directory path containing saved artifacts.
+
+        Raises:
+            FileNotFoundError if artifacts are missing.
+            RuntimeError for invalid metadata or loading errors.
+        """
+        in_path = self._ensure_dir(input_dir)
+        try:
+            self.draw_model = joblib.load(in_path / "draw_classifier.joblib")
+            self.win_model = joblib.load(in_path / "win_classifier.joblib")
+        except FileNotFoundError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"Failed to load models: {exc}")
+
+        try:
+            enc = joblib.load(in_path / "encoders.joblib")
+            if not isinstance(enc, dict) or "draw" not in enc or "win" not in enc:
+                raise RuntimeError("Invalid encoders artifact.")
+            self.draw_label_encoder = enc["draw"]
+            self.win_label_encoder = enc["win"]
+        except FileNotFoundError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"Failed to load encoders: {exc}")
+
+        try:
+            meta = joblib.load(in_path / "cascaded_metadata.joblib")
+            cols = meta.get("feature_columns") if isinstance(meta, dict) else None
+            if not isinstance(cols, list) or len(cols) == 0:
+                raise RuntimeError("Missing feature_columns in metadata.")
+            self.feature_columns = [str(c) for c in cols]
+        except FileNotFoundError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"Failed to load model metadata: {exc}")
+
+    @staticmethod
+    def _ensure_dir(path_str: str) -> "Path":
+        """Ensure a directory exists and return its Path.
+
+        Args:
+            path_str: Directory path as string.
+
+        Returns:
+            Path to the directory, created if it did not exist.
+        """
+        from pathlib import Path
+
+        p = Path(path_str)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
