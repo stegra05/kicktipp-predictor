@@ -16,6 +16,7 @@ from scipy.stats import norm
 import numpy as np
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import StratifiedKFold
+from sklearn.calibration import CalibratedClassifierCV
 from typing import Optional
 
 from rich.console import Console
@@ -212,30 +213,53 @@ class CascadedPredictor:
         draw_params = dict(self.config.model.draw_params)
         win_params = dict(self.config.model.win_params)
 
-        # --- Prepare simple validation split for early stopping ---
+        # --- Prepare splits for calibration: train/calibrate/val ---
+        # We'll use 60% train, 20% calibrate, 20% val (roughly)
+        # Calibration is crucial for probability correction
         val_fraction = float(self.config.model.val_fraction)
-        # Draw split (stratified if both classes present)
         y_draw_arr = y_draw.to_numpy()
-        if 0.0 < val_fraction < 0.5 and len(X_all) >= 10 and len(np.unique(y_draw_arr)) > 1:
+        
+        # First split: train vs (calibrate+val)
+        if 0.0 < val_fraction < 0.5 and len(X_all) >= 20 and len(np.unique(y_draw_arr)) > 1:
             try:
-                skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=int(self.config.model.random_state))
-                # Take the first split as validation for simplicity
-                train_idx, val_idx = next(skf.split(X_all, y_draw_arr))
+                from sklearn.model_selection import train_test_split
+                # Split into train and tmp (which will be further split into calibrate+val)
+                train_idx, tmp_idx = train_test_split(
+                    np.arange(len(X_all)),
+                    test_size=0.4,  # 40% for calibrate+val
+                    stratify=y_draw_arr,
+                    random_state=int(self.config.model.random_state)
+                )
+                # Now split tmp into calibrate and val
+                tmp_y = y_draw_arr[tmp_idx]
+                calibrate_idx, val_idx = train_test_split(
+                    tmp_idx,
+                    test_size=0.5,  # Equal split of the 40% -> 20% each
+                    stratify=tmp_y,
+                    random_state=int(self.config.model.random_state)
+                )
             except Exception:
+                # Fallback to simple splits without stratification
                 n = len(X_all)
                 val_n = int(n * val_fraction)
-                train_idx = np.arange(n - val_n)
+                calibrate_n = int(n * val_fraction)
+                train_idx = np.arange(n - val_n - calibrate_n)
+                calibrate_idx = np.arange(n - val_n - calibrate_n, n - val_n)
                 val_idx = np.arange(n - val_n, n)
         else:
+            # No calibration split for small datasets
             train_idx = np.arange(len(X_all))
+            calibrate_idx = np.arange(len(X_all))  # Use all data for calibration
             val_idx = np.array([], dtype=int)
 
         Xd_train = X_all.iloc[train_idx]
         yd_train = self.draw_label_encoder.transform(y_draw.iloc[train_idx].tolist())
+        Xd_calibrate = X_all.iloc[calibrate_idx]
+        yd_calibrate = self.draw_label_encoder.transform(y_draw.iloc[calibrate_idx].tolist())
         Xd_val = X_all.iloc[val_idx] if len(val_idx) else None
         yd_val = self.draw_label_encoder.transform(y_draw.iloc[val_idx].tolist()) if len(val_idx) else None
 
-        # --- Draw model training ---
+        # --- Draw model training with calibration ---
         if verbose:
             self.console.print(
                 Panel(
@@ -246,19 +270,20 @@ class CascadedPredictor:
                 )
             )
         try:
-            # Set evaluation metric and logging verbosity
-            self.draw_model = XGBClassifier(
+            # Set evaluation metric and logging verbosity for base model
+            base_draw_model = XGBClassifier(
                 eval_metric=self.config.model.eval_metric,
                 verbosity=0 if not self.config.model.fit_verbose else 1,
                 **draw_params,
             )
+            
+            # Train base model
+            Xd_train_safe = Xd_train.drop(columns=["is_draw", "is_home_win"], errors="ignore")
             if Xd_val is not None:
-                # Try early stopping if supported by installed xgboost
+                # Use validation for early stopping during base model training
+                Xd_val_safe = Xd_val.drop(columns=["is_draw", "is_home_win"], errors="ignore")
                 try:
-                    # Defensive: drop target columns if present
-                    Xd_train_safe = Xd_train.drop(columns=["is_draw", "is_home_win"], errors="ignore")
-                    Xd_val_safe = Xd_val.drop(columns=["is_draw", "is_home_win"], errors="ignore")
-                    self.draw_model.fit(
+                    base_draw_model.fit(
                         Xd_train_safe,
                         yd_train,
                         sample_weight=sample_weight_all[train_idx] if sample_weight_all is not None else None,
@@ -267,9 +292,7 @@ class CascadedPredictor:
                         verbose=self.config.model.fit_verbose,
                     )
                 except TypeError:
-                    Xd_train_safe = Xd_train.drop(columns=["is_draw", "is_home_win"], errors="ignore")
-                    Xd_val_safe = Xd_val.drop(columns=["is_draw", "is_home_win"], errors="ignore")
-                    self.draw_model.fit(
+                    base_draw_model.fit(
                         Xd_train_safe,
                         yd_train,
                         sample_weight=sample_weight_all[train_idx] if sample_weight_all is not None else None,
@@ -277,14 +300,25 @@ class CascadedPredictor:
                         verbose=self.config.model.fit_verbose,
                     )
             else:
-                X_all_safe = X_all.drop(columns=["is_draw", "is_home_win"], errors="ignore")
-                self.draw_model.fit(
-                    X_all_safe,
-                    self.draw_label_encoder.transform(y_draw.tolist()),
-                    sample_weight=sample_weight_all,
-                    eval_set=[(X_all_safe, self.draw_label_encoder.transform(y_draw.tolist()))],
+                base_draw_model.fit(
+                    Xd_train_safe,
+                    yd_train,
+                    sample_weight=sample_weight_all[train_idx] if sample_weight_all is not None else None,
+                    eval_set=[(Xd_train_safe, yd_train)],
                     verbose=self.config.model.fit_verbose,
                 )
+            
+            # Wrap in calibration layer
+            if verbose:
+                self.console.print("[dim]Calibrating Draw Classifier...[/dim]")
+            self.draw_model = CalibratedClassifierCV(
+                base_draw_model, 
+                method='isotonic', 
+                cv='prefit'
+            )
+            # Fit the calibrator on the calibration set
+            Xd_calibrate_safe = Xd_calibrate.drop(columns=["is_draw", "is_home_win"], errors="ignore")
+            self.draw_model.fit(Xd_calibrate_safe, yd_calibrate)
             # Save training metrics
             self.training_metrics["draw_model"] = {
                 "train_score": float(self.draw_model.score(

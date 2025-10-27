@@ -218,6 +218,28 @@ def web(host: str = "127.0.0.1", port: int = 8000):
     flask_app.run(host=host, port=port)
 
 @app.command()
+def diagnose():
+    """Generate diagnostic plots for model calibration analysis.
+    
+    Produces:
+    - Draw probability distribution histogram
+    - Summary statistics of predicted vs actual draw rates
+    - Data export for further analysis
+    """
+    from kicktipp_predictor.diagnostics import plot_draw_probability_distribution
+    
+    console.print(
+        Panel(
+            "[bold magenta]MODEL DIAGNOSTICS[/bold magenta]",
+            border_style="magenta",
+            expand=False,
+        )
+    )
+    
+    plot_draw_probability_distribution()
+
+
+@app.command()
 def tune(
     n_trials: int = typer.Option(100, help="Number of Optuna trials to run"),
     seasons_back: int = typer.Option(5, help="Number of seasons back for training"),

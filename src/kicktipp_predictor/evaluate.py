@@ -381,6 +381,97 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
     out_dir = os.path.join("data", "predictions")
     ensure_dir(out_dir)
 
+    # === DIAGNOSTIC #1: Calibration Curves ===
+    try:
+        from sklearn.calibration import calibration_curve
+        import matplotlib.pyplot as plt
+        import matplotlib
+
+        # Extract probability matrix and true labels
+        prob_matrix = np.array(
+            [
+                [
+                    float(p.get("home_win_probability", 1 / 3)),
+                    float(p.get("draw_probability", 1 / 3)),
+                    float(p.get("away_win_probability", 1 / 3)),
+                ]
+                for p in all_predictions
+            ],
+            dtype=float,
+        )
+        prob_matrix = np.clip(prob_matrix, 1e-15, 1.0)
+        prob_matrix = prob_matrix / prob_matrix.sum(axis=1, keepdims=True)
+
+        # Convert true_labels to binary for each class
+        y_true_binary_home = np.array([1 if label == "H" else 0 for label in true_labels])
+        y_true_binary_draw = np.array([1 if label == "D" else 0 for label in true_labels])
+        y_true_binary_away = np.array([1 if label == "A" else 0 for label in true_labels])
+
+        # Create subplots for three calibration curves
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        fig.suptitle("Calibration Curves for H/D/A Predictions", fontsize=14, fontweight="bold")
+
+        classes = ["Home Win", "Draw", "Away Win"]
+        probs = [prob_matrix[:, 0], prob_matrix[:, 1], prob_matrix[:, 2]]
+        y_trues = [y_true_binary_home, y_true_binary_draw, y_true_binary_away]
+        colors = ["#2ecc71", "#f39c12", "#e74c3c"]
+
+        for idx, (ax, class_name, prob, y_true) in enumerate(zip(axes, classes, probs, y_trues)):
+            # Compute calibration curve
+            try:
+                fraction_of_positives, mean_predicted_value = calibration_curve(
+                    y_true, prob, n_bins=10, strategy="uniform"
+                )
+                
+                # Plot calibration curve
+                ax.plot(mean_predicted_value, fraction_of_positives, "s-", color=colors[idx], label=class_name)
+                ax.plot([0, 1], [0, 1], "k--", label="Perfectly calibrated", linewidth=0.8)
+                
+                ax.set_xlabel("Mean Predicted Probability", fontsize=10)
+                ax.set_ylabel("Fraction of Positives", fontsize=10)
+                ax.set_title(f"Calibration Curve: {class_name}", fontsize=12, fontweight="bold")
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+                ax.set_xlim([0, 1])
+                ax.set_ylim([0, 1])
+                
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not compute calibration curve for {class_name}: {e}[/yellow]")
+
+        plt.tight_layout()
+        
+        # Save calibration curves
+        cal_path = os.path.join(out_dir, "calibration_curves.png")
+        plt.savefig(cal_path, dpi=150, bbox_inches="tight")
+        plt.close()
+        
+        console.print(f"[green]✓ Calibration curves saved to {cal_path}[/green]")
+        
+        # Print calibration summary to console
+        for class_name, prob, y_true in zip(classes, probs, y_trues):
+            # Compute ECE for this class
+            n_bins = 10
+            bin_boundaries = np.linspace(0, 1, n_bins + 1)
+            bin_lower = bin_boundaries[:-1]
+            bin_upper = bin_boundaries[1:]
+            
+            ece_sum = 0.0
+            for i in range(n_bins):
+                in_bin = (prob > bin_lower[i]) & (prob <= bin_upper[i])
+                prop_in_bin = in_bin.mean()
+                if prop_in_bin > 0:
+                    accuracy_in_bin = y_true[in_bin].mean()
+                    avg_confidence_in_bin = prob[in_bin].mean()
+                    ece_sum += np.abs(avg_confidence_in_bin - accuracy_in_bin) * prop_in_bin
+            
+            console.print(f"[dim]  {class_name} ECE: {ece_sum:.4f}[/dim]")
+            
+    except ImportError as e:
+        console.print(f"[yellow]Warning: Could not import matplotlib: {e}[/yellow]")
+        console.print("[dim]Skipping calibration curve generation.[/dim]")
+    except Exception as e:
+        console.print(f"[yellow]Warning: Error generating calibration curves: {e}[/yellow]")
+
     # Save blend debug CSV with per-match diagnostics
     try:
         debug_rows = []
