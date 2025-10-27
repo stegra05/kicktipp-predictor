@@ -8,6 +8,7 @@ def train(
     seasons_back: int = typer.Option(
         5, help="Number of past seasons to use for training"
     ),
+    validate: bool = typer.Option(False, help="Run cross-validation diagnostics after training"),
 ):
     """Train the V4 cascaded match predictor on historical data.
 
@@ -44,6 +45,10 @@ def train(
     print("\nTraining predictor...")
     predictor = CascadedPredictor()
     predictor.train(features_df)
+
+    if validate:
+        print("\nRunning cross-validation diagnostics (opt-in)...")
+        predictor.run_cv_diagnostics(features_df)
 
     # Save models
     print("\nSaving models...")

@@ -360,47 +360,6 @@ class CascadedPredictor:
             print(f"Error training Win Model: {str(e)}")
             raise
 
-        # --- Cross-validation summaries (quick sanity checks) ---
-        try:
-            cv_draw_scores: list[float] = []
-            if len(np.unique(y_draw_arr)) > 1:
-                skf_cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=int(self.config.model.random_state))
-                for tr_idx, te_idx in skf_cv.split(X_all, y_draw_arr):
-                    mdl = XGBClassifier(**draw_params)
-                    X_all_tr = X_all.iloc[tr_idx].drop(columns=["is_draw", "is_home_win"], errors="ignore")
-                    X_all_te = X_all.iloc[te_idx].drop(columns=["is_draw", "is_home_win"], errors="ignore")
-                    mdl.fit(X_all_tr, self.draw_label_encoder.transform(y_draw.iloc[tr_idx].tolist()), verbose=False)
-                    s = mdl.score(X_all_te, self.draw_label_encoder.transform(y_draw.iloc[te_idx].tolist()))
-                    cv_draw_scores.append(float(s))
-            self.training_metrics.setdefault("draw_model", {})["cv_accuracy"] = {
-                "mean": float(np.mean(cv_draw_scores)) if cv_draw_scores else None,
-                "std": float(np.std(cv_draw_scores)) if cv_draw_scores else None,
-                "n_splits": int(len(cv_draw_scores)),
-            }
-        except Exception:
-            # Non-fatal; skip CV on errors
-            self.training_metrics.setdefault("draw_model", {})["cv_accuracy"] = None
-
-        try:
-            cv_win_scores: list[float] = []
-            y_win_enc_full = self.win_label_encoder.transform(list(y_win))
-            if len(np.unique(y_win_enc_full)) > 1 and len(X_non_draw) >= 6:
-                skf_cv_w = StratifiedKFold(n_splits=3, shuffle=True, random_state=int(self.config.model.random_state))
-                for tr_idx, te_idx in skf_cv_w.split(X_non_draw, y_win_enc_full):
-                    mdl = XGBClassifier(**win_params)
-                    X_nd_tr = X_non_draw.iloc[tr_idx].drop(columns=["is_draw", "is_home_win"], errors="ignore")
-                    X_nd_te = X_non_draw.iloc[te_idx].drop(columns=["is_draw", "is_home_win"], errors="ignore")
-                    mdl.fit(X_nd_tr, y_win_enc_full[tr_idx], verbose=False)
-                    s = mdl.score(X_nd_te, y_win_enc_full[te_idx])
-                    cv_win_scores.append(float(s))
-            self.training_metrics.setdefault("win_model", {})["cv_accuracy"] = {
-                "mean": float(np.mean(cv_win_scores)) if cv_win_scores else None,
-                "std": float(np.std(cv_win_scores)) if cv_win_scores else None,
-                "n_splits": int(len(cv_win_scores)),
-            }
-        except Exception:
-            self.training_metrics.setdefault("win_model", {})["cv_accuracy"] = None
-
         # --- Post-training summary ---
         summary = {
             "n_samples_all": int(len(X_all)),
@@ -419,11 +378,95 @@ class CascadedPredictor:
                 "all": summary["n_samples_all"],
                 "non_draw": summary["n_samples_non_draw"],
             },
-            "cv": {
-                "draw": self.training_metrics.get("draw_model", {}).get("cv_accuracy"),
-                "win": self.training_metrics.get("win_model", {}).get("cv_accuracy"),
-            },
         })
+
+    def run_cv_diagnostics(self, matches_df: pd.DataFrame, n_splits: int = 3) -> dict:
+        """Run optional cross-validation diagnostics for draw and win models.
+
+        Trains fresh models inside each fold purely to compute CV accuracy summaries.
+        This method is opt-in and does not modify the already-trained models.
+
+        Args:
+            matches_df: Training dataframe with features and 'result' labels.
+            n_splits: Number of stratified folds to use (default: 3).
+
+        Returns:
+            A dict with keys 'draw' and 'win' containing CV accuracy summaries,
+            or None values if diagnostics were skipped or errored.
+        """
+        if not isinstance(matches_df, pd.DataFrame) or matches_df.empty:
+            raise ValueError("Input must be a non-empty pandas DataFrame.")
+        if "result" not in matches_df.columns:
+            raise ValueError("DataFrame must include a 'result' column.")
+
+        df = matches_df.copy()
+        df, y_draw, y_win = self._prepare_targets(df)
+
+        # Prepare features for all and non-draw subsets
+        X_all = self._prepare_features(df)
+        non_draw_mask = df["is_draw"] == 0
+        df_nd = df.loc[non_draw_mask].copy()
+        X_non_draw = self._prepare_features(df_nd)
+
+        # Ensure deterministic encoders
+        self.draw_label_encoder.fit([0, 1])
+        self.win_label_encoder.fit(["A", "H"])
+
+        draw_params = dict(self.config.model.draw_params)
+        win_params = dict(self.config.model.win_params)
+
+        # Draw CV
+        draw_cv: dict | None = None
+        try:
+            cv_draw_scores: list[float] = []
+            y_draw_arr = y_draw.to_numpy()
+            if len(np.unique(y_draw_arr)) > 1 and len(X_all) >= n_splits:
+                skf_cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=int(self.config.model.random_state))
+                for tr_idx, te_idx in skf_cv.split(X_all, y_draw_arr):
+                    mdl = XGBClassifier(**draw_params)
+                    X_all_tr = X_all.iloc[tr_idx].drop(columns=["is_draw", "is_home_win"], errors="ignore")
+                    X_all_te = X_all.iloc[te_idx].drop(columns=["is_draw", "is_home_win"], errors="ignore")
+                    mdl.fit(X_all_tr, self.draw_label_encoder.transform(y_draw.iloc[tr_idx].tolist()), verbose=False)
+                    s = mdl.score(X_all_te, self.draw_label_encoder.transform(y_draw.iloc[te_idx].tolist()))
+                    cv_draw_scores.append(float(s))
+            if cv_draw_scores:
+                draw_cv = {
+                    "mean": float(np.mean(cv_draw_scores)),
+                    "std": float(np.std(cv_draw_scores)),
+                    "n_splits": int(len(cv_draw_scores)),
+                }
+        except Exception:
+            draw_cv = None
+
+        # Win CV
+        win_cv: dict | None = None
+        try:
+            cv_win_scores: list[float] = []
+            y_win_enc_full = self.win_label_encoder.transform(list(y_win))
+            if len(np.unique(y_win_enc_full)) > 1 and len(X_non_draw) >= max(6, n_splits):
+                skf_cv_w = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=int(self.config.model.random_state))
+                for tr_idx, te_idx in skf_cv_w.split(X_non_draw, y_win_enc_full):
+                    mdl = XGBClassifier(**win_params)
+                    X_nd_tr = X_non_draw.iloc[tr_idx].drop(columns=["is_draw", "is_home_win"], errors="ignore")
+                    X_nd_te = X_non_draw.iloc[te_idx].drop(columns=["is_draw", "is_home_win"], errors="ignore")
+                    mdl.fit(X_nd_tr, y_win_enc_full[tr_idx], verbose=False)
+                    s = mdl.score(X_nd_te, y_win_enc_full[te_idx])
+                    cv_win_scores.append(float(s))
+            if cv_win_scores:
+                win_cv = {
+                    "mean": float(np.mean(cv_win_scores)),
+                    "std": float(np.std(cv_win_scores)),
+                    "n_splits": int(len(cv_win_scores)),
+                }
+        except Exception:
+            win_cv = None
+
+        metrics = {"draw": draw_cv, "win": win_cv}
+        self.training_metrics["cv"] = metrics
+        print("CV diagnostics:")
+        print(metrics)
+
+        return metrics
 
     def predict(self, X_test: pd.DataFrame) -> list[dict]:
         """Make predictions using two-stage probability combination.

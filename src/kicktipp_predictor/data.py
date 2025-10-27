@@ -27,6 +27,75 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Optional: Numba acceleration for Elo updates
+try:  # pragma: no cover - optional dependency
+    from numba import njit  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    njit = None
+
+if njit is not None:
+    @njit(cache=True)
+    def _elo_process(
+        home_idx,
+        away_idx,
+        match_finished,
+        home_score,
+        away_score,
+        start_elos,
+        k,
+        home_adv,
+    ):
+        n_matches = len(home_idx)
+        elos = start_elos.copy()
+        home_pre = np.empty(n_matches, dtype=np.float64)
+        away_pre = np.empty(n_matches, dtype=np.float64)
+        for i in range(n_matches):
+            hi = home_idx[i]
+            ai = away_idx[i]
+            he = elos[hi]
+            ae = elos[ai]
+            home_pre[i] = he
+            away_pre[i] = ae
+            if match_finished[i]:
+                hs = home_score[i]
+                as_ = away_score[i]
+                s_home = 1.0 if hs > as_ else (0.5 if hs == as_ else 0.0)
+                e_home = 1.0 / (1.0 + 10.0 ** (((ae + home_adv) - he) / 400.0))
+                delta = k * (s_home - e_home)
+                elos[hi] = he + delta
+                elos[ai] = ae - delta
+        return home_pre, away_pre, elos
+else:
+    def _elo_process(
+        home_idx,
+        away_idx,
+        match_finished,
+        home_score,
+        away_score,
+        start_elos,
+        k,
+        home_adv,
+    ):
+        elos = start_elos.copy()
+        home_pre = np.empty(len(home_idx), dtype=float)
+        away_pre = np.empty(len(away_idx), dtype=float)
+        for i in range(len(home_idx)):
+            hi = int(home_idx[i])
+            ai = int(away_idx[i])
+            he = float(elos[hi])
+            ae = float(elos[ai])
+            home_pre[i] = he
+            away_pre[i] = ae
+            if match_finished[i]:
+                hs = int(home_score[i])
+                as_ = int(away_score[i])
+                s_home = 1.0 if hs > as_ else (0.5 if hs == as_ else 0.0)
+                e_home = 1.0 / (1.0 + 10.0 ** (((ae + home_adv) - he) / 400.0))
+                delta = k * (s_home - e_home)
+                elos[hi] = he + delta
+                elos[ai] = ae - delta
+        return home_pre, away_pre, elos
+
 
 class DataLoader:
     """Fetches match data and creates features for prediction.
@@ -614,6 +683,12 @@ class DataLoader:
             elo_hist = self._compute_elo_history(historical_matches)
             season_current = elo_hist.get("season_current_elos", {})
             by_season_hist = self._group_matches_by_season(historical_matches)
+            # Ensure season dtype consistency
+            if "season" in upcoming.columns:
+                try:
+                    upcoming["season"] = upcoming["season"].astype(int)
+                except Exception:
+                    pass
             upcoming_seasons = (
                 upcoming["season"].dropna().astype(int).unique().tolist()
                 if "season" in upcoming.columns
@@ -655,22 +730,40 @@ class DataLoader:
                         prior_presence,
                         int(self._elo_avg_k),
                     )
-            # Map per-row elo
-            def _row_elo_diff(r: pd.Series) -> float:
-                s = int(r.get("season")) if pd.notna(r.get("season")) else None
-                he = None
-                ae = None
-                if s is not None and s in season_current:
-                    he = float(season_current[s].get(str(r.get("home_team")), self._elo_base))
-                    ae = float(season_current[s].get(str(r.get("away_team")), self._elo_base))
-                else:
-                    he = float(self._elo_base)
-                    ae = float(self._elo_base)
-                r["home_elo"] = he
-                r["away_elo"] = ae
-                return he - ae
 
-            upcoming["elo_diff"] = upcoming.apply(_row_elo_diff, axis=1)
+            # Vectorized mapping of home/away Elo via merge
+            current_records = [
+                {"season": int(season), "team": str(team), "elo": float(elo)}
+                for season, team_elos in season_current.items()
+                for team, elo in (team_elos or {}).items()
+            ]
+            current_df = pd.DataFrame(current_records)
+            if not current_df.empty:
+                try:
+                    current_df["season"] = current_df["season"].astype(int)
+                    current_df["team"] = current_df["team"].astype(str)
+                except Exception:
+                    pass
+                # Home Elo
+                upcoming = upcoming.merge(
+                    current_df.rename(columns={"team": "home_team", "elo": "home_elo"}),
+                    on=["season", "home_team"],
+                    how="left",
+                )
+                # Away Elo
+                upcoming = upcoming.merge(
+                    current_df.rename(columns={"team": "away_team", "elo": "away_elo"}),
+                    on=["season", "away_team"],
+                    how="left",
+                )
+                # Fill missing with base and compute diff
+                upcoming["home_elo"] = pd.to_numeric(upcoming.get("home_elo"), errors="coerce").fillna(self._elo_base)
+                upcoming["away_elo"] = pd.to_numeric(upcoming.get("away_elo"), errors="coerce").fillna(self._elo_base)
+                upcoming["elo_diff"] = upcoming["home_elo"] - upcoming["away_elo"]
+            else:
+                upcoming["home_elo"] = float(self._elo_base)
+                upcoming["away_elo"] = float(self._elo_base)
+                upcoming["elo_diff"] = 0.0
         except Exception:
             upcoming["elo_diff"] = upcoming.get("elo_diff", 0.0)
 
@@ -1124,35 +1217,58 @@ class DataLoader:
                 s, teams_s, prev_teams, prev_final_elos, prev_table, prior_presence, int(self._elo_avg_k)
             )
             season_initial[s] = dict(start_elos)
-            current_elos = dict(start_elos)
+            # Accelerated Elo processing across the season
+            team_list = sorted(list(teams_s))
+            team_to_idx = {t: i for i, t in enumerate(team_list)}
+            start_elos_arr = np.array(
+                [float(start_elos.get(t, self._elo_base)) for t in team_list],
+                dtype=np.float64,
+            )
+            n_matches = len(season_matches)
+            home_idx = np.empty(n_matches, dtype=np.int64)
+            away_idx = np.empty(n_matches, dtype=np.int64)
+            finished = np.empty(n_matches, dtype=np.bool_)
+            home_score_arr = np.empty(n_matches, dtype=np.int64)
+            away_score_arr = np.empty(n_matches, dtype=np.int64)
+            match_ids: list[int | str] = []
 
-            # Process matches
-            for m in season_matches:
+            for i, m in enumerate(season_matches):
                 ht = str(m.get("home_team"))
                 at = str(m.get("away_team"))
-                he = float(current_elos.get(ht, self._elo_base))
-                ae = float(current_elos.get(at, self._elo_base))
-                by_match[m.get("match_id")] = {
+                home_idx[i] = int(team_to_idx.get(ht, 0))
+                away_idx[i] = int(team_to_idx.get(at, 0))
+                hs = m.get("home_score")
+                as_ = m.get("away_score")
+                finished[i] = bool(m.get("is_finished") and hs is not None and as_ is not None)
+                home_score_arr[i] = int(hs if hs is not None else 0)
+                away_score_arr[i] = int(as_ if as_ is not None else 0)
+                match_ids.append(m.get("match_id"))
+
+            he_pre, ae_pre, final_elos_arr = _elo_process(
+                home_idx,
+                away_idx,
+                finished,
+                home_score_arr,
+                away_score_arr,
+                start_elos_arr,
+                float(self._elo_k),
+                float(self._elo_home_adv),
+            )
+
+            # Record pre-match elos per game
+            for i in range(n_matches):
+                he = float(he_pre[i])
+                ae = float(ae_pre[i])
+                by_match[match_ids[i]] = {
                     "home_elo": he,
                     "away_elo": ae,
                     "elo_diff": he - ae,
                 }
-                # Update post-match if finished
-                hs = m.get("home_score")
-                as_ = m.get("away_score")
-                if m.get("is_finished") and hs is not None and as_ is not None:
-                    s_home = 1.0 if hs > as_ else (0.5 if hs == as_ else 0.0)
-                    # Expected home score with home advantage
-                    e_home = 1.0 / (
-                        1.0 + 10.0 ** (((ae + float(self._elo_home_adv)) - he) / 400.0)
-                    )
-                    delta = float(self._elo_k) * (s_home - e_home)
-                    current_elos[ht] = he + delta
-                    current_elos[at] = ae - delta
 
-            season_final[s] = dict(current_elos)
-            season_current[s] = dict(current_elos)
-            prev_final_elos = dict(current_elos)
+            # Final state
+            season_final[s] = {team_list[i]: float(final_elos_arr[i]) for i in range(len(team_list))}
+            season_current[s] = dict(season_final[s])
+            prev_final_elos = dict(season_final[s])
 
         self._elo_history = {
             "by_match": by_match,

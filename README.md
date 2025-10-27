@@ -138,10 +138,16 @@ python -m kicktipp_predictor.cli train [OPTIONS]
 
 **Options:**
 - `--seasons-back INTEGER`: Number of past seasons to use for training (default: 5)
+- `--validate / --no-validate`: Run 3-fold CV diagnostics after training (default: `--no-validate`)
 
 **Example:**
 ```bash
 python -m kicktipp_predictor.cli train --seasons-back 3
+```
+
+Optionally include CV diagnostics during development:
+```bash
+python -m kicktipp_predictor.cli train --seasons-back 3 --validate
 ```
 
 ---
