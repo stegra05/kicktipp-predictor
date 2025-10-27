@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import joblib
 import pandas as pd
+from pathlib import Path
 from xgboost import XGBClassifier
 # EarlyStopping callback is not used due to current xgboost .fit signature
 from scipy.stats import norm
@@ -16,6 +17,11 @@ import numpy as np
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import StratifiedKFold
 from typing import Optional
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 
 from .config import Config, get_config
 
@@ -46,6 +52,7 @@ class CascadedPredictor:
         self.draw_model: Optional[XGBClassifier] = None
         self.win_model: Optional[XGBClassifier] = None
         self.feature_columns: list[str] = []
+        self.console = Console()
 
         # Initialize label encoders
         self.draw_label_encoder = LabelEncoder()
@@ -228,7 +235,14 @@ class CascadedPredictor:
         yd_val = self.draw_label_encoder.transform(y_draw.iloc[val_idx].tolist()) if len(val_idx) else None
 
         # --- Draw model training ---
-        print("Training Draw Classifier (Gatekeeper)...")
+        self.console.print(
+            Panel(
+                "[bold cyan]Training Draw Classifier (Gatekeeper)...[/bold cyan]\n"
+                "[dim]Predicting: Draw vs Not-Draw[/dim]",
+                border_style="cyan",
+                expand=False,
+            )
+        )
         try:
             # Set evaluation metric and logging verbosity
             self.draw_model = XGBClassifier(
@@ -282,11 +296,18 @@ class CascadedPredictor:
                 },
             }
         except Exception as e:
-            print(f"Error training Draw Model: {str(e)}")
+            self.console.print(f"[bold red]Error training Draw Model:[/bold red] {str(e)}")
             raise
 
         # --- Win model training ---
-        print("Training Win Classifier (Finisher)...")
+        self.console.print(
+            Panel(
+                "[bold magenta]Training Win Classifier (Finisher)...[/bold magenta]\n"
+                "[dim]Predicting: Home Win vs Away Win (on non-draw matches)[/dim]",
+                border_style="magenta",
+                expand=False,
+            )
+        )
         try:
             # Set evaluation metric and logging verbosity
             self.win_model = XGBClassifier(
@@ -357,7 +378,7 @@ class CascadedPredictor:
                 },
             }
         except Exception as e:
-            print(f"Error training Win Model: {str(e)}")
+            self.console.print(f"[bold red]Error training Win Model:[/bold red] {str(e)}")
             raise
 
         # --- Post-training summary ---
@@ -371,14 +392,6 @@ class CascadedPredictor:
             },
         }
         self.training_metrics["summary"] = summary
-        print("Training complete. Summary:")
-        print({
-            "features": summary["feature_count"],
-            "samples": {
-                "all": summary["n_samples_all"],
-                "non_draw": summary["n_samples_non_draw"],
-            },
-        })
 
     def run_cv_diagnostics(self, matches_df: pd.DataFrame, n_splits: int = 3) -> dict:
         """Run optional cross-validation diagnostics for draw and win models.
@@ -463,8 +476,25 @@ class CascadedPredictor:
 
         metrics = {"draw": draw_cv, "win": win_cv}
         self.training_metrics["cv"] = metrics
-        print("CV diagnostics:")
-        print(metrics)
+        
+        # Display results with rich table
+        table = Table(title="Cross-Validation Diagnostics", show_header=True, header_style="bold magenta")
+        table.add_column("Model", style="cyan", justify="right")
+        table.add_column("Mean Score", justify="center")
+        table.add_column("Std Dev", justify="center")
+        table.add_column("Folds", justify="center")
+        
+        if draw_cv:
+            table.add_row("Draw", f"{draw_cv['mean']:.4f}", f"{draw_cv['std']:.4f}", str(draw_cv['n_splits']))
+        else:
+            table.add_row("Draw", "-", "-", "-")
+            
+        if win_cv:
+            table.add_row("Win", f"{win_cv['mean']:.4f}", f"{win_cv['std']:.4f}", str(win_cv['n_splits']))
+        else:
+            table.add_row("Win", "-", "-", "-")
+            
+        self.console.print(table)
 
         return metrics
 
@@ -503,7 +533,7 @@ class CascadedPredictor:
                 raise ValueError(f"Feature dimension mismatch for {mdl_name} model: {X.shape[1]} != {int(n_in)}")
 
         # 2. Draw probabilities
-        print("Calculating Draw probabilities...")
+        self.console.print("[dim]Calculating Draw probabilities...[/dim]")
         draw_proba = self.draw_model.predict_proba(X)
         draw_class_index = int(self.class_index_map.get("draw_positive", 1))
         if draw_class_index < 0 or draw_class_index >= draw_proba.shape[1]:
@@ -516,7 +546,7 @@ class CascadedPredictor:
         p_draw = draw_proba[:, draw_class_index]
 
         # 3. Win probabilities
-        print("Calculating conditional Win probabilities...")
+        self.console.print("[dim]Calculating conditional Win probabilities...[/dim]")
         win_proba = self.win_model.predict_proba(X)
         home_class_index = int(self.class_index_map.get("win_home", 1))
         if home_class_index < 0 or home_class_index >= win_proba.shape[1]:
@@ -528,7 +558,7 @@ class CascadedPredictor:
         p_home_given_not_draw = win_proba[:, home_class_index]
 
         # 4. Combine probabilities via law of total probability
-        print("Combining probabilities using law of total probability...")
+        self.console.print("[dim]Combining probabilities using law of total probability...[/dim]")
         p_not_draw = 1.0 - p_draw
         final_p_home = p_not_draw * p_home_given_not_draw
         final_p_away = p_not_draw * (1.0 - p_home_given_not_draw)
@@ -704,7 +734,7 @@ class CascadedPredictor:
                 raise RuntimeError(f"Failed to load legacy artifacts: {exc}")
 
     @staticmethod
-    def _ensure_dir(path_str: str) -> "Path":
+    def _ensure_dir(path_str: str) -> Path:
         """Ensure a directory exists and return its Path.
 
         Args:
