@@ -62,6 +62,7 @@ class GoalDifferencePredictor:
         }
         numeric_cols = matches_df.select_dtypes(include=["number", "bool"]).columns.tolist()
         self.feature_columns = [c for c in numeric_cols if c not in exclude]
+        # ELO hard guard removed: allow all ELO-related features
         if not self.feature_columns:
             raise ValueError("No usable feature columns found for training.")
 

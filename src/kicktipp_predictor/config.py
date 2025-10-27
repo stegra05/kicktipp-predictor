@@ -146,7 +146,7 @@ class PathConfig:
     cache_dir: Path = data_dir / "cache"
 
     # Configuration files
-    config_dir: Path = PROJECT_ROOT / "config"
+    config_dir: Path = PROJECT_ROOT / "src" / "kicktipp_predictor" / "config"
 
     def __post_init__(self) -> None:
         """Ensure all directories exist."""

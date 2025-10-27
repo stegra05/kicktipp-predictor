@@ -22,6 +22,11 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     yaml = None
 
+import logging
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
 
 class DataLoader:
     """Fetches match data and creates features for prediction.
@@ -319,6 +324,30 @@ class DataLoader:
             df[output_col] = df.get(output_col, 0.0)
             return df
 
+    def _drop_non_tanh_elo_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Remove any ELO-related columns except the sanctioned 'tanh_tamed_elo'.
+
+        This acts as a hard isolation guard to ensure that no raw or
+        intermediate Elo features influence training/prediction, even if
+        feature selection fails to load.
+        """
+        try:
+            if df is None or not isinstance(df, pd.DataFrame) or len(df) == 0:
+                return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+            cols = list(df.columns)
+            to_drop = [
+                c for c in cols
+                if ("elo" in str(c).lower()) and (str(c).lower() != "tanh_tamed_elo")
+            ]
+            # Drop ELO-derived binary if present
+            if "home_team_is_strong" in df.columns:
+                to_drop.append("home_team_is_strong")
+            if to_drop:
+                df = df.drop(columns=[c for c in set(to_drop) if c in df.columns])
+            return df
+        except Exception:
+            return df
+
     def _merge_history_features(
         self,
         base: pd.DataFrame,
@@ -510,6 +539,8 @@ class DataLoader:
 
         # Compute tamed Elo feature (without storing raw Elo data)
         features_df = self._compute_tanh_tamed_elo(features_df)
+        # Hard isolation: drop all non-tanh Elo columns
+        features_df = self._drop_non_tanh_elo_columns(features_df)
 
         # Derived form diffs
         features_df["abs_weighted_form_points_diff"] = (
@@ -531,6 +562,8 @@ class DataLoader:
         )
 
         features_df = self._apply_selected_features(features_df)
+        # Final guard: ensure no non-tanh Elo columns slipped through
+        features_df = self._drop_non_tanh_elo_columns(features_df)
         return features_df
 
     def create_prediction_features(
@@ -675,6 +708,8 @@ class DataLoader:
 
         # Compute tamed Elo feature (without storing raw Elo data)
         features_df = self._compute_tanh_tamed_elo(features_df)
+        # Hard isolation: drop all non-tanh Elo columns
+        features_df = self._drop_non_tanh_elo_columns(features_df)
 
         # Derived diffs
         features_df["abs_weighted_form_points_diff"] = (
@@ -686,67 +721,160 @@ class DataLoader:
         ) - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
 
         features_df = self._apply_selected_features(features_df)
+        # Final guard: ensure no non-tanh Elo columns slipped through
+        features_df = self._drop_non_tanh_elo_columns(features_df)
         return features_df
 
-    def _apply_selected_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Filter DataFrame to essential + selected if selection list exists.
+    def _load_selected_features(self, sel_path: Path) -> list[str]:
+        """Load selected features from YAML with robust fallbacks and validation.
 
-        Keeps ID/meta/target columns alongside the selected feature names.
-        If the selection file is absent or unreadable, returns df unchanged.
+        Priority:
+        1) Use PyYAML when available.
+        2) Fallback to lightweight parser for simple list YAML.
+        3) Attempt JSON parse when file resembles JSON.
+
+        Raises:
+        - FileNotFoundError if file is missing.
+        - ValueError if parsing succeeds but yields no valid features.
+        - RuntimeError on unexpected I/O or parse errors (with clear message).
         """
-        try:
-            sel_filename = self.config.model.selected_features_file
-            sel_path = self.config.paths.config_dir / sel_filename
-            if not sel_path.exists():
-                return df
+        if not isinstance(sel_path, Path):
+            sel_path = Path(sel_path)
+        if not sel_path.exists():
+            msg = f"Selected features file not found: {sel_path}"
+            logger.error(msg)
+            raise FileNotFoundError(msg)
 
-            selected: list[str] | None = None
+        try:
+            text = sel_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            msg = f"Failed to read features file '{sel_path}': {exc}"
+            logger.error(msg)
+            raise RuntimeError(msg)
+
+        # 1) Primary parse: PyYAML
+        try:
             if yaml is not None:
-                with open(sel_path, encoding="utf-8") as f:
-                    loaded = yaml.safe_load(f)
+                loaded = yaml.safe_load(text)
                 if isinstance(loaded, list):
-                    selected = [str(c) for c in loaded]
+                    feats = [str(x).strip() for x in loaded if str(x).strip()]
                 elif isinstance(loaded, dict) and "features" in loaded:
                     val = loaded.get("features")
                     if isinstance(val, list):
-                        selected = [str(c) for c in val]
+                        feats = [str(x).strip() for x in val if str(x).strip()]
                     elif isinstance(val, str):
-                        selected = [
-                            s.strip() for s in val.splitlines() if s.strip()
-                        ]
+                        feats = [s.strip() for s in val.splitlines() if s.strip()]
+                    else:
+                        feats = []
                 elif isinstance(loaded, str):
-                    selected = [s.strip() for s in loaded.splitlines() if s.strip()]
+                    feats = [s.strip() for s in loaded.splitlines() if s.strip()]
+                else:
+                    feats = []
             else:
-                # Fallback: try .txt with one name per line
-                txt_path = sel_path.with_suffix(".txt")
-                if txt_path.exists():
-                    selected = [
-                        line.strip()
-                        for line in txt_path.read_text(encoding="utf-8").splitlines()
-                        if line.strip()
-                    ]
+                feats = []
+        except Exception as exc:
+            logger.warning(f"PyYAML parsing failed for '{sel_path}': {exc}")
+            feats = []
 
-            if not selected:
-                return df
+        # 2) Fallback lightweight parser for simple YAML lists
+        if not feats:
+            try:
+                lines = []
+                for raw in text.splitlines():
+                    # Strip comments
+                    base = raw.split("#", 1)[0]
+                    base = base.strip()
+                    if not base:
+                        continue
+                    # Expect dash list items
+                    if base.startswith("-"):
+                        item = base[1:].strip()
+                        if item:
+                            lines.append(item)
+                feats = lines
+            except Exception as exc:
+                logger.warning(f"Lightweight parsing failed for '{sel_path}': {exc}")
+                feats = []
 
-            essential = {
-                "match_id",
-                "matchday",
-                "date",
-                "home_team",
-                "away_team",
-                "is_finished",
-                "home_score",
-                "away_score",
-                "goal_difference",
-                "result",
-            }
-            keep_cols = [c for c in df.columns if (c in essential) or (c in selected)]
-            if not keep_cols:
-                return df
-            return df[keep_cols].copy()
-        except Exception:
+        # 3) Attempt JSON parse when applicable
+        if not feats:
+            try:
+                stripped = "\n".join([ln.split("#", 1)[0] for ln in text.splitlines()]).strip()
+                if stripped.startswith("[") or stripped.startswith("{"):
+                    import json
+                    obj = json.loads(stripped)
+                    if isinstance(obj, list):
+                        feats = [str(x).strip() for x in obj if str(x).strip()]
+                    elif isinstance(obj, dict) and "features" in obj:
+                        val = obj.get("features")
+                        if isinstance(val, list):
+                            feats = [str(x).strip() for x in val if str(x).strip()]
+                        elif isinstance(val, str):
+                            feats = [s.strip() for s in val.splitlines() if s.strip()]
+            except Exception as exc:
+                logger.warning(f"JSON parsing attempt failed for '{sel_path}': {exc}")
+
+        # Validation
+        feats = [f for f in feats if isinstance(f, str) and f]
+        # Deduplicate while preserving order
+        seen = set()
+        deduped = []
+        for f in feats:
+            if f not in seen:
+                deduped.append(f)
+                seen.add(f)
+        feats = deduped
+        if not feats:
+            msg = (
+                f"No valid features loaded from '{sel_path}'. Ensure the file is a simple YAML list "
+                f"(e.g., '- feature_name' per line) or a mapping with key 'features'."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+        return feats
+
+    def _apply_selected_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Filter DataFrame to essential + selected using robust file loading.
+
+        Enforces exclusive loading from 'kept_features.yaml' with strong fallbacks
+        and explicit error reporting when the file is missing or malformed.
+        """
+        if not isinstance(df, pd.DataFrame) or df.empty:
             return df
+        # Always prefer kept_features.yaml per requirement
+        sel_filename = "kept_features.yaml"
+        sel_path = self.config.paths.config_dir / sel_filename
+        # Load selected features with robust fallbacks
+        selected = self._load_selected_features(sel_path)
+        # Assemble keep set
+        essential = {
+            "match_id",
+            "matchday",
+            "date",
+            "home_team",
+            "away_team",
+            "is_finished",
+            "home_score",
+            "away_score",
+            "goal_difference",
+            "result",
+        }
+        # Warn if any listed features are missing from df
+        missing = [c for c in selected if c not in df.columns]
+        if missing:
+            logger.warning(
+                "Selected features listed in YAML but missing in dataframe: %s",
+                ", ".join(missing),
+            )
+        keep_cols = [c for c in df.columns if (c in essential) or (c in selected)]
+        if not keep_cols:
+            msg = (
+                "After applying selected features, no columns remain. This likely indicates that "
+                "feature engineering did not produce the expected columns."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+        return df[keep_cols].copy()
 
     def _build_team_long_df(self, matches: list[dict]) -> pd.DataFrame:
         """Build a long-format team-match DataFrame from match dicts.
