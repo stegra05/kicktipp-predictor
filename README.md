@@ -1,5 +1,20 @@
 ### Analysis and Blueprint for the Kicktipp Predictor V3 Architecture
 
+**Installation**
+
+Use a virtual environment and install via `pyproject.toml` extras:
+
+```
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .[plots,dev]
+```
+
+- The `plots` extra includes `shap` for SHAP value analysis.
+- The `dev` extra includes `ruff`, `mypy`, and `pre-commit`.
+- For Optuna-based tuning, install the `tuning` extra: `pip install -e .[tuning]`.
+- zsh users: quote extras to avoid globbing: `pip install -e '.[plots,dev]'`.
+
 #### Executive Summary
 
 The project is undergoing a strategic pivot. Analysis of the V2 architecture revealed that despite its sophistication, it had reached a performance ceiling, often producing biased or low-accuracy results. The complexity of its multi-model pipeline (outcome classifier, two goal regressors, blending logic) created multiple points of failure and made true optimization difficult.
