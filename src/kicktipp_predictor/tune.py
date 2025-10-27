@@ -615,18 +615,24 @@ def _worker_optimize_draw(
         cfg.model.draw_colsample_bytree = trial.suggest_float("draw_colsample_bytree", 0.5, 1.0)
         cfg.model.draw_scale_pos_weight = trial.suggest_float("draw_scale_pos_weight", 1.0, 8.0)
 
-        predictor = CascadedPredictor(config=cfg)
-        predictor.train(train_df, verbose=False)
+        try:
+            predictor = CascadedPredictor(config=cfg)
+            predictor.train(train_df, verbose=False)
+        except Exception as exc:
+            raise optuna.TrialPruned(f"Training failed: {exc}")
 
         X_val = predictor._prepare_features(val_df)
         y_val_draw = (val_df["result"].astype(str) == "D").astype(int).to_numpy()
         if len(np.unique(y_val_draw)) < 2:
             raise optuna.TrialPruned("Validation set lacks both draw and non-draw classes.")
 
-        draw_proba = predictor.draw_model.predict_proba(X_val)
-        draw_label = int(predictor.draw_label_encoder.transform([1])[0])
-        idx = int(np.where(predictor.draw_model.classes_ == draw_label)[0][0])
-        p_draw = draw_proba[:, idx]
+        try:
+            draw_proba = predictor.draw_model.predict_proba(X_val)
+            draw_label = int(predictor.draw_label_encoder.transform([1])[0])
+            idx = int(np.where(predictor.draw_model.classes_ == draw_label)[0][0])
+            p_draw = draw_proba[:, idx]
+        except Exception as exc:
+            raise optuna.TrialPruned(f"Probability computation failed: {exc}")
 
         if draw_metric == "roc_auc":
             score = float(roc_auc_score(y_val_draw, p_draw))
@@ -676,13 +682,32 @@ def _worker_optimize_win(
     _set_logging_level(log_level)
     storage = _resolve_storage_with_timeout(storage_url)
     sampler = NSGAIISampler()
-    study = optuna.create_study(
-        directions=["maximize", "minimize", "minimize"],
-        study_name=study_name,
-        storage=storage,
-        sampler=sampler,
-        load_if_exists=True,
-    )
+    
+    # Check if study exists and has correct directions before creating
+    try:
+        existing_study = optuna.load_study(study_name=study_name, storage=storage)
+        directions = existing_study.directions
+        if len(directions) != 3 or directions != [optuna.study.StudyDirection.MAXIMIZE, optuna.study.StudyDirection.MINIMIZE, optuna.study.StudyDirection.MINIMIZE]:
+            # Delete and recreate with correct directions
+            logging.warning(f"Worker PID {os.getpid()}: Deleting study with wrong directions and recreating")
+            optuna.delete_study(study_name=study_name, storage=storage)
+            study = optuna.create_study(
+                directions=["maximize", "minimize", "minimize"],
+                study_name=study_name,
+                storage=storage,
+                sampler=sampler,
+            )
+        else:
+            # Study exists with correct directions
+            study = existing_study
+    except KeyError:
+        # Study doesn't exist, create it
+        study = optuna.create_study(
+            directions=["maximize", "minimize", "minimize"],
+            study_name=study_name,
+            storage=storage,
+            sampler=sampler,
+        )
 
     def objective_win(trial: optuna.Trial) -> tuple[float, float, float]:
         cfg = Config.load()
@@ -704,10 +729,16 @@ def _worker_optimize_win(
         cfg.model.win_subsample = trial.suggest_float("win_subsample", 0.6, 1.0)
         cfg.model.win_colsample_bytree = trial.suggest_float("win_colsample_bytree", 0.5, 1.0)
 
-        predictor = CascadedPredictor(config=cfg)
-        predictor.train(train_df, verbose=False)
+        try:
+            predictor = CascadedPredictor(config=cfg)
+            predictor.train(train_df, verbose=False)
+        except Exception as exc:
+            raise optuna.TrialPruned(f"Training failed: {exc}")
 
-        preds = predictor.predict(val_df, verbose=False)
+        try:
+            preds = predictor.predict(val_df, verbose=False)
+        except Exception as exc:
+            raise optuna.TrialPruned(f"Prediction failed: {exc}")
         proba = np.array(
             [
                 [
@@ -1034,13 +1065,30 @@ def run_tuning_v4_parallel(
     if model_to_tune in ("win", "both"):
         cfg_fixed = Config.load()
         sampler_win = NSGAIISampler()
-        optuna.create_study(
-            directions=["maximize", "minimize", "minimize"],
-            study_name=f"{study_name}_win",
-            storage=storage_for_optuna,
-            sampler=sampler_win,
-            load_if_exists=True,
-        )
+        
+        # Check if study exists and has correct directions
+        try:
+            existing_study = optuna.load_study(study_name=f"{study_name}_win", storage=storage_for_optuna)
+            directions = existing_study.directions
+            if len(directions) != 3 or directions != [optuna.study.StudyDirection.MAXIMIZE, optuna.study.StudyDirection.MINIMIZE, optuna.study.StudyDirection.MINIMIZE]:
+                console.print(f"[yellow]Warning: Existing study has incorrect directions. Deleting and recreating with multi-objective directions.[/yellow]")
+                optuna.delete_study(study_name=f"{study_name}_win", storage=storage_for_optuna)
+                optuna.create_study(
+                    directions=["maximize", "minimize", "minimize"],
+                    study_name=f"{study_name}_win",
+                    storage=storage_for_optuna,
+                    sampler=sampler_win,
+                )
+            else:
+                console.print(f"[green]Found existing study with correct multi-objective directions.[/green]")
+        except KeyError:
+            # Study doesn't exist, create it
+            optuna.create_study(
+                directions=["maximize", "minimize", "minimize"],
+                study_name=f"{study_name}_win",
+                storage=storage_for_optuna,
+                sampler=sampler_win,
+            )
 
         bench_avg_win: Optional[float] = None
         if bench_trials and bench_trials > 0:
@@ -1153,6 +1201,18 @@ def run_tuning_v4_parallel(
 
         dur_win = time.perf_counter() - start_win
         study_win = optuna.load_study(study_name=f"{study_name}_win", storage=storage_for_optuna)
+        
+        # Check if we have completed trials with values
+        completed_trials = [t for t in study_win.trials if t.state == optuna.trial.TrialState.COMPLETE and t.values is not None]
+        
+        if not completed_trials:
+            console.print("[bold red]Error: No completed trials with values found. All trials may have failed.[/bold red]")
+            console.print(f"  Total trials: {len(study_win.trials)}")
+            state_counts = {}
+            for trial in study_win.trials:
+                state_counts[trial.state.name] = state_counts.get(trial.state.name, 0) + 1
+            console.print(f"  Trial states: {state_counts}")
+            return
         
         # Multi-objective selection: filter by realistic draw rate, then select highest accuracy
         pareto_front = study_win.best_trials
