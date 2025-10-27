@@ -156,11 +156,31 @@ def tune(
         None,
         help="Optuna storage URL (e.g., sqlite:///path/to/optuna.db). Defaults to project data dir.",
     ),
-    study_name: str = typer.Option("gd_v3_tuning", help="Optuna study name"),
+    study_name: str = typer.Option("v4_cascaded_sequential", help="Optuna study name base"),
     timeout: int | None = typer.Option(None, help="Timeout in seconds for optimize()"),
+    arch: str = typer.Option("v4", help="Model architecture to tune: v3 or v4"),
+    model_to_tune: str = typer.Option(
+        "both",
+        help="Which model to tune for v4: draw, win, or both",
+    ),
+    draw_metric: str = typer.Option(
+        "roc_auc",
+        help="Phase 1 draw metric: roc_auc or f1",
+    ),
+    win_metric: str = typer.Option(
+        "accuracy",
+        help="Phase 2 win metric: accuracy or log_loss",
+    ),
 ):
-    """Run Optuna multi-objective tuning for the V3 goal-difference model."""
-    from kicktipp_predictor.tune import run_tuning
+    """Run Optuna tuning.
+
+    - v4 (default): Sequential tuning for CascadedPredictor (Phase 1 draw, Phase 2 win).
+    - v3: Legacy multi-objective tuning for GoalDifferencePredictor.
+
+    When selecting v4 with model_to_tune=win, Phase 2 uses fixed draw_* params
+    from best_params.yaml (produced in Phase 1), ensuring sequential dependency.
+    """
+    from kicktipp_predictor.tune import run_tuning, run_tuning_v4_sequential
 
     print("=" * 80)
     print("OPTUNA TUNING")
@@ -168,13 +188,25 @@ def tune(
     print()
 
     try:
-        run_tuning(
-            n_trials=n_trials,
-            seasons_back=seasons_back,
-            storage=storage,
-            study_name=study_name,
-            timeout=timeout,
-        )
+        if arch.lower() == "v3":
+            run_tuning(
+                n_trials=n_trials,
+                seasons_back=seasons_back,
+                storage=storage,
+                study_name=study_name,
+                timeout=timeout,
+            )
+        else:
+            run_tuning_v4_sequential(
+                n_trials=n_trials,
+                seasons_back=seasons_back,
+                storage=storage,
+                study_name=study_name,
+                timeout=timeout,
+                model_to_tune=model_to_tune,
+                draw_metric=draw_metric,
+                win_metric=win_metric,
+            )
     except RuntimeError as e:
         print(f"ERROR: {e}")
         raise typer.Exit(code=1)

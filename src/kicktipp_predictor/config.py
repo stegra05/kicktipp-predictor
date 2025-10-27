@@ -108,6 +108,25 @@ def _apply_model_params_from_dict(config: "Config", params: dict[str, Any]) -> N
         # Additional general knobs
         "draw_margin": float,
         "avg_total_goals": float,
+        # --- Optional: Generic NN training hyperparameters (for future NN models) ---
+        # Learning rate used by NN optimizers (e.g., Adam/SGD).
+        "nn_learning_rate": float,
+        # Mini-batch size for NN training loops.
+        "nn_batch_size": int,
+        # Number of training epochs for NN training.
+        "nn_num_epochs": int,
+        # Optimizer name (e.g., 'adam', 'sgd').
+        "nn_optimizer": str,
+        # Loss function name (e.g., 'categorical_crossentropy').
+        "nn_loss_function": str,
+        # L2 regularization weight for NN layers.
+        "nn_l2_reg": float,
+        # Dropout rate applied to input layer.
+        "nn_dropout_input": float,
+        # Dropout rate applied to hidden layers.
+        "nn_dropout_hidden": float,
+        # Early stopping patience in epochs for NN training.
+        "nn_early_stopping_patience": int,
     }
 
     for key, caster in casts.items():
@@ -254,6 +273,28 @@ class ModelConfig:
 
     # Feature selection file (optional)
     selected_features_file: str = "kept_features.yaml"
+
+    # --- Optional: Neural network training defaults ---
+    # These parameters are provided to support potential NN-based models.
+    # The current XGB-based architecture does not consume them, but they can be
+    # leveraged by alternative training modules without changing the global config.
+
+    # Optimizer and schedule
+    nn_optimizer: str = "adam"  # Optimizer type for NN training (e.g., 'adam', 'sgd')
+    nn_learning_rate: float = 0.001  # Base learning rate used by the optimizer
+    nn_num_epochs: int = 100  # Total training epochs for NN models
+    nn_batch_size: int = 32  # Mini-batch size for NN training loops
+
+    # Objective and loss
+    nn_loss_function: str = "categorical_crossentropy"  # Primary loss function for classification
+
+    # Regularization
+    nn_l2_reg: float = 0.01  # L2 weight decay applied to NN layers
+    nn_dropout_input: float = 0.2  # Dropout rate on input layer to reduce overfitting
+    nn_dropout_hidden: float = 0.5  # Dropout rate on hidden layers
+
+    # Early stopping
+    nn_early_stopping_patience: int = 10  # Epochs with no improvement before stopping
 
     # --- Parameter dictionaries ---
     @property

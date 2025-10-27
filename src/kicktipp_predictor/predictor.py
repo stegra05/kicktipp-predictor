@@ -759,79 +759,122 @@ class CascadedPredictor:
 
         return results
 
-    def save_models(self, output_dir: str) -> None:
-        """Save trained models and encoders to specified directory.
+    def save_models(self) -> None:
+        """Save both classification models and their metadata to disk.
 
-        Artifacts:
-        - 'draw_classifier.joblib': draw XGBClassifier
-        - 'win_classifier.joblib': win XGBClassifier
-        - 'encoders.joblib': dict with label encoders
-        - 'cascaded_metadata.joblib': dict with feature_columns
-
-        Args:
-            output_dir: Directory path to store the model artifacts.
+        Uses `config.paths.models_dir` as the target directory and stores:
+        - 'draw_classifier.joblib'
+        - 'win_classifier.joblib'
+        - 'metadata_v4.joblib' (consolidated metadata with encoders)
 
         Raises:
-            RuntimeError if models are not trained.
+            ValueError: If models are not initialized.
+            RuntimeError: If file operations fail.
         """
+        # Validate models exist
+        if not hasattr(self, "draw_model") or not hasattr(self, "win_model"):
+            raise ValueError("Models not initialized")
         if self.draw_model is None or self.win_model is None:
-            raise RuntimeError("No models to save. Must train first.")
-        out_path = self._ensure_dir(output_dir)
+            raise ValueError("Models not initialized")
 
-        joblib.dump(self.draw_model, out_path / "draw_classifier.joblib")
-        joblib.dump(self.win_model, out_path / "win_classifier.joblib")
-        joblib.dump(
-            {
-                "draw": self.draw_label_encoder,
-                "win": self.win_label_encoder,
-            },
-            out_path / "encoders.joblib",
-        )
-        joblib.dump(
-            {"feature_columns": list(self.feature_columns)},
-            out_path / "cascaded_metadata.joblib",
-        )
+        # Ensure target directory exists
+        out_path = self.config.paths.models_dir
+        try:
+            out_path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to ensure models directory: {exc}")
 
-    def load_models(self, input_dir: str) -> None:
-        """Load models and encoders from specified directory.
+        # Save models
+        try:
+            joblib.dump(self.draw_model, out_path / "draw_classifier.joblib")
+            joblib.dump(self.win_model, out_path / "win_classifier.joblib")
+        except Exception as exc:
+            raise RuntimeError(f"Failed to save models: {exc}")
 
-        Args:
-            input_dir: Directory path containing saved artifacts.
+        # Save shared metadata (consolidated, versioned)
+        metadata = {
+            "version": "v4",
+            "feature_columns": list(self.feature_columns),
+            "draw_label_encoder": self.draw_label_encoder,
+            "win_label_encoder": self.win_label_encoder,
+        }
+        try:
+            joblib.dump(metadata, out_path / "metadata_v4.joblib")
+        except Exception as exc:
+            raise RuntimeError(f"Failed to save metadata: {exc}")
+
+    def load_models(self) -> None:
+        """Load both models and their metadata from disk.
+
+        Uses `config.paths.models_dir` and supports backward compatibility
+        with pre-v4 artifacts.
 
         Raises:
-            FileNotFoundError if artifacts are missing.
-            RuntimeError for invalid metadata or loading errors.
+            FileNotFoundError: If required artifacts are missing.
+            RuntimeError: For invalid metadata or loading errors.
         """
-        in_path = self._ensure_dir(input_dir)
+        in_path = self.config.paths.models_dir
         try:
-            self.draw_model = joblib.load(in_path / "draw_classifier.joblib")
-            self.win_model = joblib.load(in_path / "win_classifier.joblib")
-        except FileNotFoundError:
-            raise
+            in_path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to ensure models directory: {exc}")
+
+        # Load draw and win models (existence check first)
+        draw_path = in_path / "draw_classifier.joblib"
+        win_path = in_path / "win_classifier.joblib"
+        if not draw_path.exists():
+            raise FileNotFoundError(f"Missing draw model: {draw_path}")
+        if not win_path.exists():
+            raise FileNotFoundError(f"Missing win model: {win_path}")
+        try:
+            self.draw_model = joblib.load(draw_path)
+            self.win_model = joblib.load(win_path)
         except Exception as exc:
             raise RuntimeError(f"Failed to load models: {exc}")
 
-        try:
-            enc = joblib.load(in_path / "encoders.joblib")
-            if not isinstance(enc, dict) or "draw" not in enc or "win" not in enc:
-                raise RuntimeError("Invalid encoders artifact.")
-            self.draw_label_encoder = enc["draw"]
-            self.win_label_encoder = enc["win"]
-        except FileNotFoundError:
-            raise
-        except Exception as exc:
-            raise RuntimeError(f"Failed to load encoders: {exc}")
+        # Load consolidated v4 metadata if present; otherwise fallback to legacy artifacts
+        meta_v4_path = in_path / "metadata_v4.joblib"
+        if meta_v4_path.exists():
+            try:
+                metadata = joblib.load(meta_v4_path)
+                if not isinstance(metadata, dict):
+                    raise RuntimeError("Invalid metadata format.")
+                cols = metadata.get("feature_columns")
+                if not isinstance(cols, list) or len(cols) == 0:
+                    raise RuntimeError("Missing feature_columns in metadata.")
+                self.feature_columns = [str(c) for c in cols]
+                dle = metadata.get("draw_label_encoder")
+                wle = metadata.get("win_label_encoder")
+                if dle is None or wle is None:
+                    raise RuntimeError("Missing label encoders in metadata.")
+                self.draw_label_encoder = dle
+                self.win_label_encoder = wle
+            except Exception as exc:
+                raise RuntimeError(f"Failed to load v4 metadata: {exc}")
+        else:
+            # Backward compatibility: legacy separate artifacts
+            try:
+                enc_path = in_path / "encoders.joblib"
+                meta_path = in_path / "cascaded_metadata.joblib"
+                if not enc_path.exists() or not meta_path.exists():
+                    raise FileNotFoundError(
+                        "Legacy artifacts missing: encoders.joblib and/or cascaded_metadata.joblib"
+                    )
+                enc = joblib.load(enc_path)
+                if not isinstance(enc, dict) or "draw" not in enc or "win" not in enc:
+                    raise RuntimeError("Invalid encoders artifact.")
+                self.draw_label_encoder = enc["draw"]
+                self.win_label_encoder = enc["win"]
 
-        try:
-            meta = joblib.load(in_path / "cascaded_metadata.joblib")
-            cols = meta.get("feature_columns") if isinstance(meta, dict) else None
-            if not isinstance(cols, list) or len(cols) == 0:
-                raise RuntimeError("Missing feature_columns in metadata.")
-            self.feature_columns = [str(c) for c in cols]
-        except FileNotFoundError:
-            raise
-        except Exception as exc:
-            raise RuntimeError(f"Failed to load model metadata: {exc}")
+                meta = joblib.load(meta_path)
+                cols = meta.get("feature_columns") if isinstance(meta, dict) else None
+                if not isinstance(cols, list) or len(cols) == 0:
+                    raise RuntimeError("Missing feature_columns in metadata.")
+                self.feature_columns = [str(c) for c in cols]
+            except FileNotFoundError:
+                raise
+            except Exception as exc:
+                raise RuntimeError(f"Failed to load legacy artifacts: {exc}")
 
     @staticmethod
     def _ensure_dir(path_str: str) -> "Path":
