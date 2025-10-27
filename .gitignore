@@ -77,9 +77,6 @@ data/
 *.swo
 *~
 
-# Config files
-best_params.yaml
-
 # Gemini files
 GEMINI.md 
 

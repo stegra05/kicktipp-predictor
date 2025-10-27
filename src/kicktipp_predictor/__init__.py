@@ -1,6 +1,6 @@
 """Kicktipp Predictor package."""
 
-__version__ = "3.0.0a2"
+__version__ = "4.0.0a2"
 
 # Import main classes for convenience
 from .config import Config, get_config
