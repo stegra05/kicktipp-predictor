@@ -125,13 +125,10 @@ def _reset_optuna_storage(storage_url: str) -> None:
 def _compute_workers(workers: Optional[int], n_trials: int | None = None) -> int:
     """Compute an effective worker count.
 
-    - If `workers` is None or <= 0, use `min(8, max(1, (os.cpu_count() or 2) - 1))`.
-      Capped at 8 to avoid thread exhaustion with many workers.
+    - If `workers` is None or <= 0, use `max(1, (os.cpu_count() or 2) - 1)`.
     - If `n_trials` is specified, cap workers to `n_trials` to avoid idle workers.
     """
     auto = max(1, (os.cpu_count() or 2) - 1)
-    # Cap auto workers at 8 to avoid thread exhaustion with ML libraries
-    auto = min(auto, 8)
     w = int(workers or auto)
     if n_trials is not None:
         w = min(w, int(max(1, n_trials)))
@@ -798,10 +795,10 @@ def run_tuning_v4_parallel(
     
     parts = _split_trials(n_trials, w)
 
-    # Limit per-process threads to avoid libgomp thread creation failures
+    # Set per-worker threads to 1 (fixed) to avoid libgomp thread creation failures
     # With many workers, each worker should use only 1 thread to avoid oversubscription
     # Set environment variables BEFORE spawning workers so they're inherited
-    tpw = max(1, (os.cpu_count() or 1) // max(1, w))
+    tpw = 1  # Fixed at 1 thread per worker
     # Pre-set env vars in main process so workers inherit them
     os.environ["OMP_NUM_THREADS"] = str(tpw)
     os.environ["OPENBLAS_NUM_THREADS"] = str(tpw)
