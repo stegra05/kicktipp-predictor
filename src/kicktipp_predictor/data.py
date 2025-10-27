@@ -493,6 +493,13 @@ class DataLoader:
         except Exception:
             base["elo_diff"] = base.get("elo_diff", 0.0)
 
+        # Create binary feature: home_team_is_strong
+        # Definition: 1 if home_elo > 1450, else 0. Exactly 1450 is NOT strong.
+        # Robustness: handles missing/non-numeric values by treating as not strong (0).
+        base["home_team_is_strong"] = (
+            pd.to_numeric(base.get("home_elo", 0.0), errors="coerce").fillna(0.0) > 1450.0
+        ).astype(int)
+
         # Shared history features via helper
         matches_df = pd.DataFrame(matches)
         long_hist, hist_cols = self._create_features(matches_df, matches_df)

@@ -1,0 +1,9 @@
+# Reproducible environment for SHAP analysis
+# Date: 2025-10-27
+
+# Install project with plots/dev extras (includes shap>=0.45.0)
+-e .[plots,dev]
+
+# Plotting and notebook support
+matplotlib>=3.0
+jupyter>=1.0

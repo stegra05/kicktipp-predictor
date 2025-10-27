@@ -1,13 +1,76 @@
-tanh_tamed_elo
-home_avg_goals_for
-home_avg_goals_against
-away_avg_goals_for
-away_avg_goals_against
-home_form_points
-away_form_points
-home_goals_for_ewm5
-away_goals_for_ewm5
-home_goals_against_ewm5
-away_goals_against_ewm5
-matchday
-date
+# --- Engineered/Derived Features (The High-Value Signals) ---
+
+# ELO: Tamed Elo to control for bias and incorporate uncertainty scale factor
+- tanh_tamed_elo
+
+# DIFFERENCES: Simple differences/ratios that proved robust in SHAP/ablation
+- abs_weighted_form_points_diff
+- weighted_form_points_difference
+
+# --- Base Averages / Long-Term Strength (The Stable Signals) ---
+
+# HOME TEAM BASE
+- home_avg_goals_for
+- home_avg_goals_against
+- home_avg_points
+
+# AWAY TEAM BASE
+- away_avg_goals_for
+- away_avg_goals_against
+- away_avg_points
+
+
+# --- Form Metrics (Retained the essentials that passed initial scrutiny) ---
+# Note: All rolling features (L5/L10/etc.) are automatically managed by the 
+# Data pipeline if not explicitly set to a single window here.
+
+# HOME TEAM FORM
+- home_form_points_weighted_by_opponent_rank
+- home_form_points_per_game
+# Multi-window points (unweighted and weighted)
+- home_form_points_L3
+- home_form_points_L5
+- home_form_points_L10
+- home_wform_points_L3
+- home_wform_points_L5
+- home_wform_points_L10
+- home_form_wins
+- home_form_draws
+- home_form_losses
+- home_form_goals_scored
+- home_form_goals_conceded
+- home_form_goal_diff
+# Multi-window goal diff
+- home_form_goal_diff_L3
+- home_form_goal_diff_L5
+- home_form_goal_diff_L10
+- home_form_avg_goals_scored
+- home_form_avg_goals_conceded
+
+# AWAY TEAM FORM
+- away_form_points_weighted_by_opponent_rank
+- away_form_points_per_game
+
+# Multi-window points (unweighted and weighted)
+- away_form_points_L3
+- away_form_points_L5
+- away_form_points_L10
+- away_wform_points_L3
+- away_wform_points_L5
+- away_wform_points_L10
+- away_form_wins
+- away_form_draws
+- away_form_losses
+- away_form_goals_scored
+- away_form_goals_conceded
+- away_form_goal_diff
+
+# Multi-window goal diff
+- away_form_goal_diff_L3
+- away_form_goal_diff_L5
+- away_form_goal_diff_L10
+- away_form_avg_goals_scored
+- away_form_avg_goals_conceded
+
+# --- Contextual Feature ---
+- matchday
