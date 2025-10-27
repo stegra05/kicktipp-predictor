@@ -169,6 +169,9 @@ class CascadedPredictor:
 
         # --- Feature preparation ---
         X_all = self._prepare_features(df)
+        # Define non-draw subset locally (aligns with y_win created in _prepare_targets)
+        non_draw_mask = df["is_draw"] == 0
+        df_nd = df.loc[non_draw_mask].copy()
         X_non_draw = self._prepare_features(df_nd)
         if len(X_all) != len(y_draw):
             raise ValueError("Feature matrix and y_draw length mismatch.")
