@@ -307,7 +307,7 @@ def run_tuning_v4_sequential(
 
             predictor = CascadedPredictor(config=cfg)
             try:
-                predictor.train(train_df)
+                predictor.train(train_df, verbose=False)
             except Exception as exc:
                 raise optuna.TrialPruned(f"Training failed: {exc}")
 
@@ -422,12 +422,12 @@ def run_tuning_v4_sequential(
 
             predictor = CascadedPredictor(config=cfg)
             try:
-                predictor.train(train_df)
+                predictor.train(train_df, verbose=False)
             except Exception as exc:
                 raise optuna.TrialPruned(f"Training failed: {exc}")
 
             # Combined predictions
-            preds = predictor.predict(val_df)
+            preds = predictor.predict(val_df, verbose=False)
             proba = np.array(
                 [
                     [
@@ -549,7 +549,7 @@ def _worker_optimize_draw(
         cfg.model.draw_scale_pos_weight = trial.suggest_float("draw_scale_pos_weight", 1.0, 8.0)
 
         predictor = CascadedPredictor(config=cfg)
-        predictor.train(train_df)
+        predictor.train(train_df, verbose=False)
 
         X_val = predictor._prepare_features(val_df)
         y_val_draw = (val_df["result"].astype(str) == "D").astype(int).to_numpy()
@@ -628,9 +628,9 @@ def _worker_optimize_win(
         cfg.model.win_colsample_bytree = trial.suggest_float("win_colsample_bytree", 0.5, 1.0)
 
         predictor = CascadedPredictor(config=cfg)
-        predictor.train(train_df)
+        predictor.train(train_df, verbose=False)
 
-        preds = predictor.predict(val_df)
+        preds = predictor.predict(val_df, verbose=False)
         proba = np.array(
             [
                 [
@@ -747,11 +747,12 @@ def run_tuning_v4_parallel(
     _limit_threads(tpw)
     storage_for_optuna = _resolve_storage_with_timeout(storage_url)
 
-    console.rule("OPTUNA TUNING (Parallel)")
+    console.rule("[bold cyan]OPTUNA TUNING (V4 Cascaded)[/bold cyan]")
     console.print(
-        f"Training seasons: {current_season - seasons_back}..{current_season - 1}\n"
-        f"Validation season: {current_season}\n"
-        f"Trials: {n_trials} | Workers: {w} | Storage: {storage_url}\n"
+        f"[dim]Training:[/dim] [cyan]{current_season - seasons_back}..{current_season - 1}[/cyan] | "
+        f"[dim]Validation:[/dim] [yellow]{current_season}[/yellow] | "
+        f"[dim]Workers:[/dim] [green]{w}[/green] | "
+        f"[dim]Storage:[/dim] [blue]{Path(storage_url).name}[/blue]"
     )
 
     # Progress UI
@@ -785,7 +786,7 @@ def run_tuning_v4_parallel(
                 cfg.model.draw_colsample_bytree = trial.suggest_float("draw_colsample_bytree", 0.5, 1.0)
                 cfg.model.draw_scale_pos_weight = trial.suggest_float("draw_scale_pos_weight", 1.0, 8.0)
                 predictor = CascadedPredictor(config=cfg)
-                predictor.train(train_df)
+                predictor.train(train_df, verbose=False)
                 X_val = predictor._prepare_features(val_df)
                 y_val_draw = (val_df["result"].astype(str) == "D").astype(int).to_numpy()
                 draw_proba = predictor.draw_model.predict_proba(X_val)
@@ -805,7 +806,10 @@ def run_tuning_v4_parallel(
                 "maximize",
             )
 
-        task_draw = progress.add_task(f"Phase 1: Draw [{n_trials} trials]", total=int(n_trials))
+        task_draw = progress.add_task(
+            "[cyan]Phase 1:[/cyan] Draw Classifier",
+            total=int(n_trials)
+        )
         start_draw = time.perf_counter()
         failures_draw = 0
 
@@ -883,50 +887,50 @@ def run_tuning_v4_parallel(
                 }
             )
 
-        # Summary table
-        tbl = Table(title="Phase 1 Summary", show_lines=False)
-        tbl.add_column("Metric")
-        tbl.add_column("Value")
-        tbl.add_row("Best score", "-" if best_draw is None else f"{float(best_draw.value):.4f}")
-        tbl.add_row("Trials completed", f"{len(study_draw.trials)}")
-        tbl.add_row("Duration (s)", f"{dur_draw:.2f}")
-        if bench_avg_draw is not None:
-            est_seq_total = bench_avg_draw * n_trials
-            speedup = est_seq_total / max(1e-9, dur_draw)
-            tbl.add_row("Seq avg/trial (s)", f"{bench_avg_draw:.3f}")
-            tbl.add_row("Seq est total (s)", f"{est_seq_total:.2f}")
-            tbl.add_row("Speedup vs seq", f"{speedup:.2f}x")
-        status = "[green]OK" if failures_draw == 0 else f"[red]Workers failed: {failures_draw}"
-        tbl.add_row("Status", status)
-        console.print(tbl)
+    # Summary table
+    tbl = Table(title="[cyan]Phase 1 Complete: Draw Classifier[/cyan]", show_lines=False, box=None)
+    tbl.add_column("Metric", style="dim")
+    tbl.add_column("Value", style="bold")
+    tbl.add_row("Best score", "-" if best_draw is None else f"[green]{float(best_draw.value):.4f}[/green]")
+    tbl.add_row("Trials", f"{len(study_draw.trials)}")
+    tbl.add_row("Duration", f"[cyan]{dur_draw:.1f}s[/cyan]")
+    if bench_avg_draw is not None:
+        est_seq_total = bench_avg_draw * n_trials
+        speedup = est_seq_total / max(1e-9, dur_draw)
+        tbl.add_row("Avg/trial", f"{bench_avg_draw:.3f}s")
+        tbl.add_row("Estimated seq", f"{est_seq_total:.1f}s")
+        tbl.add_row("Speedup", f"[green]{speedup:.2f}x[/green]")
+    status = "[green]✓ OK" if failures_draw == 0 else f"[red]✗ Failed ({failures_draw})[/red]"
+    tbl.add_row("Status", status)
+    console.print(tbl)
 
-        # Save compact summary YAML
-        summary_dir = cfg_base.paths.data_dir / "optuna"
-        os.makedirs(summary_dir, exist_ok=True)
-        try:
-            import yaml  # type: ignore
-            with open(summary_dir / f"{study_name}_draw_summary.yaml", "w", encoding="utf-8") as f:
-                yaml.safe_dump(
-                    {
-                        "study_name": f"{study_name}_draw",
-                        "storage": storage_url,
-                        "n_trials": len(study_draw.trials),
-                        "best_trial": None if best_draw is None else {
-                            "number": best_draw.number,
-                            "value": float(best_draw.value),
-                            "params": best_draw.params,
-                            "metric": draw_metric,
-                        },
-                        "updated_file": None if saved_path is None else str(saved_path),
-                        "duration_seconds": float(dur_draw),
-                        "workers": int(w),
+    # Save compact summary YAML
+    summary_dir = cfg_base.paths.data_dir / "optuna"
+    os.makedirs(summary_dir, exist_ok=True)
+    try:
+        import yaml  # type: ignore
+        with open(summary_dir / f"{study_name}_draw_summary.yaml", "w", encoding="utf-8") as f:
+            yaml.safe_dump(
+                {
+                    "study_name": f"{study_name}_draw",
+                    "storage": storage_url,
+                    "n_trials": len(study_draw.trials),
+                    "best_trial": None if best_draw is None else {
+                        "number": best_draw.number,
+                        "value": float(best_draw.value),
+                        "params": best_draw.params,
+                        "metric": draw_metric,
                     },
-                    f,
-                    sort_keys=False,
-                    indent=2,
-                )
-        except Exception:
-            pass
+                    "updated_file": None if saved_path is None else str(saved_path),
+                    "duration_seconds": float(dur_draw),
+                    "workers": int(w),
+                },
+                f,
+                sort_keys=False,
+                indent=2,
+            )
+    except Exception:
+        pass
 
     # ---------------------- Phase 2: Win Tuning ----------------------
     if model_to_tune in ("win", "both"):
@@ -954,8 +958,8 @@ def run_tuning_v4_parallel(
                 cfg.model.win_subsample = trial.suggest_float("win_subsample", 0.6, 1.0)
                 cfg.model.win_colsample_bytree = trial.suggest_float("win_colsample_bytree", 0.5, 1.0)
                 predictor = CascadedPredictor(config=cfg)
-                predictor.train(train_df)
-                preds = predictor.predict(val_df)
+                predictor.train(train_df, verbose=False)
+                preds = predictor.predict(val_df, verbose=False)
                 proba = np.array(
                     [
                         [
@@ -986,7 +990,10 @@ def run_tuning_v4_parallel(
                 "maximize" if win_metric == "accuracy" else "minimize",
             )
 
-        task_win = progress.add_task(f"Phase 2: Win [{n_trials} trials]", total=int(n_trials))
+        task_win = progress.add_task(
+            "[magenta]Phase 2:[/magenta] Win Classifier",
+            total=int(n_trials)
+        )
         start_win = time.perf_counter()
         failures_win = 0
 
@@ -1064,47 +1071,47 @@ def run_tuning_v4_parallel(
                 }
             )
 
-        tbl = Table(title="Phase 2 Summary", show_lines=False)
-        tbl.add_column("Metric")
-        tbl.add_column("Value")
-        tbl.add_row("Best score", "-" if best_win is None else f"{float(best_win.value):.4f}")
-        tbl.add_row("Trials completed", f"{len(study_win.trials)}")
-        tbl.add_row("Duration (s)", f"{dur_win:.2f}")
-        if bench_avg_win is not None:
-            est_seq_total = bench_avg_win * n_trials
-            speedup = est_seq_total / max(1e-9, dur_win)
-            tbl.add_row("Seq avg/trial (s)", f"{bench_avg_win:.3f}")
-            tbl.add_row("Seq est total (s)", f"{est_seq_total:.2f}")
-            tbl.add_row("Speedup vs seq", f"{speedup:.2f}x")
-        status = "[green]OK" if failures_win == 0 else f"[red]Workers failed: {failures_win}"
-        tbl.add_row("Status", status)
-        console.print(tbl)
+    tbl = Table(title="[magenta]Phase 2 Complete: Win Classifier[/magenta]", show_lines=False, box=None)
+    tbl.add_column("Metric", style="dim")
+    tbl.add_column("Value", style="bold")
+    tbl.add_row("Best score", "-" if best_win is None else f"[green]{float(best_win.value):.4f}[/green]")
+    tbl.add_row("Trials", f"{len(study_win.trials)}")
+    tbl.add_row("Duration", f"[cyan]{dur_win:.1f}s[/cyan]")
+    if bench_avg_win is not None:
+        est_seq_total = bench_avg_win * n_trials
+        speedup = est_seq_total / max(1e-9, dur_win)
+        tbl.add_row("Avg/trial", f"{bench_avg_win:.3f}s")
+        tbl.add_row("Estimated seq", f"{est_seq_total:.1f}s")
+        tbl.add_row("Speedup", f"[green]{speedup:.2f}x[/green]")
+    status = "[green]✓ OK" if failures_win == 0 else f"[red]✗ Failed ({failures_win})[/red]"
+    tbl.add_row("Status", status)
+    console.print(tbl)
 
-        summary_dir = cfg_base.paths.data_dir / "optuna"
-        os.makedirs(summary_dir, exist_ok=True)
-        try:
-            import yaml  # type: ignore
-            with open(summary_dir / f"{study_name}_win_summary.yaml", "w", encoding="utf-8") as f:
-                yaml.safe_dump(
-                    {
-                        "study_name": f"{study_name}_win",
-                        "storage": storage_url,
-                        "n_trials": len(study_win.trials),
-                        "best_trial": None if best_win is None else {
-                            "number": best_win.number,
-                            "value": float(best_win.value),
-                            "params": best_win.params,
-                            "metric": win_metric,
-                        },
-                        "updated_file": None if saved_path is None else str(saved_path),
-                        "duration_seconds": float(dur_win),
-                        "workers": int(w),
+    summary_dir = cfg_base.paths.data_dir / "optuna"
+    os.makedirs(summary_dir, exist_ok=True)
+    try:
+        import yaml  # type: ignore
+        with open(summary_dir / f"{study_name}_win_summary.yaml", "w", encoding="utf-8") as f:
+            yaml.safe_dump(
+                {
+                    "study_name": f"{study_name}_win",
+                    "storage": storage_url,
+                    "n_trials": len(study_win.trials),
+                    "best_trial": None if best_win is None else {
+                        "number": best_win.number,
+                        "value": float(best_win.value),
+                        "params": best_win.params,
+                        "metric": win_metric,
                     },
-                    f,
-                    sort_keys=False,
-                    indent=2,
-                )
-        except Exception:
-            pass
+                    "updated_file": None if saved_path is None else str(saved_path),
+                    "duration_seconds": float(dur_win),
+                    "workers": int(w),
+                },
+                f,
+                sort_keys=False,
+                indent=2,
+            )
+    except Exception:
+        pass
 
-    console.rule("TUNING COMPLETE (Parallel)")
+    console.rule("[bold green]TUNING COMPLETE[/bold green]")

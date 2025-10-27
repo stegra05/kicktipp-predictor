@@ -130,7 +130,7 @@ class CascadedPredictor:
 
         return df, y_draw, y_win
 
-    def train(self, matches_df: pd.DataFrame) -> None:
+    def train(self, matches_df: pd.DataFrame, verbose: bool = True) -> None:
         """Train the two-stage cascaded classifiers with in-method data preparation.
 
         Data preparation steps (encapsulated):
@@ -146,6 +146,7 @@ class CascadedPredictor:
 
         Args:
             matches_df: DataFrame containing features and a 'result' column ('H', 'D', 'A').
+            verbose: Whether to print training progress messages. Defaults to True.
         """
         # --- Input validation ---
         if not isinstance(matches_df, pd.DataFrame) or matches_df.empty:
@@ -235,14 +236,15 @@ class CascadedPredictor:
         yd_val = self.draw_label_encoder.transform(y_draw.iloc[val_idx].tolist()) if len(val_idx) else None
 
         # --- Draw model training ---
-        self.console.print(
-            Panel(
-                "[bold cyan]Training Draw Classifier (Gatekeeper)...[/bold cyan]\n"
-                "[dim]Predicting: Draw vs Not-Draw[/dim]",
-                border_style="cyan",
-                expand=False,
+        if verbose:
+            self.console.print(
+                Panel(
+                    "[bold cyan]Training Draw Classifier (Gatekeeper)...[/bold cyan]\n"
+                    "[dim]Predicting: Draw vs Not-Draw[/dim]",
+                    border_style="cyan",
+                    expand=False,
+                )
             )
-        )
         try:
             # Set evaluation metric and logging verbosity
             self.draw_model = XGBClassifier(
@@ -300,14 +302,15 @@ class CascadedPredictor:
             raise
 
         # --- Win model training ---
-        self.console.print(
-            Panel(
-                "[bold magenta]Training Win Classifier (Finisher)...[/bold magenta]\n"
-                "[dim]Predicting: Home Win vs Away Win (on non-draw matches)[/dim]",
-                border_style="magenta",
-                expand=False,
+        if verbose:
+            self.console.print(
+                Panel(
+                    "[bold magenta]Training Win Classifier (Finisher)...[/bold magenta]\n"
+                    "[dim]Predicting: Home Win vs Away Win (on non-draw matches)[/dim]",
+                    border_style="magenta",
+                    expand=False,
+                )
             )
-        )
         try:
             # Set evaluation metric and logging verbosity
             self.win_model = XGBClassifier(
@@ -498,7 +501,7 @@ class CascadedPredictor:
 
         return metrics
 
-    def predict(self, X_test: pd.DataFrame) -> list[dict]:
+    def predict(self, X_test: pd.DataFrame, verbose: bool = True) -> list[dict]:
         """Make predictions using two-stage probability combination.
 
         Probability combination:
@@ -509,6 +512,7 @@ class CascadedPredictor:
 
         Args:
             X_test: DataFrame of features for upcoming matches.
+            verbose: Whether to print prediction progress messages. Defaults to True.
 
         Returns:
             A list of dictionaries per match including probabilities and labels.
@@ -533,7 +537,8 @@ class CascadedPredictor:
                 raise ValueError(f"Feature dimension mismatch for {mdl_name} model: {X.shape[1]} != {int(n_in)}")
 
         # 2. Draw probabilities
-        self.console.print("[dim]Calculating Draw probabilities...[/dim]")
+        if verbose:
+            self.console.print("[dim]Calculating Draw probabilities...[/dim]")
         draw_proba = self.draw_model.predict_proba(X)
         draw_class_index = int(self.class_index_map.get("draw_positive", 1))
         if draw_class_index < 0 or draw_class_index >= draw_proba.shape[1]:
@@ -546,7 +551,8 @@ class CascadedPredictor:
         p_draw = draw_proba[:, draw_class_index]
 
         # 3. Win probabilities
-        self.console.print("[dim]Calculating conditional Win probabilities...[/dim]")
+        if verbose:
+            self.console.print("[dim]Calculating conditional Win probabilities...[/dim]")
         win_proba = self.win_model.predict_proba(X)
         home_class_index = int(self.class_index_map.get("win_home", 1))
         if home_class_index < 0 or home_class_index >= win_proba.shape[1]:
@@ -558,7 +564,8 @@ class CascadedPredictor:
         p_home_given_not_draw = win_proba[:, home_class_index]
 
         # 4. Combine probabilities via law of total probability
-        self.console.print("[dim]Combining probabilities using law of total probability...[/dim]")
+        if verbose:
+            self.console.print("[dim]Combining probabilities using law of total probability...[/dim]")
         p_not_draw = 1.0 - p_draw
         final_p_home = p_not_draw * p_home_given_not_draw
         final_p_away = p_not_draw * (1.0 - p_home_given_not_draw)
