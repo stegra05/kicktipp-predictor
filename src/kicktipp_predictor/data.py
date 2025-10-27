@@ -331,6 +331,7 @@ class DataLoader:
         intermediate Elo features influence training/prediction, even if
         feature selection fails to load.
         """
+        """
         try:
             if df is None or not isinstance(df, pd.DataFrame) or len(df) == 0:
                 return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
@@ -347,6 +348,8 @@ class DataLoader:
             return df
         except Exception:
             return df
+        """
+        pass
 
     def _merge_history_features(
         self,

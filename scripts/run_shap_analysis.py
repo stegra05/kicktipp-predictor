@@ -223,46 +223,6 @@ def analyze_tanh_tamed_elo(shap_values: np.ndarray, X: pd.DataFrame, out_dir: Pa
         print(f"[WARN] Failed special dependence plot for tanh_tamed_elo: {exc}")
     return results
 
-
-def write_findings_md(out_dir: Path, imp_df: pd.DataFrame, tanh_stats: dict, top_k: int, metadata: dict) -> None:
-    md_path = out_dir / "shap_findings.md"
-    lines = []
-    lines.append(f"# SHAP Analysis Findings\n")
-    lines.append(f"Date: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n")
-    lines.append("\n## Overview\n")
-    lines.append("This document summarizes SHAP feature importance and key patterns observed.\n")
-    lines.append("\n## Environment\n")
-    lines.append(json.dumps(metadata, indent=2) + "\n")
-
-    lines.append("\n## Top Features (mean |SHAP|)\n")
-    for i, row in imp_df.head(top_k).iterrows():
-        lines.append(f"- {row['feature']}: {row['mean_abs_shap']:.6f}")
-
-    lines.append("\n## tanh_tamed_elo Spotlight\n")
-    if tanh_stats.get("present"):
-        lines.append(
-            f"- Pearson corr(feature, SHAP): {tanh_stats.get('pearson_corr', float('nan')):.4f}"
-        )
-        lines.append(
-            f"- Spearman corr(feature, SHAP): {tanh_stats.get('spearman_corr', float('nan')):.4f}"
-        )
-        lines.append(f"- Direction: {tanh_stats.get('direction', 'n/a')}\n")
-        lines.append("Interpretation: Examine beeswarm and dependence plots for threshold effects and\n"
-                     "color gradients indicating interactions. Early signs of non-linearity\n"
-                     "may appear if Spearman >> Pearson.")
-    else:
-        lines.append("- Feature not present in the selected feature set.")
-
-    lines.append("\n## Recommendations\n")
-    lines.append("- Validate feature engineering around Elo normalization and clipping.\n")
-    lines.append("- Consider interaction features for attacker/defender dynamics if observed.\n")
-    lines.append("- Use Optuna tuning outputs to stress-test feature selection variants.\n")
-
-    with open(md_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
-    print(f"[INFO] Wrote findings to {md_path}")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run SHAP analysis for GoalDifferencePredictor")
     parser.add_argument("--seasons-back", type=int, default=5, help="Number of past seasons for training data")

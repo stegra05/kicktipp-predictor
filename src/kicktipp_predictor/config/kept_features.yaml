@@ -1,12 +1,7 @@
 # --- Engineered/Derived Features (The High-Value Signals) ---
 
 # ELO: Enable all Elo features (raw + normalized + tamed + binary)
-- home_elo
-- away_elo
-- elo_diff
-- normalized_elo_diff
 - tanh_tamed_elo
-- home_team_is_strong
 
 # DIFFERENCES: Simple differences/ratios that proved robust in SHAP/ablation
 - abs_weighted_form_points_diff
@@ -55,6 +50,7 @@
 # AWAY TEAM FORM
 - away_form_points_weighted_by_opponent_rank
 - away_form_points_per_game
+- away_matches_played
 
 # Multi-window points (unweighted and weighted)
 - away_form_points_L3
