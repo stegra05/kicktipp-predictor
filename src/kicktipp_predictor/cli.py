@@ -261,19 +261,41 @@ def tune(
         "accuracy",
         help="Phase 2 win metric: accuracy or log_loss",
     ),
-    parallel: bool = typer.Option(False, help="Run tuning in parallel across multiple workers"),
-    workers: int = typer.Option(0, help="Number of parallel workers (0 = auto)"),
+    workers: int = typer.Option(1, help="Number of parallel workers (1 = sequential, >1 = parallel)"),
     bench_trials: int = typer.Option(0, help="Optional small sequential benchmark trial count"),
     log_level: str = typer.Option("warning", help="Logging level: debug/info/warning/error"),
     reset_storage: bool = typer.Option(
         False,
         help="Reset Optuna storage before tuning (WARNING: This will delete existing studies)",
     ),
+    dry_run: bool = typer.Option(
+        False,
+        help="Preview configuration and exit without running tuning",
+    ),
 ):
     """Run Optuna tuning for the V4 cascaded predictor (sequential draw → win).
 
-    Supports phase-specific metrics and optional parallel workers.
+    If workers > 1, runs in parallel mode. Otherwise runs sequentially.
     """
+    import os
+    
+    # Dry run mode: just print configuration
+    if dry_run:
+        console.rule("[bold]DRY RUN - Tuning Configuration[/bold]")
+        console.print(f"[cyan]Tuning Mode:[/cyan] {model_to_tune}")
+        console.print(f"[cyan]Trials:[/cyan] {n_trials}")
+        console.print(f"[cyan]Seasons Back:[/cyan] {seasons_back}")
+        console.print(f"[cyan]Study Name:[/cyan] {study_name}")
+        console.print(f"[cyan]Draw Metric:[/cyan] {draw_metric}")
+        console.print(f"[cyan]Win Metric:[/cyan] {win_metric}")
+        console.print(f"[cyan]Workers:[/cyan] {workers}")
+        console.print(f"[cyan]Execution Mode:[/cyan] {'[green]Parallel[/green]' if workers > 1 else '[yellow]Sequential[/yellow]'}")
+        console.print(f"[cyan]Bench Trials:[/cyan] {bench_trials if bench_trials > 0 else 'None'}")
+        console.print(f"[cyan]Reset Storage:[/cyan] {reset_storage}")
+        console.print(f"[cyan]Log Level:[/cyan] {log_level}")
+        console.print("\n[dim]Run without --dry-run to start tuning.[/dim]")
+        return
+    
     console.rule("[bold]OPTUNA TUNING[/bold]")
 
     try:
@@ -281,7 +303,21 @@ def tune(
         if reset_storage:
             console.print("[yellow]WARNING:[/yellow] Resetting storage will [bold]delete[/bold] existing Optuna studies.")
             typer.confirm("Proceed with storage reset?", abort=True)
-        if parallel:
+        
+        # Determine execution mode based on workers count
+        use_parallel = workers > 1
+        
+        if use_parallel:
+            # Set thread limits BEFORE importing tune to ensure OpenMP respects them on module import
+            for var in (
+                "OMP_NUM_THREADS",
+                "OPENBLAS_NUM_THREADS",
+                "MKL_NUM_THREADS",
+                "NUMEXPR_NUM_THREADS",
+                "VECLIB_MAXIMUM_THREADS",
+                "XGB_NUM_THREADS",
+            ):
+                os.environ[var] = "1"
             from kicktipp_predictor.tune import run_tuning_v4_parallel
             run_tuning_v4_parallel(
                 n_trials=n_trials,

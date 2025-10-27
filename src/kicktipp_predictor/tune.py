@@ -17,6 +17,7 @@ except Exception as exc:  # pragma: no cover - optional dependency
     optuna = None
 
 from concurrent.futures import ProcessPoolExecutor, as_completed, wait
+import multiprocessing as mp
 
 from rich.console import Console
 from rich.progress import (
@@ -198,9 +199,192 @@ def _resolve_storage_with_timeout(storage_url: str):
     return storage_url
 
 
-if __name__ == "__main__":
-    # Default quick run for V4 sequential tuning
-    run_tuning_v4_sequential()
+# Main entry point for tuning is now in cli.py
+# This module is imported by cli.py to provide tuning functionality
+
+
+# ==========================================================================
+# V4 Cascaded Model: Objective Function Factory
+# ==========================================================================
+
+def create_objective_function(
+    model_to_tune: str,
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    fixed_config: Config | None = None,
+    draw_metric: str = "roc_auc",
+    multi_objective_draw: bool = True,
+) -> Callable[[optuna.Trial], float | tuple[float, ...]]:
+    """
+    Factory that returns the correct Optuna objective function based on tuning mode.
+    
+    This consolidates all the duplicated logic and eliminates ~100 lines of code.
+    
+    Args:
+        model_to_tune: 'draw', 'win', or 'both'
+        train_df: Training data
+        val_df: Validation data
+        fixed_config: Optional config with fixed params (for cascaded tuning)
+        draw_metric: Metric to use for draw tuning ('roc_auc' or 'f1')
+        multi_objective_draw: If True, draw tuning optimizes both roc_auc and draw_rate_error
+    
+    Returns:
+        Objective function for Optuna optimization
+    """
+    if model_to_tune == 'draw':
+        # Draw-only tuning with system-level evaluation
+        # Can be single-objective (roc_auc) or multi-objective (roc_auc + draw_rate_error)
+        def objective(trial: optuna.Trial) -> float | tuple[float, float]:
+            cfg = Config.load()
+            cfg.model.n_jobs = 1
+            
+            # Suggest draw params
+            cfg.model.draw_n_estimators = trial.suggest_int("draw_n_estimators", 100, 1500)
+            cfg.model.draw_max_depth = trial.suggest_int("draw_max_depth", 3, 10)
+            cfg.model.draw_learning_rate = trial.suggest_float("draw_learning_rate", 0.01, 0.3, log=True)
+            cfg.model.draw_subsample = trial.suggest_float("draw_subsample", 0.6, 1.0)
+            cfg.model.draw_colsample_bytree = trial.suggest_float("draw_colsample_bytree", 0.5, 1.0)
+            cfg.model.draw_scale_pos_weight = trial.suggest_float("draw_scale_pos_weight", 1.0, 8.0)
+            
+            # Fix win params to reasonable defaults (if not provided, use current config)
+            if fixed_config:
+                cfg.model.win_n_estimators = fixed_config.model.win_n_estimators
+                cfg.model.win_max_depth = fixed_config.model.win_max_depth
+                cfg.model.win_learning_rate = fixed_config.model.win_learning_rate
+                cfg.model.win_subsample = fixed_config.model.win_subsample
+                cfg.model.win_colsample_bytree = fixed_config.model.win_colsample_bytree
+            
+            try:
+                predictor = CascadedPredictor(config=cfg)
+                predictor.train(train_df, verbose=False)
+            except Exception as exc:
+                raise optuna.TrialPruned(f"Training failed: {exc}")
+            
+            # Evaluate complete system performance
+            preds = predictor.predict(val_df, verbose=False)
+            proba = np.array(
+                [
+                    [
+                        p.get("home_win_probability", 0.0),
+                        p.get("draw_probability", 0.0),
+                        p.get("away_win_probability", 0.0),
+                    ]
+                    for p in preds
+                ],
+                dtype=float,
+            )
+            
+            # Calculate draw metric from system-level predictions
+            y_val_draw = (val_df["result"].astype(str) == "D").astype(int).to_numpy()
+            p_draw_system = proba[:, 1]  # Draw probability from complete system
+            
+            if len(np.unique(y_val_draw)) < 2:
+                raise optuna.TrialPruned("Validation set lacks both draw and non-draw classes.")
+            
+            # Also compute overall accuracy for reference
+            y_true = val_df["result"].astype(str).tolist()
+            y_true_numeric = np.array([{"H": 0, "D": 1, "A": 2}[t] for t in y_true])
+            accuracy = float(np.mean(np.argmax(proba, axis=1) == y_true_numeric))
+            
+            trial.set_user_attr("system_accuracy", accuracy)
+            trial.set_user_attr("metric", draw_metric)
+            trial.set_user_attr("evaluation_mode", "system")
+            
+            # Calculate the draw metric
+            if draw_metric == "roc_auc":
+                score = float(roc_auc_score(y_val_draw, p_draw_system))
+            elif draw_metric == "f1":
+                y_pred = (p_draw_system >= 0.5).astype(int)
+                score = float(f1_score(y_val_draw, y_pred))
+            else:
+                raise optuna.TrialPruned(f"Unsupported draw_metric: {draw_metric}")
+            
+            trial.set_user_attr("score", score)
+            
+            # If multi-objective, also return draw_rate_error
+            if multi_objective_draw:
+                actual_draw_rate = 0.25  # Target draw rate
+                pred_labels = np.argmax(proba, axis=1)
+                predicted_draw_rate = np.mean(pred_labels == 1)
+                draw_rate_error = abs(predicted_draw_rate - actual_draw_rate)
+                
+                trial.set_user_attr("predicted_draw_rate", predicted_draw_rate)
+                trial.set_user_attr("draw_rate_error", draw_rate_error)
+                
+                return score, draw_rate_error  # Maximize roc_auc, minimize draw_rate_error
+            
+            return score
+        
+        return objective
+    
+    elif model_to_tune in ('win', 'both'):
+        # Win model tuning (or both) with fixed draw params
+        def objective(trial: optuna.Trial) -> tuple[float, float, float]:
+            cfg = Config.load()
+            cfg.model.n_jobs = 1
+            
+            # Apply fixed draw params
+            if fixed_config:
+                cfg.model.draw_n_estimators = fixed_config.model.draw_n_estimators
+                cfg.model.draw_max_depth = fixed_config.model.draw_max_depth
+                cfg.model.draw_learning_rate = fixed_config.model.draw_learning_rate
+                cfg.model.draw_subsample = fixed_config.model.draw_subsample
+                cfg.model.draw_colsample_bytree = fixed_config.model.draw_colsample_bytree
+                cfg.model.draw_scale_pos_weight = fixed_config.model.draw_scale_pos_weight
+            
+            # Suggest win params
+            cfg.model.win_n_estimators = trial.suggest_int("win_n_estimators", 100, 2000)
+            cfg.model.win_max_depth = trial.suggest_int("win_max_depth", 3, 10)
+            cfg.model.win_learning_rate = trial.suggest_float("win_learning_rate", 0.01, 0.3, log=True)
+            cfg.model.win_subsample = trial.suggest_float("win_subsample", 0.6, 1.0)
+            cfg.model.win_colsample_bytree = trial.suggest_float("win_colsample_bytree", 0.5, 1.0)
+            
+            try:
+                predictor = CascadedPredictor(config=cfg)
+                predictor.train(train_df, verbose=False)
+            except Exception as exc:
+                raise optuna.TrialPruned(f"Training failed: {exc}")
+            
+            # Get predictions from full system
+            preds = predictor.predict(val_df, verbose=False)
+            proba = np.array(
+                [
+                    [
+                        p.get("home_win_probability", 0.0),
+                        p.get("draw_probability", 0.0),
+                        p.get("away_win_probability", 0.0),
+                    ]
+                    for p in preds
+                ],
+                dtype=float,
+            )
+            y_true = val_df["result"].astype(str).tolist()
+            y_true_numeric = np.array([{"H": 0, "D": 1, "A": 2}[t] for t in y_true])
+            
+            # Calculate the three metrics
+            # 1. Accuracy
+            accuracy = float(np.mean(np.argmax(proba, axis=1) == y_true_numeric))
+            
+            # 2. Log Loss
+            log_loss = float(ProbabilityMetrics.log_loss_multiclass(y_true, proba))
+            
+            # 3. Draw Rate Error
+            actual_draw_rate = 0.25  # Target draw rate
+            pred_labels = np.argmax(proba, axis=1)
+            predicted_draw_rate = np.mean(pred_labels == 1)
+            draw_rate_error = abs(predicted_draw_rate - actual_draw_rate)
+            
+            # Store for analysis
+            trial.set_user_attr("accuracy", accuracy)
+            trial.set_user_attr("log_loss", log_loss)
+            trial.set_user_attr("predicted_draw_rate", predicted_draw_rate)
+            
+            return accuracy, log_loss, draw_rate_error
+        
+        return objective
+    
+    else:
+        raise ValueError(f"Invalid model_to_tune: {model_to_tune}")
 
 
 # ==========================================================================
@@ -261,290 +445,24 @@ def run_tuning_v4_sequential(
 ) -> None:
     """Sequential tuning for V4 CascadedPredictor.
 
-    Phase 1: tune draw_* exclusively using draw-focused metric.
-    Phase 2: tune win_* with draw_* fixed, optimizing combined outcome quality.
+    This is a thin wrapper around run_tuning_v4_parallel with workers=1.
+    All tuning now uses the same unified implementation.
     """
-    if optuna is None:
-        raise RuntimeError(
-            "Optuna not installed. Install with `pip install \"kicktipp-predictor[tuning]\"` or `pip install optuna`."
-        )
-
-    # Prepare datasets
-    train_df, val_df, loader, current_season = _prepare_datasets(seasons_back)
-    cfg_base = loader.config
-
-    # Default storage (SQLite) under data dir
-    default_storage = f"sqlite:///{cfg_base.paths.data_dir / 'optuna_studies.db'}"
-    storage_url = storage or default_storage
-
-    # Optional storage reset for reproducibility (explicitly controlled)
-    if reset_storage:
-        try:
-            _reset_optuna_storage(storage_url)
-        except Exception as exc:
-            raise RuntimeError(f"Database reset failed: {exc}")
-
-    # ---------------------- Phase 1: Draw Tuning ----------------------
-    if model_to_tune in ("draw", "both"):
-        print("=" * 80)
-        print("OPTUNA TUNING (V4 Cascaded) - Phase 1: Draw Model")
-        print("=" * 80)
-        print(f"Training seasons: {current_season - seasons_back}..{current_season - 1}")
-        print(f"Validation season: {current_season}")
-        print(f"Trials: {n_trials} | Storage: {storage_url}")
-        print(f"Objective: maximize {draw_metric}")
-        print()
-
-        # Define objective for draw-only metric
-        def objective_draw(trial: optuna.Trial) -> float:
-            cfg = Config.load()
-            cfg.model.n_jobs = 1  # Ensure single-threaded operation
-            # Suggest only draw_* params
-            cfg.model.draw_n_estimators = trial.suggest_int("draw_n_estimators", 100, 1500)
-            cfg.model.draw_max_depth = trial.suggest_int("draw_max_depth", 3, 10)
-            cfg.model.draw_learning_rate = trial.suggest_float("draw_learning_rate", 0.01, 0.3, log=True)
-            cfg.model.draw_subsample = trial.suggest_float("draw_subsample", 0.6, 1.0)
-            cfg.model.draw_colsample_bytree = trial.suggest_float("draw_colsample_bytree", 0.5, 1.0)
-            cfg.model.draw_scale_pos_weight = trial.suggest_float("draw_scale_pos_weight", 1.0, 8.0)
-
-            predictor = CascadedPredictor(config=cfg)
-            try:
-                predictor.train(train_df, verbose=False)
-            except Exception as exc:
-                raise optuna.TrialPruned(f"Training failed: {exc}")
-
-            # Prepare validation features aligned to training columns
-            X_val = predictor._prepare_features(val_df)
-            y_val_draw = (val_df["result"].astype(str) == "D").astype(int).to_numpy()
-            # Must have both classes for meaningful AUC/F1
-            if len(np.unique(y_val_draw)) < 2:
-                raise optuna.TrialPruned("Validation set lacks both draw and non-draw classes.")
-
-            # Compute draw probabilities
-            try:
-                draw_proba = predictor.draw_model.predict_proba(X_val)
-                # Map encoder to model classes index
-                draw_label = int(predictor.draw_label_encoder.transform([1])[0])
-                idx = int(np.where(predictor.draw_model.classes_ == draw_label)[0][0])
-                p_draw = draw_proba[:, idx]
-            except Exception as exc:
-                raise optuna.TrialPruned(f"Probability computation failed: {exc}")
-
-            # Metric calculation
-            if draw_metric == "roc_auc":
-                score = float(roc_auc_score(y_val_draw, p_draw))
-            elif draw_metric == "f1":
-                y_pred = (p_draw >= 0.5).astype(int)
-                score = float(f1_score(y_val_draw, y_pred))
-            else:
-                raise optuna.TrialPruned(f"Unsupported draw_metric: {draw_metric}")
-
-            trial.set_user_attr("metric", draw_metric)
-            trial.set_user_attr("score", score)
-            trial.set_user_attr("n_val", int(len(y_val_draw)))
-            trial.set_user_attr("mean_p_draw", float(np.mean(p_draw)))
-            return score  # maximize
-
-        storage_for_optuna = _resolve_storage_with_timeout(storage_url)
-        study_draw = optuna.create_study(
-            direction="maximize",
-            study_name=f"{study_name}_draw",
-            storage=storage_for_optuna,
-            load_if_exists=True,
-        )
-        study_draw.optimize(objective_draw, n_trials=int(n_trials), timeout=timeout)
-
-        # Select best trial and persist draw_* params
-        best_draw = study_draw.best_trial
-        params_d = dict(best_draw.params)
-        saved_path = _save_best_params(
-            {
-                "draw_n_estimators": int(params_d.get("draw_n_estimators", cfg_base.model.draw_n_estimators)),
-                "draw_max_depth": int(params_d.get("draw_max_depth", cfg_base.model.draw_max_depth)),
-                "draw_learning_rate": float(params_d.get("draw_learning_rate", cfg_base.model.draw_learning_rate)),
-                "draw_subsample": float(params_d.get("draw_subsample", cfg_base.model.draw_subsample)),
-                "draw_colsample_bytree": float(params_d.get("draw_colsample_bytree", cfg_base.model.draw_colsample_bytree)),
-                "draw_scale_pos_weight": float(params_d.get("draw_scale_pos_weight", cfg_base.model.draw_scale_pos_weight)),
-            }
-        )
-        # Save a compact study summary
-        summary_dir = cfg_base.paths.data_dir / "optuna"
-        os.makedirs(summary_dir, exist_ok=True)
-        try:
-            import yaml  # type: ignore
-            with open(summary_dir / f"{study_name}_draw_summary.yaml", "w", encoding="utf-8") as f:
-                yaml.safe_dump(
-                    {
-                        "study_name": f"{study_name}_draw",
-                        "storage": storage_url,
-                        "n_trials": len(study_draw.trials),
-                        "best_trial": {
-                            "number": best_draw.number,
-                            "value": float(best_draw.value),
-                            "params": best_draw.params,
-                            "metric": draw_metric,
-                        },
-                        "updated_file": str(saved_path),
-                    },
-                    f,
-                    sort_keys=False,
-                    indent=2,
-                )
-        except Exception:
-            pass
-
-    # ---------------------- Phase 2: Win Tuning ----------------------
-    if model_to_tune in ("win", "both"):
-        print("=" * 80)
-        print("OPTUNA TUNING (V4 Cascaded) - Phase 2: Win Model (Multi-Objective)")
-        print("=" * 80)
-        print(f"Trials: {n_trials} | Storage: {storage_url}")
-        print(f"Objectives: Maximize accuracy, Minimize log_loss, Minimize draw_rate_error")
-        print()
-
-        # Load fixed draw params from best_params.yaml (if present)
-        cfg_fixed = Config.load()
-
-        def objective_win(trial: optuna.Trial) -> tuple[float, float, float]:
-            cfg = Config.load()
-            cfg.model.n_jobs = 1  # Ensure single-threaded operation
-            # Fix draw_* to previously saved (cfg_fixed already applied from YAML)
-            cfg.model.draw_n_estimators = cfg_fixed.model.draw_n_estimators
-            cfg.model.draw_max_depth = cfg_fixed.model.draw_max_depth
-            cfg.model.draw_learning_rate = cfg_fixed.model.draw_learning_rate
-            cfg.model.draw_subsample = cfg_fixed.model.draw_subsample
-            cfg.model.draw_colsample_bytree = cfg_fixed.model.draw_colsample_bytree
-            cfg.model.draw_scale_pos_weight = cfg_fixed.model.draw_scale_pos_weight
-
-            # Suggest only win_* params
-            cfg.model.win_n_estimators = trial.suggest_int("win_n_estimators", 100, 2000)
-            cfg.model.win_max_depth = trial.suggest_int("win_max_depth", 3, 10)
-            cfg.model.win_learning_rate = trial.suggest_float("win_learning_rate", 0.01, 0.3, log=True)
-            cfg.model.win_subsample = trial.suggest_float("win_subsample", 0.6, 1.0)
-            cfg.model.win_colsample_bytree = trial.suggest_float("win_colsample_bytree", 0.5, 1.0)
-
-            predictor = CascadedPredictor(config=cfg)
-            try:
-                predictor.train(train_df, verbose=False)
-            except Exception as exc:
-                raise optuna.TrialPruned(f"Training failed: {exc}")
-
-            # Combined predictions
-            preds = predictor.predict(val_df, verbose=False)
-            proba = np.array(
-                [
-                    [
-                        p.get("home_win_probability", 0.0),
-                        p.get("draw_probability", 0.0),
-                        p.get("away_win_probability", 0.0),
-                    ]
-                    for p in preds
-                ],
-                dtype=float,
-            )
-            y_true = val_df["result"].astype(str).tolist()
-            y_true_numeric = np.array([{"H": 0, "D": 1, "A": 2}[t] for t in y_true])
-
-            # Calculate the three metrics
-            # 1. Accuracy
-            accuracy = float(np.mean(np.argmax(proba, axis=1) == y_true_numeric))
-            
-            # 2. Log Loss
-            log_loss = float(ProbabilityMetrics.log_loss_multiclass(y_true, proba))
-            
-            # 3. Draw Rate Error
-            actual_draw_rate = 0.25  # Target draw rate
-            pred_labels = np.argmax(proba, axis=1)
-            predicted_draw_rate = np.mean(pred_labels == 1)
-            draw_rate_error = abs(predicted_draw_rate - actual_draw_rate)
-
-            # Store for analysis
-            trial.set_user_attr("accuracy", accuracy)
-            trial.set_user_attr("log_loss", log_loss)
-            trial.set_user_attr("predicted_draw_rate", predicted_draw_rate)
-
-            return accuracy, log_loss, draw_rate_error
-
-        # Use multi-objective optimization with NSGAIISampler
-        sampler = NSGAIISampler()
-        study_win = optuna.create_study(
-            directions=["maximize", "minimize", "minimize"],
-            study_name=f"{study_name}_win",
-            storage=storage_for_optuna,
-            sampler=sampler,
-            load_if_exists=True,
-        )
-        study_win.optimize(objective_win, n_trials=int(n_trials), timeout=timeout)
-
-        # Multi-objective selection: filter by realistic draw rate, then select highest accuracy
-        pareto_front = study_win.best_trials
-        
-        # 1. Filter for a realistic draw rate (between 15% and 35%)
-        realistic_trials = [
-            t for t in pareto_front
-            if 0.15 <= t.user_attrs.get("predicted_draw_rate", 0.0) <= 0.35
-        ]
-        
-        if not realistic_trials:
-            print("Warning: No trials in the Pareto front met the draw rate criteria (15%-35%). Falling back to all Pareto trials.")
-            realistic_trials = pareto_front
-            
-        if not realistic_trials:
-            print("Error: No completed trials to select from. Aborting.")
-            return
-        
-        # 2. Select the best trial from the filtered set based on the primary objective (accuracy)
-        best_win = max(realistic_trials, key=lambda t: t.values[0])
-        
-        print(f"\nSelected Trial #{best_win.number} from the Pareto front.")
-        print(f"  Accuracy: {best_win.values[0]:.4f}")
-        print(f"  Log Loss: {best_win.values[1]:.4f}")
-        print(f"  Draw Rate Error: {best_win.values[2]:.4f}")
-        print(f"  Predicted Draw Rate: {best_win.user_attrs.get('predicted_draw_rate', 0.0):.2%}")
-        
-        params_w = dict(best_win.params)
-        saved_path = _save_best_params(
-            {
-                "win_n_estimators": int(params_w.get("win_n_estimators", cfg_base.model.win_n_estimators)),
-                "win_max_depth": int(params_w.get("win_max_depth", cfg_base.model.win_max_depth)),
-                "win_learning_rate": float(params_w.get("win_learning_rate", cfg_base.model.win_learning_rate)),
-                "win_subsample": float(params_w.get("win_subsample", cfg_base.model.win_subsample)),
-                "win_colsample_bytree": float(params_w.get("win_colsample_bytree", cfg_base.model.win_colsample_bytree)),
-            }
-        )
-        # Save summary
-        summary_dir = cfg_base.paths.data_dir / "optuna"
-        os.makedirs(summary_dir, exist_ok=True)
-        try:
-            import yaml  # type: ignore
-            with open(summary_dir / f"{study_name}_win_summary.yaml", "w", encoding="utf-8") as f:
-                yaml.safe_dump(
-                    {
-                        "study_name": f"{study_name}_win",
-                        "storage": storage_url,
-                        "n_trials": len(study_win.trials),
-                        "best_trial": {
-                            "number": best_win.number,
-                            "values": best_win.values if hasattr(best_win, 'values') else [float(best_win.value)] if hasattr(best_win, 'value') else None,
-                            "accuracy": float(best_win.user_attrs.get("accuracy", 0.0)),
-                            "log_loss": float(best_win.user_attrs.get("log_loss", 0.0)),
-                            "draw_rate_error": float(best_win.user_attrs.get("predicted_draw_rate", 0.0)),
-                            "predicted_draw_rate": float(best_win.user_attrs.get("predicted_draw_rate", 0.0)),
-                            "params": best_win.params,
-                            "multi_objective": True,
-                        },
-                        "updated_file": str(saved_path),
-                    },
-                    f,
-                    sort_keys=False,
-                    indent=2,
-                )
-        except Exception:
-            pass
-
-    print("\n" + "=" * 80)
-    print("SEQUENTIAL TUNING COMPLETE (V4 Cascaded)")
-    print("=" * 80)
+    # Simply delegate to parallel with workers=1
+    run_tuning_v4_parallel(
+        n_trials=n_trials,
+        seasons_back=seasons_back,
+        storage=storage,
+        study_name=study_name,
+        timeout=timeout,
+        model_to_tune=model_to_tune,
+        draw_metric=draw_metric,
+        win_metric=win_metric,
+        workers=1,  # Sequential mode
+        bench_trials=None,
+        log_level="warning",
+        reset_storage=reset_storage,
+    )
 
 
 # ==========================================================================
@@ -582,10 +500,11 @@ def _worker_optimize_draw(
     val_df: pd.DataFrame,
     draw_metric: str,
     log_level: int,
-) -> tuple[int, Optional[str]]:
-    """Worker process to optimize the draw model.
+) -> tuple[int, Optional[str], Optional[dict]]:
+    """Worker process to optimize the draw model using system-level evaluation.
 
-    Returns (n_completed_trials, error_message_if_any).
+    Uses the unified objective function factory - always evaluates the full cascaded system.
+    Returns (n_completed_trials, error_message_if_any, best_params_or_none).
     """
     # CRITICAL: Set thread limits FIRST, before any library initialization
     # This prevents OpenMP from creating too many threads
@@ -595,58 +514,20 @@ def _worker_optimize_draw(
     logging.info(f"Worker PID {os.getpid()}: Set thread limits")
     _set_logging_level(log_level)
     storage = _resolve_storage_with_timeout(storage_url)
+    
+    # Multi-objective optimization for draw (maximize roc_auc, minimize draw_rate_error)
+    sampler_draw = NSGAIISampler()
     study = optuna.create_study(
-        direction="maximize",
+        directions=["maximize", "minimize"],
         study_name=study_name,
         storage=storage,
+        sampler=sampler_draw,
         load_if_exists=True,
     )
 
-    def objective_draw(trial: optuna.Trial) -> float:
-        cfg = Config.load()
-        logging.info(f"Worker PID {os.getpid()}: Config n_jobs={cfg.model.n_jobs}")
-        # Force n_jobs to 1 to ensure single-threaded operation per worker
-        cfg.model.n_jobs = 1
-        # draw hyperparams
-        cfg.model.draw_n_estimators = trial.suggest_int("draw_n_estimators", 100, 1500)
-        cfg.model.draw_max_depth = trial.suggest_int("draw_max_depth", 3, 10)
-        cfg.model.draw_learning_rate = trial.suggest_float("draw_learning_rate", 0.01, 0.3, log=True)
-        cfg.model.draw_subsample = trial.suggest_float("draw_subsample", 0.6, 1.0)
-        cfg.model.draw_colsample_bytree = trial.suggest_float("draw_colsample_bytree", 0.5, 1.0)
-        cfg.model.draw_scale_pos_weight = trial.suggest_float("draw_scale_pos_weight", 1.0, 8.0)
-
-        try:
-            predictor = CascadedPredictor(config=cfg)
-            predictor.train(train_df, verbose=False)
-        except Exception as exc:
-            raise optuna.TrialPruned(f"Training failed: {exc}")
-
-        X_val = predictor._prepare_features(val_df)
-        y_val_draw = (val_df["result"].astype(str) == "D").astype(int).to_numpy()
-        if len(np.unique(y_val_draw)) < 2:
-            raise optuna.TrialPruned("Validation set lacks both draw and non-draw classes.")
-
-        try:
-            draw_proba = predictor.draw_model.predict_proba(X_val)
-            draw_label = int(predictor.draw_label_encoder.transform([1])[0])
-            idx = int(np.where(predictor.draw_model.classes_ == draw_label)[0][0])
-            p_draw = draw_proba[:, idx]
-        except Exception as exc:
-            raise optuna.TrialPruned(f"Probability computation failed: {exc}")
-
-        if draw_metric == "roc_auc":
-            score = float(roc_auc_score(y_val_draw, p_draw))
-        elif draw_metric == "f1":
-            y_pred = (p_draw >= 0.5).astype(int)
-            score = float(f1_score(y_val_draw, y_pred))
-        else:
-            raise optuna.TrialPruned(f"Unsupported draw_metric: {draw_metric}")
-
-        trial.set_user_attr("metric", draw_metric)
-        trial.set_user_attr("score", score)
-        trial.set_user_attr("n_val", int(len(y_val_draw)))
-        trial.set_user_attr("mean_p_draw", float(np.mean(p_draw)))
-        return score
+    # Use unified objective function factory with system-level evaluation and multi-objective
+    # This always evaluates the draw model as part of the complete cascaded system
+    objective_draw = create_objective_function('draw', train_df, val_df, None, draw_metric, multi_objective_draw=True)
 
     before = len(study.trials)
     error: Optional[str] = None
@@ -655,7 +536,17 @@ def _worker_optimize_draw(
     except Exception as exc:  # pragma: no cover - safeguard
         error = str(exc)
     after = len(study.trials)
-    return max(0, after - before), error
+    
+    # Return best params (will be written by main process only)
+    best_params = None
+    if after > before:
+        try:
+            best_trial = study.best_trial
+            best_params = dict(best_trial.params)
+        except Exception:
+            pass
+    
+    return max(0, after - before), error, best_params
 
 
 def _worker_optimize_win(
@@ -668,10 +559,11 @@ def _worker_optimize_win(
     win_metric: str,
     cfg_fixed: Config,
     log_level: int,
-) -> tuple[int, Optional[str]]:
+) -> tuple[int, Optional[str], Optional[dict]]:
     """Worker process to optimize the win model.
 
-    Returns (n_completed_trials, error_message_if_any).
+    Uses the unified objective function factory.
+    Returns (n_completed_trials, error_message_if_any, best_params_or_none).
     """
     # CRITICAL: Set thread limits FIRST, before any library initialization
     # This prevents OpenMP from creating too many threads
@@ -693,69 +585,8 @@ def _worker_optimize_win(
         load_if_exists=True,
     )
 
-    def objective_win(trial: optuna.Trial) -> tuple[float, float, float]:
-        cfg = Config.load()
-        logging.info(f"Worker PID {os.getpid()}: Config n_jobs={cfg.model.n_jobs}")
-        # Force n_jobs to 1 to ensure single-threaded operation per worker
-        cfg.model.n_jobs = 1
-        # fix draw params
-        cfg.model.draw_n_estimators = cfg_fixed.model.draw_n_estimators
-        cfg.model.draw_max_depth = cfg_fixed.model.draw_max_depth
-        cfg.model.draw_learning_rate = cfg_fixed.model.draw_learning_rate
-        cfg.model.draw_subsample = cfg_fixed.model.draw_subsample
-        cfg.model.draw_colsample_bytree = cfg_fixed.model.draw_colsample_bytree
-        cfg.model.draw_scale_pos_weight = cfg_fixed.model.draw_scale_pos_weight
-
-        # win hyperparams
-        cfg.model.win_n_estimators = trial.suggest_int("win_n_estimators", 100, 2000)
-        cfg.model.win_max_depth = trial.suggest_int("win_max_depth", 3, 10)
-        cfg.model.win_learning_rate = trial.suggest_float("win_learning_rate", 0.01, 0.3, log=True)
-        cfg.model.win_subsample = trial.suggest_float("win_subsample", 0.6, 1.0)
-        cfg.model.win_colsample_bytree = trial.suggest_float("win_colsample_bytree", 0.5, 1.0)
-
-        try:
-            predictor = CascadedPredictor(config=cfg)
-            predictor.train(train_df, verbose=False)
-        except Exception as exc:
-            raise optuna.TrialPruned(f"Training failed: {exc}")
-
-        try:
-            preds = predictor.predict(val_df, verbose=False)
-        except Exception as exc:
-            raise optuna.TrialPruned(f"Prediction failed: {exc}")
-        proba = np.array(
-            [
-                [
-                    p.get("home_win_probability", 0.0),
-                    p.get("draw_probability", 0.0),
-                    p.get("away_win_probability", 0.0),
-                ]
-                for p in preds
-            ],
-            dtype=float,
-        )
-        y_true = val_df["result"].astype(str).tolist()
-        y_true_numeric = np.array([{"H": 0, "D": 1, "A": 2}[t] for t in y_true])
-
-        # Calculate the three metrics
-        # 1. Accuracy
-        accuracy = float(np.mean(np.argmax(proba, axis=1) == y_true_numeric))
-        
-        # 2. Log Loss
-        log_loss = float(ProbabilityMetrics.log_loss_multiclass(y_true, proba))
-        
-        # 3. Draw Rate Error
-        actual_draw_rate = 0.25  # Target draw rate
-        pred_labels = np.argmax(proba, axis=1)
-        predicted_draw_rate = np.mean(pred_labels == 1)
-        draw_rate_error = abs(predicted_draw_rate - actual_draw_rate)
-
-        # Store for analysis
-        trial.set_user_attr("accuracy", accuracy)
-        trial.set_user_attr("log_loss", log_loss)
-        trial.set_user_attr("predicted_draw_rate", predicted_draw_rate)
-
-        return accuracy, log_loss, draw_rate_error
+    # Use unified objective function factory
+    objective_win = create_objective_function('win', train_df, val_df, cfg_fixed)
 
     before = len(study.trials)
     error: Optional[str] = None
@@ -764,7 +595,17 @@ def _worker_optimize_win(
     except Exception as exc:  # pragma: no cover - safeguard
         error = str(exc)
     after = len(study.trials)
-    return max(0, after - before), error
+    
+    # Return best params (will be written by main process only)
+    best_params = None
+    if after > before:
+        try:
+            best_trial = study.best_trial
+            best_params = dict(best_trial.params)
+        except Exception:
+            pass
+    
+    return max(0, after - before), error, best_params
 
 
 def _bench_sequential(
@@ -867,6 +708,10 @@ def run_tuning_v4_parallel(
         f"[dim]Workers:[/dim] [green]{w}[/green] | "
         f"[dim]Storage:[/dim] [blue]{Path(storage_url).name}[/blue]"
     )
+    try:
+        console.print(f"[dim]Start method:[/dim] [magenta]{mp.get_start_method() or 'default'}[/magenta]")
+    except Exception:
+        pass
 
     # Progress UI
     progress = Progress(
@@ -879,11 +724,14 @@ def run_tuning_v4_parallel(
 
     # ---------------------- Phase 1: Draw Tuning ----------------------
     if model_to_tune in ("draw", "both"):
-        # Create study ahead so monitor can load it
+        # Create multi-objective study for draw model (roc_auc + draw_rate_error)
+        # This ensures draw predictions are both accurate and realistic
+        sampler_draw = NSGAIISampler()
         optuna.create_study(
-            direction="maximize",
+            directions=["maximize", "minimize"],  # Maximize roc_auc, minimize draw_rate_error
             study_name=f"{study_name}_draw",
             storage=storage_for_optuna,
+            sampler=sampler_draw,
             load_if_exists=True,
         )
 
@@ -927,7 +775,9 @@ def run_tuning_v4_parallel(
         failures_draw = 0
 
         with progress:
-            with ProcessPoolExecutor(max_workers=w, initializer=_worker_initializer) as ex:
+            # Use spawn to avoid inheriting pre-initialized OpenMP state from parent (fixes libgomp errors on Linux)
+            spawn_ctx = mp.get_context("spawn")
+            with ProcessPoolExecutor(max_workers=w, initializer=_worker_initializer, mp_context=spawn_ctx) as ex:
                 futures = [
                     ex.submit(
                         _worker_optimize_draw,
@@ -958,11 +808,13 @@ def run_tuning_v4_parallel(
                     # Process completed futures immediately
                     for f in done:
                         try:
-                            n_done, err = f.result()
+                            n_done, err, _ = f.result()
                             if err:
                                 failures_draw += 1
+                                console.print(f"[yellow]Worker error:[/yellow] {err}")
                         except Exception as exc:  # pragma: no cover - defensive
                             failures_draw += 1
+                            console.print(f"[yellow]Worker raised:[/yellow] {exc}")
                     
                     futures = list(not_done)
                     
@@ -982,7 +834,12 @@ def run_tuning_v4_parallel(
         dur_draw = time.perf_counter() - start_draw
         study_draw = optuna.load_study(study_name=f"{study_name}_draw", storage=storage_for_optuna)
         try:
-            best_draw = study_draw.best_trial
+            # Multi-objective selection: prioritize roc_auc
+            pareto_front = study_draw.best_trials
+            if pareto_front:
+                best_draw = max(pareto_front, key=lambda t: t.values[0])  # Maximize roc_auc
+            else:
+                best_draw = study_draw.best_trial
         except Exception as exc:
             best_draw = None
 
@@ -1000,11 +857,15 @@ def run_tuning_v4_parallel(
                 }
             )
 
-    # Summary table
-    tbl = Table(title="[cyan]Phase 1 Complete: Draw Classifier[/cyan]", show_lines=False, box=None)
+    # Summary table (multi-objective)
+    tbl = Table(title="[cyan]Phase 1 Complete: Draw Classifier (Multi-Objective)[/cyan]", show_lines=False, box=None)
     tbl.add_column("Metric", style="dim")
     tbl.add_column("Value", style="bold")
-    tbl.add_row("Best score", "-" if best_draw is None else f"[green]{float(best_draw.value):.4f}[/green]")
+    if best_draw and hasattr(best_draw, 'values'):
+        tbl.add_row("ROC-AUC", f"[green]{best_draw.values[0]:.4f}[/green]" if len(best_draw.values) >= 1 else "-")
+        tbl.add_row("Draw Rate Error", f"[yellow]{best_draw.values[1]:.4f}[/yellow]" if len(best_draw.values) >= 2 else "-")
+    else:
+        tbl.add_row("Best score", "-" if best_draw is None else f"[green]{float(best_draw.value) if hasattr(best_draw, 'value') else 0.0:.4f}[/green]")
     tbl.add_row("Trials", f"{len(study_draw.trials)}")
     tbl.add_row("Duration", f"[cyan]{dur_draw:.1f}s[/cyan]")
     if bench_avg_draw is not None:
@@ -1028,9 +889,13 @@ def run_tuning_v4_parallel(
                     "study_name": f"{study_name}_draw",
                     "storage": storage_url,
                     "n_trials": len(study_draw.trials),
+                    "multi_objective": True,
                     "best_trial": None if best_draw is None else {
                         "number": best_draw.number,
-                        "value": float(best_draw.value),
+                        "values": best_draw.values if hasattr(best_draw, 'values') else None,
+                        "roc_auc": float(best_draw.values[0]) if (hasattr(best_draw, 'values') and len(best_draw.values) >= 1) else None,
+                        "draw_rate_error": float(best_draw.values[1]) if (hasattr(best_draw, 'values') and len(best_draw.values) >= 2) else None,
+                        "predicted_draw_rate": float(best_draw.user_attrs.get("predicted_draw_rate", 0.0)) if best_draw.user_attrs.get("predicted_draw_rate") else None,
                         "params": best_draw.params,
                         "metric": draw_metric,
                     },
@@ -1133,7 +998,9 @@ def run_tuning_v4_parallel(
         failures_win = 0
 
         with progress:
-            with ProcessPoolExecutor(max_workers=w, initializer=_worker_initializer) as ex:
+            # Use spawn to avoid inheriting pre-initialized OpenMP state from parent (fixes libgomp errors on Linux)
+            spawn_ctx = mp.get_context("spawn")
+            with ProcessPoolExecutor(max_workers=w, initializer=_worker_initializer, mp_context=spawn_ctx) as ex:
                 futures = [
                     ex.submit(
                         _worker_optimize_win,
@@ -1165,11 +1032,13 @@ def run_tuning_v4_parallel(
                     # Process completed futures immediately
                     for f in done:
                         try:
-                            n_done, err = f.result()
+                            n_done, err, _ = f.result()
                             if err:
                                 failures_win += 1
-                        except Exception:
+                                console.print(f"[yellow]Worker error:[/yellow] {err}")
+                        except Exception as exc:
                             failures_win += 1
+                            console.print(f"[yellow]Worker raised:[/yellow] {exc}")
                     
                     futures = list(not_done)
                     
