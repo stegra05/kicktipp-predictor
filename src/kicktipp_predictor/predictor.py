@@ -14,6 +14,7 @@ from xgboost import XGBRegressor, XGBClassifier
 from scipy.stats import norm
 import numpy as np
 from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import StratifiedKFold
 from typing import Optional
 
 from .config import Config, get_config
@@ -350,6 +351,8 @@ class CascadedPredictor:
         # Initialize label encoders
         self.draw_label_encoder = LabelEncoder()
         self.win_label_encoder = LabelEncoder()
+        # Training metrics container
+        self.training_metrics: dict[str, dict] = {}
 
     def _prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Prepare feature matrix from input DataFrame.
@@ -381,147 +384,358 @@ class CascadedPredictor:
         X = df.reindex(columns=self.feature_columns).fillna(0.0)
         return X
 
-    def train(self, X_train: pd.DataFrame, y_train: pd.DataFrame) -> None:
-        """Train both draw and win classifiers with preprocessing.
+    def train(self, matches_df: pd.DataFrame) -> None:
+        """Train the two-stage cascaded classifiers with in-method data preparation.
 
-        Expected input:
-        - `X_train`: DataFrame of features (numeric/bool). Non-feature columns are ignored.
-        - `y_train`: DataFrame with either:
-          - column `result` containing values 'H', 'D', 'A'; or
-          - columns `is_draw` (bool/int) and `win_outcome` ('HomeWin'/'AwayWin' or 1/0).
+        Data preparation steps (encapsulated):
+        - Create 'is_draw' target (1 for draw, 0 otherwise).
+        - Filter non-draw matches and create 'is_home_win' (1=home win, 0=away win).
+        - Initialize label encoders: draw with [0, 1]; win with ['A', 'H'].
+        - Prepare feature matrices for all matches and non-draw subset.
 
-        Process:
-        - Fit the draw classifier on all samples (labels 0=NotDraw, 1=Draw).
-        - Fit the win classifier on non-draw samples (labels 0=AwayWin, 1=HomeWin).
+        Defensive programming:
+        - Validates non-empty input, presence of 'result' values, and feature columns.
+        - Handles missing results by dropping such rows; errors if none remain.
+        - Errors when no non-draw samples are available for the win classifier.
 
-        Raises:
-        - ValueError for invalid inputs or insufficient samples.
+        Args:
+            matches_df: DataFrame containing features and a 'result' column ('H', 'D', 'A').
         """
-        if not isinstance(X_train, pd.DataFrame) or X_train.empty:
-            raise ValueError("X_train must be a non-empty pandas DataFrame.")
-        if not isinstance(y_train, pd.DataFrame) or y_train.empty:
-            raise ValueError("y_train must be a non-empty pandas DataFrame.")
+        # --- Input validation ---
+        if not isinstance(matches_df, pd.DataFrame) or matches_df.empty:
+            raise ValueError("Training DataFrame must be a non-empty pandas DataFrame.")
+        if "result" not in matches_df.columns:
+            raise ValueError("Training DataFrame must include 'result' column with values 'H', 'D', 'A'.")
 
-        # Derive labels from y_train
-        if "result" in y_train.columns:
-            res = y_train["result"].astype(str)
-            y_draw = (res == "D").astype(int)
-            # For win classifier, drop draw rows
-            non_draw_mask = res.isin(["H", "A"]) & (~res.isna())
-            y_win = (res[non_draw_mask] == "H").astype(int)
-        else:
-            if "is_draw" not in y_train.columns:
-                raise ValueError("y_train must include 'result' or 'is_draw' column.")
-            y_draw = y_train["is_draw"].astype(int)
-            # win_outcome may be bool/int or string
-            if "win_outcome" not in y_train.columns:
-                raise ValueError("y_train must include 'win_outcome' column when 'is_draw' is provided.")
-            wo = y_train["win_outcome"]
-            if wo.dtype == bool:
-                y_win = wo.astype(int)
-                non_draw_mask = (y_draw == 0)
-            else:
-                # Accept 0/1 or 'HomeWin'/'AwayWin'
-                if wo.dtype.kind in {"i", "u"}:
-                    y_win = wo.astype(int)
-                else:
-                    y_win = wo.astype(str).map({"AwayWin": 0, "HomeWin": 1})
-                non_draw_mask = (y_draw == 0)
+        # Drop rows with missing result values
+        df = matches_df.copy()
+        df["result"] = df["result"].astype(str)
+        valid_mask = df["result"].isin(["H", "D", "A"]) & (~df["result"].isna())
+        df = df.loc[valid_mask]
+        if df.empty:
+            raise ValueError("No valid rows with 'result' values present for training.")
 
         # Enforce minimum training size
         min_n = int(self.config.model.min_training_matches)
-        if len(X_train) < min_n:
-            raise ValueError(f"Insufficient training samples: {len(X_train)} < {min_n}")
+        if len(df) < min_n:
+            raise ValueError(f"Insufficient training samples: {len(df)} < {min_n}")
 
-        # Prepare features
-        X_all = self._prepare_features(X_train)
+        # --- Target preparation ---
+        # 1) Draw target
+        df["is_draw"] = (df["result"] == "D").astype(int)
+        # Reflect new target column in the original input (non-destructive for other rows)
+        try:
+            matches_df.loc[df.index, "is_draw"] = df["is_draw"].values
+        except Exception:
+            pass
+        y_draw = df["is_draw"].astype(int)
 
-        # Time-decay weighting (optional)
+        # 2) Win target on non-draw subset
+        non_draw_mask = df["is_draw"] == 0
+        df_nd = df.loc[non_draw_mask]
+        if df_nd.empty:
+            raise ValueError("No non-draw samples available to train win classifier.")
+        df_nd["is_home_win"] = (df_nd["result"] == "H").astype(int)
+        # Reflect new target column in the original input on non-draw rows
+        try:
+            matches_df.loc[df_nd.index, "is_home_win"] = df_nd["is_home_win"].values
+        except Exception:
+            pass
+        # Map to label strings for encoder ['A','H']
+        y_win = np.where(df_nd["is_home_win"].astype(int) == 1, "H", "A")
+
+        # --- Feature preparation ---
+        X_all = self._prepare_features(df)
+        X_non_draw = self._prepare_features(df_nd)
+        if len(X_all) != len(y_draw):
+            raise ValueError("Feature matrix and y_draw length mismatch.")
+        if len(X_non_draw) != len(y_win):
+            raise ValueError("Feature matrix (non-draw) and y_win length mismatch.")
+
+        # --- Time-decay weighting (optional) ---
         sample_weight_all = None
         try:
             use_decay = bool(self.config.model.use_time_decay)
             half_life = float(self.config.model.time_decay_half_life_days)
-            if use_decay and "date" in X_train.columns and half_life > 0:
-                dates = pd.to_datetime(X_train["date"], errors="coerce")
+            if use_decay and "date" in df.columns and half_life > 0:
+                dates = pd.to_datetime(df["date"], errors="coerce")
                 max_date = pd.to_datetime(dates.max())
                 delta_days = (max_date - dates).dt.days.fillna(0).astype(float)
                 sample_weight_all = np.power(0.5, delta_days / half_life)
         except Exception:
             sample_weight_all = None
 
-        # Fit label encoders with explicit class order
+        # --- Label encoders ---
+        # Draw: explicit [0,1]
         self.draw_label_encoder.fit([0, 1])
-        self.win_label_encoder.fit([0, 1])
+        # Win: explicit ['A','H'] for away/home win classes
+        self.win_label_encoder.fit(["A", "H"])
 
-        # Initialize and fit draw classifier
+        # --- Initialize classifiers ---
         draw_params = dict(self.config.model.draw_params)
-        self.draw_model = XGBClassifier(**draw_params)
-        self.draw_model.fit(
-            X_all,
-            self.draw_label_encoder.transform(y_draw.tolist()),
-            sample_weight=sample_weight_all,
-            verbose=False,
-        )
+        win_params = dict(self.config.model.win_params)
 
-        # Fit win classifier on non-draw subset
-        idx_nd = np.where(non_draw_mask.values if hasattr(non_draw_mask, "values") else non_draw_mask)[0]
-        if idx_nd.size == 0:
-            raise ValueError("No non-draw samples available to train win classifier.")
-        X_win = X_all.iloc[idx_nd]
-        y_win_enc = self.win_label_encoder.transform(y_win.tolist())
-        y_win_enc = y_win_enc[: len(X_win)]  # align length if needed
+        # --- Prepare simple validation split for early stopping ---
+        val_fraction = float(self.config.model.val_fraction)
+        # Draw split (stratified if both classes present)
+        y_draw_arr = y_draw.to_numpy()
+        if 0.0 < val_fraction < 0.5 and len(X_all) >= 10 and len(np.unique(y_draw_arr)) > 1:
+            try:
+                skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=int(self.config.model.random_state))
+                # Take the first split as validation for simplicity
+                train_idx, val_idx = next(skf.split(X_all, y_draw_arr))
+            except Exception:
+                n = len(X_all)
+                val_n = int(n * val_fraction)
+                train_idx = np.arange(n - val_n)
+                val_idx = np.arange(n - val_n, n)
+        else:
+            train_idx = np.arange(len(X_all))
+            val_idx = np.array([], dtype=int)
 
-        self.win_model = XGBClassifier(**dict(self.config.model.win_params))
-        self.win_model.fit(
-            X_win,
-            y_win_enc,
-            verbose=False,
-        )
+        Xd_train = X_all.iloc[train_idx]
+        yd_train = self.draw_label_encoder.transform(y_draw.iloc[train_idx].tolist())
+        Xd_val = X_all.iloc[val_idx] if len(val_idx) else None
+        yd_val = self.draw_label_encoder.transform(y_draw.iloc[val_idx].tolist()) if len(val_idx) else None
+
+        # --- Draw model training ---
+        print("Training Draw Classifier (Gatekeeper)...")
+        try:
+            self.draw_model = XGBClassifier(**draw_params)
+            if Xd_val is not None:
+                self.draw_model.fit(
+                    Xd_train,
+                    yd_train,
+                    sample_weight=sample_weight_all[train_idx] if sample_weight_all is not None else None,
+                    eval_set=[(Xd_train, yd_train), (Xd_val, yd_val)],
+                    eval_metric="logloss",
+                    early_stopping_rounds=20,
+                    verbose=True,
+                )
+            else:
+                self.draw_model.fit(
+                    X_all,
+                    self.draw_label_encoder.transform(y_draw.tolist()),
+                    sample_weight=sample_weight_all,
+                    eval_set=[(X_all, self.draw_label_encoder.transform(y_draw.tolist()))],
+                    eval_metric="logloss",
+                    verbose=True,
+                )
+            # Save training metrics
+            self.training_metrics["draw_model"] = {
+                "train_score": float(self.draw_model.score(X_all, self.draw_label_encoder.transform(y_draw.tolist()))),
+                "feature_importances": self.draw_model.feature_importances_.tolist() if hasattr(self.draw_model, "feature_importances_") else None,
+                "class_counts": {
+                    "draw": int((y_draw_arr == 1).sum()),
+                    "not_draw": int((y_draw_arr == 0).sum()),
+                },
+            }
+        except Exception as e:
+            print(f"Error training Draw Model: {str(e)}")
+            raise
+
+        # --- Win model training ---
+        print("Training Win Classifier (Finisher)...")
+        try:
+            self.win_model = XGBClassifier(**win_params)
+            # Validation split for non-draw
+            y_win_arr = np.array(list(y_win))
+            # Encode for fitting (numeric expected)
+            y_win_enc = self.win_label_encoder.transform(list(y_win))
+            if 0.0 < val_fraction < 0.5 and len(X_non_draw) >= 10 and len(np.unique(y_win_enc)) > 1:
+                try:
+                    skf_w = StratifiedKFold(n_splits=5, shuffle=True, random_state=int(self.config.model.random_state))
+                    w_train_idx, w_val_idx = next(skf_w.split(X_non_draw, y_win_enc))
+                except Exception:
+                    n_w = len(X_non_draw)
+                    val_n_w = int(n_w * val_fraction)
+                    w_train_idx = np.arange(n_w - val_n_w)
+                    w_val_idx = np.arange(n_w - val_n_w, n_w)
+            else:
+                w_train_idx = np.arange(len(X_non_draw))
+                w_val_idx = np.array([], dtype=int)
+
+            Xw_train = X_non_draw.iloc[w_train_idx]
+            yw_train = y_win_enc[w_train_idx]
+            Xw_val = X_non_draw.iloc[w_val_idx] if len(w_val_idx) else None
+            yw_val = y_win_enc[w_val_idx] if len(w_val_idx) else None
+
+            if Xw_val is not None:
+                self.win_model.fit(
+                    Xw_train,
+                    yw_train,
+                    eval_set=[(Xw_train, yw_train), (Xw_val, yw_val)],
+                    eval_metric="logloss",
+                    early_stopping_rounds=20,
+                    verbose=True,
+                )
+            else:
+                self.win_model.fit(
+                    X_non_draw,
+                    y_win_enc,
+                    eval_set=[(X_non_draw, y_win_enc)],
+                    eval_metric="logloss",
+                    verbose=True,
+                )
+            self.training_metrics["win_model"] = {
+                "train_score": float(self.win_model.score(X_non_draw, y_win_enc)),
+                "feature_importances": self.win_model.feature_importances_.tolist() if hasattr(self.win_model, "feature_importances_") else None,
+                "class_counts": {
+                    "home": int((y_win_arr == "H").sum()),
+                    "away": int((y_win_arr == "A").sum()),
+                },
+            }
+        except Exception as e:
+            print(f"Error training Win Model: {str(e)}")
+            raise
+
+        # --- Cross-validation summaries (quick sanity checks) ---
+        try:
+            cv_draw_scores: list[float] = []
+            if len(np.unique(y_draw_arr)) > 1:
+                skf_cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=int(self.config.model.random_state))
+                for tr_idx, te_idx in skf_cv.split(X_all, y_draw_arr):
+                    mdl = XGBClassifier(**draw_params)
+                    mdl.fit(X_all.iloc[tr_idx], self.draw_label_encoder.transform(y_draw.iloc[tr_idx].tolist()), verbose=False)
+                    s = mdl.score(X_all.iloc[te_idx], self.draw_label_encoder.transform(y_draw.iloc[te_idx].tolist()))
+                    cv_draw_scores.append(float(s))
+            self.training_metrics.setdefault("draw_model", {})["cv_accuracy"] = {
+                "mean": float(np.mean(cv_draw_scores)) if cv_draw_scores else None,
+                "std": float(np.std(cv_draw_scores)) if cv_draw_scores else None,
+                "n_splits": int(len(cv_draw_scores)),
+            }
+        except Exception:
+            # Non-fatal; skip CV on errors
+            self.training_metrics.setdefault("draw_model", {})["cv_accuracy"] = None
+
+        try:
+            cv_win_scores: list[float] = []
+            y_win_enc_full = self.win_label_encoder.transform(list(y_win))
+            if len(np.unique(y_win_enc_full)) > 1 and len(X_non_draw) >= 6:
+                skf_cv_w = StratifiedKFold(n_splits=3, shuffle=True, random_state=int(self.config.model.random_state))
+                for tr_idx, te_idx in skf_cv_w.split(X_non_draw, y_win_enc_full):
+                    mdl = XGBClassifier(**win_params)
+                    mdl.fit(X_non_draw.iloc[tr_idx], y_win_enc_full[tr_idx], verbose=False)
+                    s = mdl.score(X_non_draw.iloc[te_idx], y_win_enc_full[te_idx])
+                    cv_win_scores.append(float(s))
+            self.training_metrics.setdefault("win_model", {})["cv_accuracy"] = {
+                "mean": float(np.mean(cv_win_scores)) if cv_win_scores else None,
+                "std": float(np.std(cv_win_scores)) if cv_win_scores else None,
+                "n_splits": int(len(cv_win_scores)),
+            }
+        except Exception:
+            self.training_metrics.setdefault("win_model", {})["cv_accuracy"] = None
+
+        # --- Post-training summary ---
+        summary = {
+            "n_samples_all": int(len(X_all)),
+            "n_samples_non_draw": int(len(X_non_draw)),
+            "feature_count": int(len(self.feature_columns)),
+            "label_classes": {
+                "draw": list(map(int, self.draw_label_encoder.classes_.tolist() if hasattr(self.draw_label_encoder, "classes_") else [0, 1])),
+                "win": [str(c) for c in (self.win_label_encoder.classes_.tolist() if hasattr(self.win_label_encoder, "classes_") else ["A", "H"])],
+            },
+        }
+        self.training_metrics["summary"] = summary
+        print("Training complete. Summary:")
+        print({
+            "features": summary["feature_count"],
+            "samples": {
+                "all": summary["n_samples_all"],
+                "non_draw": summary["n_samples_non_draw"],
+            },
+            "cv": {
+                "draw": self.training_metrics.get("draw_model", {}).get("cv_accuracy"),
+                "win": self.training_metrics.get("win_model", {}).get("cv_accuracy"),
+            },
+        })
 
     def predict(self, X_test: pd.DataFrame) -> list[dict]:
-        """Make predictions using cascaded approach.
+        """Make predictions using two-stage probability combination.
+
+        Probability combination:
+        - P(NotDraw) = 1 - P(Draw)
+        - P(Home) = P(NotDraw) * P(Home | NotDraw)
+        - P(Away) = P(NotDraw) * (1 - P(Home | NotDraw))
+        - P(Draw) unchanged
 
         Args:
             X_test: DataFrame of features for upcoming matches.
 
         Returns:
-            A list of dictionaries per match with keys:
-            - 'p_draw', 'p_home', 'p_away': outcome probabilities.
-            - 'predicted_outcome': one of 'H', 'D', 'A'.
+            A list of dictionaries per match including probabilities and labels.
         Raises:
             RuntimeError if models are not loaded/trained.
+            ValueError for invalid inputs or feature mismatches.
         """
         if self.draw_model is None or self.win_model is None:
             raise RuntimeError("Models are not trained/loaded. Call train() or load_models() first.")
         if not isinstance(X_test, pd.DataFrame) or X_test.empty:
             raise ValueError("X_test must be a non-empty pandas DataFrame.")
 
+        # Ensure feature columns are available and match model expectations
+        if not self.feature_columns:
+            raise ValueError("Feature columns are not set. Train or load models before predicting.")
+
         X = self._prepare_features(X_test)
+        # Defensive check against model's expected input dimension
+        for mdl_name, mdl in (("draw", self.draw_model), ("win", self.win_model)):
+            n_in = getattr(mdl, "n_features_in_", None)
+            if n_in is not None and int(n_in) != X.shape[1]:
+                raise ValueError(f"Feature dimension mismatch for {mdl_name} model: {X.shape[1]} != {int(n_in)}")
 
-        # Draw probabilities
+        # 2. Draw probabilities
+        print("Calculating Draw probabilities...")
         draw_proba = self.draw_model.predict_proba(X)
-        # Identify positive class (1) index
-        draw_pos_idx = int(np.where(self.draw_model.classes_ == 1)[0][0])
-        p_draw = draw_proba[:, draw_pos_idx]
+        # Map encoder label to index within model classes_
+        try:
+            draw_label = int(self.draw_label_encoder.transform([1])[0])
+            draw_class_index = int(np.where(self.draw_model.classes_ == draw_label)[0][0])
+        except Exception:
+            # Fallback to assuming label '1' is positive class
+            draw_class_index = int(np.where(self.draw_model.classes_ == 1)[0][0])
+        p_draw = draw_proba[:, draw_class_index]
 
-        # Win probabilities on all rows (model trained on non-draw; but predict for all)
+        # 3. Win probabilities
+        print("Calculating conditional Win probabilities...")
         win_proba = self.win_model.predict_proba(X)
-        win_pos_idx = int(np.where(self.win_model.classes_ == 1)[0][0])
-        p_home = (1.0 - p_draw) * win_proba[:, win_pos_idx]
-        p_away = (1.0 - p_draw) * (1.0 - win_proba[:, win_pos_idx])
+        # Identify 'H' class index via encoder mapping
+        try:
+            h_label = int(self.win_label_encoder.transform(["H"])[0])
+            home_class_index = int(np.where(self.win_model.classes_ == h_label)[0][0])
+        except Exception:
+            home_class_index = int(np.where(self.win_model.classes_ == 1)[0][0])
+        p_home_given_not_draw = win_proba[:, home_class_index]
 
-        # Determine predicted outcome
+        # 4. Combine probabilities via law of total probability
+        print("Combining probabilities using law of total probability...")
+        p_not_draw = 1.0 - p_draw
+        final_p_home = p_not_draw * p_home_given_not_draw
+        final_p_away = p_not_draw * (1.0 - p_home_given_not_draw)
+        final_p_draw = p_draw
+
+        # 5. Assemble final matrix and normalize rows
+        final_probs = np.vstack([final_p_home, final_p_draw, final_p_away]).T
+        # Correct minor floating errors by normalization
+        row_sums = final_probs.sum(axis=1, keepdims=True)
+        # Avoid division by zero in degenerate cases
+        row_sums[row_sums == 0.0] = 1.0
+        final_probs = final_probs / row_sums
+
+        # Determine predicted outcome from normalized probs
         outcomes = np.where(
-            p_draw >= np.maximum(p_home, p_away), "D", np.where(p_home >= p_away, "H", "A")
+            final_probs[:, 1] >= np.maximum(final_probs[:, 0], final_probs[:, 2]),
+            "D",
+            np.where(final_probs[:, 0] >= final_probs[:, 2], "H", "A"),
         )
 
         results: list[dict] = []
         for i in range(len(X)):
             row = X_test.iloc[i]
             pred: dict[str, object] = {
-                "home_win_probability": float(p_home[i]),
-                "draw_probability": float(p_draw[i]),
-                "away_win_probability": float(p_away[i]),
+                "home_win_probability": float(final_probs[i, 0]),
+                "draw_probability": float(final_probs[i, 1]),
+                "away_win_probability": float(final_probs[i, 2]),
                 "predicted_outcome": str(outcomes[i]),
             }
             # Include optional identifiers if present
