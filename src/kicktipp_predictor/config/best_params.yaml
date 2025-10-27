@@ -12,3 +12,9 @@ gd_uncertainty_scale: 0.0
 gd_uncertainty_min_stddev: 0.2
 gd_uncertainty_max_stddev: 4.0
 draw_margin: 0.6900411581135488
+draw_n_estimators: 362
+draw_max_depth: 9
+draw_learning_rate: 0.20824305950144
+draw_subsample: 0.784255280526621
+draw_colsample_bytree: 0.606720395686733
+draw_scale_pos_weight: 6.157541075852755

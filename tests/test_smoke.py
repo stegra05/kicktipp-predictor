@@ -1,9 +1,9 @@
 def test_imports():
     from kicktipp_predictor.data import DataLoader
-    from kicktipp_predictor.predictor import GoalDifferencePredictor
+    from kicktipp_predictor.predictor import CascadedPredictor
 
     assert DataLoader is not None
-    assert GoalDifferencePredictor is not None
+    assert CascadedPredictor is not None
 
 
 def test_cli_help():

@@ -33,7 +33,7 @@ from kicktipp_predictor.metrics import (
     ranked_probability_score_3c,
     save_json,
 )
-from kicktipp_predictor.predictor import GoalDifferencePredictor
+from kicktipp_predictor.predictor import CascadedPredictor
 
 # ===========================================================================
 # Helper Functions
@@ -294,11 +294,11 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
     console.rule("SEASON PERFORMANCE EVALUATION")
 
     data_loader = DataLoader()
-    predictor = GoalDifferencePredictor()
+    predictor = CascadedPredictor()
 
-    console.print("[bold]Loading model...[/bold]")
+    console.print("[bold]Loading models...[/bold]")
     try:
-        predictor.load_model()
+        predictor.load_models()
         console.print("[green]Models loaded successfully![/green]\n")
     except FileNotFoundError:
         console.print("[red]No trained models found. Run training first.[/red]")

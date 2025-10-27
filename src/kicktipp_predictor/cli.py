@@ -11,7 +11,7 @@ def train(
 ):
     """Train the match predictor on historical data."""
     from kicktipp_predictor.data import DataLoader
-    from kicktipp_predictor.predictor import GoalDifferencePredictor
+    from kicktipp_predictor.predictor import CascadedPredictor
 
     print("=" * 80)
     print("TRAINING MATCH PREDICTOR")
@@ -37,12 +37,12 @@ def train(
 
     # Train predictor
     print("\nTraining predictor...")
-    predictor = GoalDifferencePredictor()
+    predictor = CascadedPredictor()
     predictor.train(features_df)
 
     # Save models
     print("\nSaving models...")
-    predictor.save_model()
+    predictor.save_models()
 
     print("\n" + "=" * 80)
     print("TRAINING COMPLETE")
@@ -56,7 +56,7 @@ def predict(
 ):
     """Make predictions for upcoming matches."""
     from kicktipp_predictor.data import DataLoader
-    from kicktipp_predictor.predictor import GoalDifferencePredictor
+    from kicktipp_predictor.predictor import CascadedPredictor
 
     print("=" * 80)
     print("MATCH PREDICTIONS")
@@ -66,11 +66,11 @@ def predict(
 
     # Load data
     loader = DataLoader()
-    predictor = GoalDifferencePredictor()
+    predictor = CascadedPredictor()
 
     # Load trained models
     try:
-        predictor.load_model()
+        predictor.load_models()
     except FileNotFoundError:
         print("ERROR: No trained models found. Run 'train' command first.")
         raise typer.Exit(code=1)
@@ -113,7 +113,7 @@ def predict(
         home = pred["home_team"]
         away = pred["away_team"]
         score = f"{pred['predicted_home_score']}-{pred['predicted_away_score']}"
-        outcome = pred["predicted_result"]
+        outcome = pred.get("predicted_outcome") or pred.get("predicted_result")
 
         print(f"\n{home} vs {away}")
         print(f"  Predicted Score: {score} ({outcome})")
@@ -158,10 +158,9 @@ def tune(
     ),
     study_name: str = typer.Option("v4_cascaded_sequential", help="Optuna study name base"),
     timeout: int | None = typer.Option(None, help="Timeout in seconds for optimize()"),
-    arch: str = typer.Option("v4", help="Model architecture to tune: v3 or v4"),
     model_to_tune: str = typer.Option(
         "both",
-        help="Which model to tune for v4: draw, win, or both",
+        help="Which model to tune: draw, win, or both",
     ),
     draw_metric: str = typer.Option(
         "roc_auc",
@@ -172,15 +171,8 @@ def tune(
         help="Phase 2 win metric: accuracy or log_loss",
     ),
 ):
-    """Run Optuna tuning.
-
-    - v4 (default): Sequential tuning for CascadedPredictor (Phase 1 draw, Phase 2 win).
-    - v3: Legacy multi-objective tuning for GoalDifferencePredictor.
-
-    When selecting v4 with model_to_tune=win, Phase 2 uses fixed draw_* params
-    from best_params.yaml (produced in Phase 1), ensuring sequential dependency.
-    """
-    from kicktipp_predictor.tune import run_tuning, run_tuning_v4_sequential
+    """Run Optuna tuning for the V4 CascadedPredictor (sequential draw → win)."""
+    from kicktipp_predictor.tune import run_tuning_v4_sequential
 
     print("=" * 80)
     print("OPTUNA TUNING")
@@ -188,25 +180,16 @@ def tune(
     print()
 
     try:
-        if arch.lower() == "v3":
-            run_tuning(
-                n_trials=n_trials,
-                seasons_back=seasons_back,
-                storage=storage,
-                study_name=study_name,
-                timeout=timeout,
-            )
-        else:
-            run_tuning_v4_sequential(
-                n_trials=n_trials,
-                seasons_back=seasons_back,
-                storage=storage,
-                study_name=study_name,
-                timeout=timeout,
-                model_to_tune=model_to_tune,
-                draw_metric=draw_metric,
-                win_metric=win_metric,
-            )
+        run_tuning_v4_sequential(
+            n_trials=n_trials,
+            seasons_back=seasons_back,
+            storage=storage,
+            study_name=study_name,
+            timeout=timeout,
+            model_to_tune=model_to_tune,
+            draw_metric=draw_metric,
+            win_metric=win_metric,
+        )
     except RuntimeError as e:
         print(f"ERROR: {e}")
         raise typer.Exit(code=1)

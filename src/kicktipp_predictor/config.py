@@ -92,6 +92,22 @@ def _apply_model_params_from_dict(config: "Config", params: dict[str, Any]) -> N
         "random_state": int,
         "n_jobs": int,
         "selected_features_file": str,
+        # --- Legacy V3 Goal Difference Regressor ---
+        "gd_n_estimators": int,
+        "gd_max_depth": int,
+        "gd_learning_rate": float,
+        "gd_subsample": float,
+        "gd_colsample_bytree": float,
+        "gd_reg_lambda": float,
+        "gd_min_child_weight": float,
+        "gd_gamma": float,
+        "gd_early_stopping_rounds": int,
+        "gd_uncertainty_stddev": float,
+        "gd_uncertainty_base_stddev": float,
+        "gd_uncertainty_scale": float,
+        "gd_uncertainty_min_stddev": float,
+        "gd_uncertainty_max_stddev": float,
+        "gd_score_alpha": float,
         # --- V4 Cascaded Model: Draw Classifier ---
         "draw_n_estimators": int,
         "draw_max_depth": int,
@@ -127,6 +143,10 @@ def _apply_model_params_from_dict(config: "Config", params: dict[str, Any]) -> N
         "nn_dropout_hidden": float,
         # Early stopping patience in epochs for NN training.
         "nn_early_stopping_patience": int,
+        # Classifier training controls
+        "eval_metric": str,
+        "early_stopping_rounds": int,
+        "fit_verbose": bool,
     }
 
     for key, caster in casts.items():
@@ -149,9 +169,6 @@ class PathConfig:
     - models_dir: Directory where trained models are stored.
     - cache_dir: Directory for HTTP/data caches.
     - config_dir: Directory containing YAML and configuration files.
-
-    Model artifacts:
-    - gd_model_path: GoalDifferenceRegressor model path.
     """
 
     # Data directories
@@ -171,10 +188,7 @@ class PathConfig:
 
 
 
-    @property
-    def gd_model_path(self) -> Path:
-        """Path to the goal difference regressor model."""
-        return self.models_dir / "goal_diff_regressor.joblib"
+    # Removed legacy V3 model path; V4 stores cascaded classifiers under models_dir
 
 # === API Settings ===
 @dataclass
@@ -256,6 +270,9 @@ class ModelConfig:
     random_state: int = 42
     min_training_matches: int = 50
     val_fraction: float = 0.1
+    eval_metric: str = "logloss"
+    early_stopping_rounds: int = 20
+    fit_verbose: bool = False
 
     # Time-decay weighting (recency)
     use_time_decay: bool = True
@@ -270,6 +287,8 @@ class ModelConfig:
             1, int(os.getenv("OMP_NUM_THREADS", "0")) or os.cpu_count() or 1
         )
     )
+
+    # Removed legacy V3 Goal Difference Regressor and uncertainty parameters
 
     # Feature selection file (optional)
     selected_features_file: str = "kept_features.yaml"
@@ -321,6 +340,8 @@ class ModelConfig:
             "random_state": self.random_state,
             "n_jobs": self.n_jobs,
         }
+
+    # Removed legacy V3 parameter mapping
 
 # === Configuration Container ===
 @dataclass
