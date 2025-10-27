@@ -683,31 +683,15 @@ def _worker_optimize_win(
     storage = _resolve_storage_with_timeout(storage_url)
     sampler = NSGAIISampler()
     
-    # Check if study exists and has correct directions before creating
-    try:
-        existing_study = optuna.load_study(study_name=study_name, storage=storage)
-        directions = existing_study.directions
-        if len(directions) != 3 or directions != [optuna.study.StudyDirection.MAXIMIZE, optuna.study.StudyDirection.MINIMIZE, optuna.study.StudyDirection.MINIMIZE]:
-            # Delete and recreate with correct directions
-            logging.warning(f"Worker PID {os.getpid()}: Deleting study with wrong directions and recreating")
-            optuna.delete_study(study_name=study_name, storage=storage)
-            study = optuna.create_study(
-                directions=["maximize", "minimize", "minimize"],
-                study_name=study_name,
-                storage=storage,
-                sampler=sampler,
-            )
-        else:
-            # Study exists with correct directions
-            study = existing_study
-    except KeyError:
-        # Study doesn't exist, create it
-        study = optuna.create_study(
-            directions=["maximize", "minimize", "minimize"],
-            study_name=study_name,
-            storage=storage,
-            sampler=sampler,
-        )
+    # Simply load the study - it should already exist from main process
+    # Use load_if_exists to avoid race conditions with many workers
+    study = optuna.create_study(
+        directions=["maximize", "minimize", "minimize"],
+        study_name=study_name,
+        storage=storage,
+        sampler=sampler,
+        load_if_exists=True,
+    )
 
     def objective_win(trial: optuna.Trial) -> tuple[float, float, float]:
         cfg = Config.load()
@@ -1066,7 +1050,8 @@ def run_tuning_v4_parallel(
         cfg_fixed = Config.load()
         sampler_win = NSGAIISampler()
         
-        # Check if study exists and has correct directions
+        # Create study if it doesn't exist, with correct directions
+        # Use load_if_exists to avoid errors if study already exists
         try:
             existing_study = optuna.load_study(study_name=f"{study_name}_win", storage=storage_for_optuna)
             directions = existing_study.directions
@@ -1078,11 +1063,13 @@ def run_tuning_v4_parallel(
                     study_name=f"{study_name}_win",
                     storage=storage_for_optuna,
                     sampler=sampler_win,
+                    load_if_exists=False,
                 )
             else:
                 console.print(f"[green]Found existing study with correct multi-objective directions.[/green]")
         except KeyError:
             # Study doesn't exist, create it
+            console.print(f"[cyan]Creating new multi-objective study.[/cyan]")
             optuna.create_study(
                 directions=["maximize", "minimize", "minimize"],
                 study_name=f"{study_name}_win",
