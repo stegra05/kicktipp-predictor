@@ -549,6 +549,28 @@ def run_tuning_v4_sequential(
 # V4 Cascaded Model: Parallel Tuning (Draw -> Win)
 # ==========================================================================
 
+def _worker_initializer():
+    """Initialize worker process - called once when process starts.
+    
+    This runs BEFORE any code in the worker function and sets environment
+    variables so that imported libraries (numpy/scipy/sklearn) respect them.
+    """
+    import os
+    # Set to 1 thread per worker to avoid OpenMP thread exhaustion
+    for var in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "XGB_NUM_THREADS",
+    ):
+        os.environ[var] = "1"
+    import logging
+    logging.basicConfig(level=logging.INFO, format="Worker PID %(process)d: %(message)s")
+    logging.info("Worker process initialized with OMP_NUM_THREADS=1")
+
+
 def _worker_optimize_draw(
     storage_url: str,
     study_name: str,
@@ -565,7 +587,10 @@ def _worker_optimize_draw(
     """
     # CRITICAL: Set thread limits FIRST, before any library initialization
     # This prevents OpenMP from creating too many threads
-    _limit_threads(int(os.environ.get("OMP_NUM_THREADS", "1")))
+    env_omp = os.environ.get("OMP_NUM_THREADS", "NOT_SET")
+    logging.info(f"Worker PID {os.getpid()}: OMP_NUM_THREADS={env_omp}")
+    _limit_threads(int(env_omp) if env_omp != "NOT_SET" else 1)
+    logging.info(f"Worker PID {os.getpid()}: Set thread limits")
     _set_logging_level(log_level)
     storage = _resolve_storage_with_timeout(storage_url)
     study = optuna.create_study(
@@ -639,7 +664,10 @@ def _worker_optimize_win(
     """
     # CRITICAL: Set thread limits FIRST, before any library initialization
     # This prevents OpenMP from creating too many threads
-    _limit_threads(int(os.environ.get("OMP_NUM_THREADS", "1")))
+    env_omp = os.environ.get("OMP_NUM_THREADS", "NOT_SET")
+    logging.info(f"Worker PID {os.getpid()}: OMP_NUM_THREADS={env_omp}")
+    _limit_threads(int(env_omp) if env_omp != "NOT_SET" else 1)
+    logging.info(f"Worker PID {os.getpid()}: Set thread limits")
     _set_logging_level(log_level)
     storage = _resolve_storage_with_timeout(storage_url)
     sampler = NSGAIISampler()
@@ -876,7 +904,7 @@ def run_tuning_v4_parallel(
         failures_draw = 0
 
         with progress:
-            with ProcessPoolExecutor(max_workers=w) as ex:
+            with ProcessPoolExecutor(max_workers=w, initializer=_worker_initializer) as ex:
                 futures = [
                     ex.submit(
                         _worker_optimize_draw,
@@ -1062,7 +1090,7 @@ def run_tuning_v4_parallel(
         failures_win = 0
 
         with progress:
-            with ProcessPoolExecutor(max_workers=w) as ex:
+            with ProcessPoolExecutor(max_workers=w, initializer=_worker_initializer) as ex:
                 futures = [
                     ex.submit(
                         _worker_optimize_win,
