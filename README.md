@@ -79,3 +79,49 @@ This new architecture is a direct response to the failings of the old one. Here 
     *   **ADVANTAGE:** Maximizes development efficiency by leveraging the strongest parts of the existing project.
 
 In conclusion, the V3 Alpha is not just an incremental improvement; it is a fundamental rethinking of the project's core. By simplifying the architecture and choosing a more appropriate mathematical framework, we are creating a system that is more robust, less prone to bias, and has a significantly higher ceiling for predictive accuracy. This is the right path forward.
+
+---
+
+#### 4. Balanced Draw Optimization (V3)
+
+To produce realistic draw prediction rates while maintaining accuracy, the tuning system now uses a soft alignment objective: balanced accuracy nudges draw-rate toward a target while still optimizing predictive quality.
+
+**A. Objectives**
+
+*   `balanced_accuracy` — maximize. Computed as `0.8 * accuracy + 0.2 * (1 - |predicted_draw_rate - 0.25|)`.
+*   `log_loss` — minimize.
+
+**B. Optuna Configuration**
+
+*   Multi-objective directions: `directions=["maximize", "minimize"]`.
+*   Sampler: `NSGA-II`, well-suited for multi-objective search.
+
+**C. Trial Evaluation and Selection**
+
+*   Each trial records `accuracy`, `log_loss`, `predicted_draw_rate`, and `mean_draw_prob`.
+*   Balanced accuracy is computed with a target draw rate of `0.25` and a 80/20 weighting.
+*   Selection: choose the completed trial on the Pareto front with the highest `balanced_accuracy`.
+
+**D. Stability Checks and Analytics**
+
+*   Draw rate stability is evaluated across 3 splits of the validation set (by `matchday` or `date`), recording `draw_rate_std` and whether each split falls in `[0.15, 0.30]`.
+*   Study summary includes correlations (`balanced_accuracy` vs `log_loss`, `draw_balance_factor` vs `log_loss`) and draw-rate statistics. Per-trial uncertainty diagnostics capture the correlation between `|predicted_goal_difference|` and `uncertainty_stddev`, along with stddev min/mean/max.
+
+**E. Running Tuning**
+
+```
+python -m kicktipp_predictor.cli tune --n-trials 200 --seasons-back 5
+```
+
+**F. Outputs**
+
+*   Selected parameters: `src/kicktipp_predictor/config/best_params.yaml`.
+*   Study summary: `<data_dir>/optuna/gd_v3_tuning_summary.yaml` (or JSON fallback).
+
+**G. Definition of Done**
+
+*   Predicted draw rate clusters around `25%` and stays within `15–30%` across splits.
+*   Balanced accuracy is maintained or improved versus prior baselines.
+*   Stability checks across validation splits pass.
+*   Uncertainty diagnostics recorded and reviewed for convergence behavior.
+*   Documentation reflects the soft optimization strategy (this section).

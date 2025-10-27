@@ -230,7 +230,10 @@ class GoalDifferencePredictor:
         # Monitoring: uncertainty correlation and bounds
         try:
             abs_gd = np.abs(pred_gd)
-            corr = float(np.corrcoef(abs_gd, dynamic_stddev)[0, 1]) if len(abs_gd) > 1 else float("nan")
+            if len(abs_gd) > 1 and np.std(abs_gd) > 0 and np.std(dynamic_stddev) > 0:
+                corr = float(np.corrcoef(abs_gd, dynamic_stddev)[0, 1])
+            else:
+                corr = float("nan")
             self.last_metrics = {
                 "uncertainty_corr_abs_gd": corr,
                 "stddev_mean": float(np.mean(dynamic_stddev)),

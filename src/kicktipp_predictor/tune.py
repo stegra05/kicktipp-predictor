@@ -128,7 +128,7 @@ def run_tuning(
     train_df, val_df, loader, current_season = _prepare_datasets(seasons_back)
 
     # Objective uses closure over prepared datasets
-    def objective(trial: optuna.Trial) -> tuple[float, float]:
+    def objective(trial: optuna.Trial) -> tuple[float, float, float]:
         cfg = Config.load()  # fresh config per trial
         # --- Tune core XGB params ---
         cfg.model.gd_n_estimators = trial.suggest_int("gd_n_estimators", 100, 2000)
@@ -139,14 +139,12 @@ def run_tuning(
         # --- Stochasticity ---
         cfg.model.gd_subsample = trial.suggest_float("gd_subsample", 0.6, 1.0)
         cfg.model.gd_colsample_bytree = trial.suggest_float("gd_colsample_bytree", 0.6, 1.0)
-        # --- Architecture-specific uncertainty ---
+        # --- Architecture-specific uncertainty (static baseline) ---
         cfg.model.gd_uncertainty_stddev = trial.suggest_float("gd_uncertainty_stddev", 0.5, 3.0)
-        # Dynamic uncertainty parameters
-        cfg.model.gd_uncertainty_base_stddev = trial.suggest_float("gd_uncertainty_base_stddev", 0.5, 3.0)
-        cfg.model.gd_uncertainty_scale = trial.suggest_float("gd_uncertainty_scale", 0.0, 1.5)
-        cfg.model.gd_uncertainty_min_stddev = trial.suggest_float("gd_uncertainty_min_stddev", 0.05, 1.0)
-        cfg.model.gd_uncertainty_max_stddev = trial.suggest_float("gd_uncertainty_max_stddev", 1.0, 6.0)
-        # Ensure bounds are consistent; otherwise prune
+        # Force static uncertainty during tuning to reduce complexity
+        cfg.model.gd_uncertainty_base_stddev = cfg.model.gd_uncertainty_stddev
+        cfg.model.gd_uncertainty_scale = 0.0
+        # Keep min/max bounds from config; they will only clamp if needed
         if cfg.model.gd_uncertainty_max_stddev <= cfg.model.gd_uncertainty_min_stddev:
             raise optuna.TrialPruned("Invalid stddev bounds: max <= min")
         # Draw margin tuning
@@ -194,8 +192,63 @@ def run_tuning(
         mean_draw_prob = float(np.mean(proba[:, 1])) if proba.size else float("nan")
         trial.set_user_attr("predicted_draw_rate", predicted_draw_rate)
         trial.set_user_attr("mean_draw_prob", mean_draw_prob)
+        # Uncertainty diagnostics: correlation between |predicted GD| and stddev
+        try:
+            gd_abs = np.array([abs(float(p.get("predicted_goal_difference", 0.0))) for p in preds], dtype=float)
+            stddevs = np.array([float(p.get("uncertainty_stddev", float("nan"))) for p in preds], dtype=float)
+            mask = np.isfinite(gd_abs) & np.isfinite(stddevs)
+            if mask.sum() >= 2 and np.std(gd_abs[mask]) > 0 and np.std(stddevs[mask]) > 0:
+                corr = float(np.corrcoef(gd_abs[mask], stddevs[mask])[0, 1])
+            else:
+                corr = float("nan")
+            trial.set_user_attr("uncertainty_corr_abs_predgd_stddev", corr)
+            if stddevs[mask].size:
+                trial.set_user_attr("uncertainty_stddev_min", float(np.min(stddevs[mask])))
+                trial.set_user_attr("uncertainty_stddev_mean", float(np.mean(stddevs[mask])))
+                trial.set_user_attr("uncertainty_stddev_max", float(np.max(stddevs[mask])))
+                trial.set_user_attr("uncertainty_stddev_std", float(np.std(stddevs[mask])))
+            else:
+                trial.set_user_attr("uncertainty_stddev_min", float("nan"))
+                trial.set_user_attr("uncertainty_stddev_mean", float("nan"))
+                trial.set_user_attr("uncertainty_stddev_max", float("nan"))
+                trial.set_user_attr("uncertainty_stddev_std", float("nan"))
+        except Exception:
+            trial.set_user_attr("uncertainty_corr_abs_predgd_stddev", float("nan"))
+        # Balanced accuracy objective (soft draw nudge)
+        target_draw_rate = 0.25
+        draw_balance_factor = 1.0 - abs(predicted_draw_rate - target_draw_rate)
+        balanced_accuracy = 0.8 * acc + 0.2 * draw_balance_factor
+        trial.set_user_attr("balanced_accuracy", balanced_accuracy)
+        trial.set_user_attr("draw_balance_factor", draw_balance_factor)
+        trial.set_user_attr("target_draw_rate", target_draw_rate)
 
-        return acc, ll
+        # Draw rate stability across splits
+        try:
+            rates: list[float] = []
+            if "matchday" in val_df.columns:
+                md = pd.to_numeric(val_df["matchday"], errors="coerce").astype(float).values
+                order = np.argsort(md)
+                splits = np.array_split(order, 3)
+            elif "date" in val_df.columns:
+                dates = pd.to_datetime(val_df["date"], errors="coerce").values
+                order = np.argsort(dates)
+                splits = np.array_split(order, 3)
+            else:
+                splits = np.array_split(np.arange(len(pred_labels)), 3)
+            for idxs in splits:
+                if len(idxs) > 0:
+                    rates.append(float(np.mean(pred_labels[idxs] == 1)))
+            draw_rate_std = float(np.std(rates)) if len(rates) >= 2 else float("nan")
+            trial.set_user_attr("draw_rate_splits", rates)
+            trial.set_user_attr("draw_rate_std", draw_rate_std)
+            trial.set_user_attr(
+                "draw_rate_splits_target_ok",
+                bool(all((0.15 <= r <= 0.30) for r in rates if np.isfinite(r))),
+            )
+        except Exception:
+            pass
+
+        return balanced_accuracy, ll
 
     # Storage (SQLite) default to project data directory
     cfg = loader.config
@@ -208,11 +261,13 @@ def run_tuning(
     except Exception as exc:
         raise RuntimeError(f"Database reset failed: {exc}")
 
+    sampler = optuna.samplers.NSGAIISampler()
     study = optuna.create_study(
         directions=["maximize", "minimize"],
         study_name=study_name,
         storage=storage_url,
         load_if_exists=True,
+        sampler=sampler,
     )
 
     print("=" * 80)
@@ -233,14 +288,14 @@ def run_tuning(
         print("No completed trials to select from.")
         return
 
-    # Selection strategy: top-25% accuracy, then lowest log-loss
-    accs = np.array([t.values[0] for t in completed], dtype=float)
-    if len(accs) > 1:
-        threshold = float(np.quantile(accs, 0.75))
-        candidates = [t for t in completed if t.values[0] >= threshold]
-    else:
-        candidates = completed
-    selected = min(candidates, key=lambda t: t.values[1]) if candidates else completed[0]
+    # Selection: choose highest balanced_accuracy (objective #0) from Pareto front
+    try:
+        selected = max(completed, key=lambda t: float(t.values[0]))
+    except Exception:
+        print("Selection fallback: no completed trials; using study.best_trials or study.trials.")
+        pool = [t for t in study.best_trials if t.state == optuna.trial.TrialState.COMPLETE] or \
+               [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+        selected = max(pool, key=lambda t: float(t.values[0])) if pool else study.best_trial
 
     params = dict(selected.params)
     out = {
@@ -254,12 +309,12 @@ def run_tuning(
         "gd_colsample_bytree": float(params.get("gd_colsample_bytree", cfg.model.gd_colsample_bytree)),
         # Not tuned; explicit default retained for clarity
         "gd_gamma": float(cfg.model.gd_gamma),
-        # Uncertainty parameters
+        # Uncertainty parameters (static baseline; dynamic scale fixed to 0)
         "gd_uncertainty_stddev": float(params.get("gd_uncertainty_stddev", cfg.model.gd_uncertainty_stddev)),
-        "gd_uncertainty_base_stddev": float(params.get("gd_uncertainty_base_stddev", cfg.model.gd_uncertainty_base_stddev)),
-        "gd_uncertainty_scale": float(params.get("gd_uncertainty_scale", cfg.model.gd_uncertainty_scale)),
-        "gd_uncertainty_min_stddev": float(params.get("gd_uncertainty_min_stddev", cfg.model.gd_uncertainty_min_stddev)),
-        "gd_uncertainty_max_stddev": float(params.get("gd_uncertainty_max_stddev", cfg.model.gd_uncertainty_max_stddev)),
+        "gd_uncertainty_base_stddev": float(params.get("gd_uncertainty_stddev", cfg.model.gd_uncertainty_stddev)),
+        "gd_uncertainty_scale": 0.0,
+        "gd_uncertainty_min_stddev": float(cfg.model.gd_uncertainty_min_stddev),
+        "gd_uncertainty_max_stddev": float(cfg.model.gd_uncertainty_max_stddev),
         # Draw margin
         "draw_margin": float(params.get("draw_margin", cfg.model.draw_margin)),
     }
@@ -298,9 +353,19 @@ def run_tuning(
                 "values": list(map(float, t.values)),
                 "params": t.params,
                 "accuracy": float(t.user_attrs.get("accuracy", float("nan"))),
+                "balanced_accuracy": float(t.user_attrs.get("balanced_accuracy", float("nan"))),
+                "draw_balance_factor": float(t.user_attrs.get("draw_balance_factor", float("nan"))),
                 "log_loss": float(t.user_attrs.get("log_loss", float("nan"))),
                 "predicted_draw_rate": float(t.user_attrs.get("predicted_draw_rate", float("nan"))),
                 "mean_draw_prob": float(t.user_attrs.get("mean_draw_prob", float("nan"))),
+                "draw_rate_std": float(t.user_attrs.get("draw_rate_std", float("nan"))),
+                "draw_rate_splits": [float(r) for r in t.user_attrs.get("draw_rate_splits", [])],
+                "draw_rate_splits_target_ok": bool(t.user_attrs.get("draw_rate_splits_target_ok", False)),
+                "uncertainty_corr_abs_predgd_stddev": float(t.user_attrs.get("uncertainty_corr_abs_predgd_stddev", float("nan"))),
+                "uncertainty_stddev_min": float(t.user_attrs.get("uncertainty_stddev_min", float("nan"))),
+                "uncertainty_stddev_mean": float(t.user_attrs.get("uncertainty_stddev_mean", float("nan"))),
+                "uncertainty_stddev_max": float(t.user_attrs.get("uncertainty_stddev_max", float("nan"))),
+                "uncertainty_stddev_std": float(t.user_attrs.get("uncertainty_stddev_std", float("nan"))),
             }
             for t in pareto
         ],
@@ -310,6 +375,41 @@ def run_tuning(
             "params": selected.params,
         },
     }
+    # Compute trial-level analytics
+    try:
+        balanced_accuracies = [float(t.user_attrs.get("balanced_accuracy", float("nan"))) for t in pareto]
+        raw_accuracies = [float(t.user_attrs.get("accuracy", float("nan"))) for t in pareto]
+        draw_factors = [float(t.user_attrs.get("draw_balance_factor", float("nan"))) for t in pareto]
+        log_losses = [float(t.user_attrs.get("log_loss", float("nan"))) for t in pareto]
+        draw_rates = [float(t.user_attrs.get("predicted_draw_rate", float("nan"))) for t in pareto]
+        ba = np.array(balanced_accuracies, dtype=float); aa = np.array(raw_accuracies, dtype=float)
+        df = np.array(draw_factors, dtype=float); ll = np.array(log_losses, dtype=float)
+        mask_ba = np.isfinite(ba) & np.isfinite(ll)
+        mask_df = np.isfinite(df) & np.isfinite(ll)
+        if mask_ba.sum() >= 2 and np.std(ba[mask_ba]) > 0 and np.std(ll[mask_ba]) > 0:
+            corr_ba_ll = float(np.corrcoef(ba[mask_ba], ll[mask_ba])[0, 1])
+        else:
+            corr_ba_ll = float("nan")
+        if mask_df.sum() >= 2 and np.std(df[mask_df]) > 0 and np.std(ll[mask_df]) > 0:
+            corr_df_ll = float(np.corrcoef(df[mask_df], ll[mask_df])[0, 1])
+        else:
+            corr_df_ll = float("nan")
+        dr = np.array(draw_rates, dtype=float)
+        dr_f = dr[np.isfinite(dr)]
+        draw_rate_stats = {
+            "count": int(dr_f.size),
+            "min": float(np.min(dr_f)) if dr_f.size else float("nan"),
+            "max": float(np.max(dr_f)) if dr_f.size else float("nan"),
+            "mean": float(np.mean(dr_f)) if dr_f.size else float("nan"),
+            "std": float(np.std(dr_f)) if dr_f.size else float("nan"),
+        }
+        summary["correlations"] = {
+            "balanced_accuracy_vs_log_loss": corr_ba_ll,
+            "draw_balance_factor_vs_log_loss": corr_df_ll,
+        }
+        summary["predicted_draw_rate_stats"] = draw_rate_stats
+    except Exception:
+        pass
     try:
         import yaml  # type: ignore
         with open(summary_path, "w", encoding="utf-8") as f:
@@ -329,9 +429,11 @@ def run_tuning(
     print("\n" + "=" * 80)
     print("TUNING COMPLETE")
     print("=" * 80)
+    sel_dr = float(selected.user_attrs.get("predicted_draw_rate", float("nan")))
+    ba = float(selected.user_attrs.get("balanced_accuracy", float("nan"))) if hasattr(selected, "user_attrs") else float("nan")
     print(
-        f"Selected Trial #{selected.number}: accuracy={selected.values[0]:.4f}, "
-        f"log_loss={selected.values[1]:.4f}"
+        f"Selected Trial #{selected.number}: balanced_accuracy={selected.values[0]:.4f}, "
+        f"log_loss={selected.values[1]:.4f}, predicted_draw_rate={sel_dr:.3f}"
     )
 
 
