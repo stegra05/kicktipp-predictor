@@ -260,6 +260,30 @@ class DataLoader:
     # FEATURE ENGINEERING METHODS
     # =================================================================
 
+    def _series_or_zero(
+        self, df: pd.DataFrame, col: str, default: float = 0.0
+    ) -> pd.Series:
+        """Return a column as a numeric Series or a zero Series aligned to df.
+
+        Ensures arithmetic operations remain vectorized and index-aligned.
+
+        Args:
+            df: Source DataFrame.
+            col: Column name to fetch.
+            default: Fallback fill value when column is missing or non-numeric.
+
+        Returns:
+            A numeric Series aligned to df.index.
+        """
+        try:
+            if col in df.columns:
+                s = df[col]
+            else:
+                s = pd.Series(default, index=df.index)
+            return pd.to_numeric(s, errors="coerce").fillna(default)
+        except Exception:
+            return pd.Series(default, index=df.index)
+
     def _compute_tanh_tamed_elo(
         self,
         df: pd.DataFrame,
@@ -297,8 +321,8 @@ class DataLoader:
                     )
                 # Attempt to derive normalized diff from raw Elo difference
                 if "elo_diff" in df.columns:
-                    home_mp = df.get("home_matches_played", pd.Series(0)).fillna(0)
-                    away_mp = df.get("away_matches_played", pd.Series(0)).fillna(0)
+                    home_mp = self._series_or_zero(df, "home_matches_played", 0)
+                    away_mp = self._series_or_zero(df, "away_matches_played", 0)
                     avg_matches = (home_mp + away_mp) / 2.0
                     scale_factor = 1.0 + avg_matches * 0.01
                     df["normalized_elo_diff"] = (
@@ -331,7 +355,6 @@ class DataLoader:
         intermediate Elo features influence training/prediction, even if
         feature selection fails to load.
         """
-        """
         try:
             if df is None or not isinstance(df, pd.DataFrame) or len(df) == 0:
                 return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
@@ -340,16 +363,15 @@ class DataLoader:
                 c for c in cols
                 if ("elo" in str(c).lower()) and (str(c).lower() != "tanh_tamed_elo")
             ]
-            # Drop ELO-derived binary if present
+            # Optionally drop ELO-derived binary to enforce isolation
             if "home_team_is_strong" in df.columns:
                 to_drop.append("home_team_is_strong")
             if to_drop:
                 df = df.drop(columns=[c for c in set(to_drop) if c in df.columns])
             return df
         except Exception:
+            # On any unexpected error, return df unchanged to maintain stability
             return df
-        """
-        pass
 
     def _merge_history_features(
         self,
@@ -527,10 +549,9 @@ class DataLoader:
 
         # Create binary feature: home_team_is_strong
         # Definition: 1 if home_elo > 1450, else 0. Exactly 1450 is NOT strong.
-        # Robustness: handles missing/non-numeric values by treating as not strong (0).
-        base["home_team_is_strong"] = (
-            pd.to_numeric(base.get("home_elo", 0.0), errors="coerce").fillna(0.0) > 1450.0
-        ).astype(int)
+        # Robustness: use aligned zero series fallback when column missing/non-numeric.
+        home_elo_series = self._series_or_zero(base, "home_elo", 0.0)
+        base["home_team_is_strong"] = (home_elo_series > 1450.0).astype(int)
 
         # Shared history features via helper
         matches_df = pd.DataFrame(matches)
@@ -545,14 +566,15 @@ class DataLoader:
         # Hard isolation: drop all non-tanh Elo columns
         features_df = self._drop_non_tanh_elo_columns(features_df)
 
-        # Derived form diffs
-        features_df["abs_weighted_form_points_diff"] = (
-            features_df.get("home_form_points_weighted_by_opponent_rank", 0)
-            - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
-        ).abs()
-        features_df["weighted_form_points_difference"] = features_df.get(
-            "home_form_points_weighted_by_opponent_rank", 0
-        ) - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
+        # Derived form diffs (robust to missing columns)
+        h_w = self._series_or_zero(
+            features_df, "home_form_points_weighted_by_opponent_rank", 0.0
+        )
+        a_w = self._series_or_zero(
+            features_df, "away_form_points_weighted_by_opponent_rank", 0.0
+        )
+        features_df["abs_weighted_form_points_diff"] = (h_w - a_w).abs()
+        features_df["weighted_form_points_difference"] = h_w - a_w
 
         # Targets
         features_df["goal_difference"] = (
@@ -714,14 +736,15 @@ class DataLoader:
         # Hard isolation: drop all non-tanh Elo columns
         features_df = self._drop_non_tanh_elo_columns(features_df)
 
-        # Derived diffs
-        features_df["abs_weighted_form_points_diff"] = (
-            features_df.get("home_form_points_weighted_by_opponent_rank", 0)
-            - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
-        ).abs()
-        features_df["weighted_form_points_difference"] = features_df.get(
-            "home_form_points_weighted_by_opponent_rank", 0
-        ) - features_df.get("away_form_points_weighted_by_opponent_rank", 0)
+        # Derived diffs (robust to missing columns)
+        h_w = self._series_or_zero(
+            features_df, "home_form_points_weighted_by_opponent_rank", 0.0
+        )
+        a_w = self._series_or_zero(
+            features_df, "away_form_points_weighted_by_opponent_rank", 0.0
+        )
+        features_df["abs_weighted_form_points_diff"] = (h_w - a_w).abs()
+        features_df["weighted_form_points_difference"] = h_w - a_w
 
         features_df = self._apply_selected_features(features_df)
         # Final guard: ensure no non-tanh Elo columns slipped through

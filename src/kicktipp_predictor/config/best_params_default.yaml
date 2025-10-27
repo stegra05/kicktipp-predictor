@@ -1,0 +1,14 @@
+gd_n_estimators: 1228
+gd_max_depth: 10
+gd_learning_rate: 0.03960781290206925
+gd_subsample: 0.6590397152902312
+gd_reg_lambda: 1.0421342867303357e-06
+gd_min_child_weight: 0.24335743132374885
+gd_colsample_bytree: 0.649181737508765
+gd_gamma: 0.0
+gd_uncertainty_stddev: 1.5602414587969133
+gd_uncertainty_base_stddev: 1.5602414587969133
+gd_uncertainty_scale: 0.0
+gd_uncertainty_min_stddev: 0.7245457454584011
+gd_uncertainty_max_stddev: 1.0710232393234922
+draw_margin: 0.40657160181287716
