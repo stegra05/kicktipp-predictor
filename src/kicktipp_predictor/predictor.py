@@ -77,6 +77,8 @@ class CascadedPredictor:
             "away_score",
             "goal_difference",
             "result",
+            "is_draw",
+            "is_home_win",
         }
         numeric_cols = df.select_dtypes(include=["number", "bool"]).columns.tolist()
         if not self.feature_columns:
@@ -237,33 +239,42 @@ class CascadedPredictor:
             if Xd_val is not None:
                 # Try early stopping if supported by installed xgboost
                 try:
+                    # Defensive: drop target columns if present
+                    Xd_train_safe = Xd_train.drop(columns=["is_draw", "is_home_win"], errors="ignore")
+                    Xd_val_safe = Xd_val.drop(columns=["is_draw", "is_home_win"], errors="ignore")
                     self.draw_model.fit(
-                        Xd_train,
+                        Xd_train_safe,
                         yd_train,
                         sample_weight=sample_weight_all[train_idx] if sample_weight_all is not None else None,
-                        eval_set=[(Xd_train, yd_train), (Xd_val, yd_val)],
+                        eval_set=[(Xd_train_safe, yd_train), (Xd_val_safe, yd_val)],
                         early_stopping_rounds=int(self.config.model.early_stopping_rounds),
                         verbose=self.config.model.fit_verbose,
                     )
                 except TypeError:
+                    Xd_train_safe = Xd_train.drop(columns=["is_draw", "is_home_win"], errors="ignore")
+                    Xd_val_safe = Xd_val.drop(columns=["is_draw", "is_home_win"], errors="ignore")
                     self.draw_model.fit(
-                        Xd_train,
+                        Xd_train_safe,
                         yd_train,
                         sample_weight=sample_weight_all[train_idx] if sample_weight_all is not None else None,
-                        eval_set=[(Xd_train, yd_train), (Xd_val, yd_val)],
+                        eval_set=[(Xd_train_safe, yd_train), (Xd_val_safe, yd_val)],
                         verbose=self.config.model.fit_verbose,
                     )
             else:
+                X_all_safe = X_all.drop(columns=["is_draw", "is_home_win"], errors="ignore")
                 self.draw_model.fit(
-                    X_all,
+                    X_all_safe,
                     self.draw_label_encoder.transform(y_draw.tolist()),
                     sample_weight=sample_weight_all,
-                    eval_set=[(X_all, self.draw_label_encoder.transform(y_draw.tolist()))],
+                    eval_set=[(X_all_safe, self.draw_label_encoder.transform(y_draw.tolist()))],
                     verbose=self.config.model.fit_verbose,
                 )
             # Save training metrics
             self.training_metrics["draw_model"] = {
-                "train_score": float(self.draw_model.score(X_all, self.draw_label_encoder.transform(y_draw.tolist()))),
+                "train_score": float(self.draw_model.score(
+                    X_all.drop(columns=["is_draw", "is_home_win"], errors="ignore"),
+                    self.draw_label_encoder.transform(y_draw.tolist())
+                )),
                 "feature_importances": self.draw_model.feature_importances_.tolist() if hasattr(self.draw_model, "feature_importances_") else None,
                 "class_counts": {
                     "draw": int((y_draw_arr == 1).sum()),
@@ -307,29 +318,38 @@ class CascadedPredictor:
 
             if Xw_val is not None:
                 try:
+                    # Defensive: drop target columns if present
+                    Xw_train_safe = Xw_train.drop(columns=["is_draw", "is_home_win"], errors="ignore")
+                    Xw_val_safe = Xw_val.drop(columns=["is_draw", "is_home_win"], errors="ignore")
                     self.win_model.fit(
-                        Xw_train,
+                        Xw_train_safe,
                         yw_train,
-                        eval_set=[(Xw_train, yw_train), (Xw_val, yw_val)],
+                        eval_set=[(Xw_train_safe, yw_train), (Xw_val_safe, yw_val)],
                         early_stopping_rounds=int(self.config.model.early_stopping_rounds),
                         verbose=self.config.model.fit_verbose,
                     )
                 except TypeError:
+                    Xw_train_safe = Xw_train.drop(columns=["is_draw", "is_home_win"], errors="ignore")
+                    Xw_val_safe = Xw_val.drop(columns=["is_draw", "is_home_win"], errors="ignore")
                     self.win_model.fit(
-                        Xw_train,
+                        Xw_train_safe,
                         yw_train,
-                        eval_set=[(Xw_train, yw_train), (Xw_val, yw_val)],
+                        eval_set=[(Xw_train_safe, yw_train), (Xw_val_safe, yw_val)],
                         verbose=self.config.model.fit_verbose,
                     )
             else:
+                X_non_draw_safe = X_non_draw.drop(columns=["is_draw", "is_home_win"], errors="ignore")
                 self.win_model.fit(
-                    X_non_draw,
+                    X_non_draw_safe,
                     y_win_enc,
-                    eval_set=[(X_non_draw, y_win_enc)],
+                    eval_set=[(X_non_draw_safe, y_win_enc)],
                     verbose=self.config.model.fit_verbose,
                 )
             self.training_metrics["win_model"] = {
-                "train_score": float(self.win_model.score(X_non_draw, y_win_enc)),
+                "train_score": float(self.win_model.score(
+                    X_non_draw.drop(columns=["is_draw", "is_home_win"], errors="ignore"),
+                    y_win_enc
+                )),
                 "feature_importances": self.win_model.feature_importances_.tolist() if hasattr(self.win_model, "feature_importances_") else None,
                 "class_counts": {
                     "home": int((y_win_arr == "H").sum()),
@@ -347,8 +367,10 @@ class CascadedPredictor:
                 skf_cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=int(self.config.model.random_state))
                 for tr_idx, te_idx in skf_cv.split(X_all, y_draw_arr):
                     mdl = XGBClassifier(**draw_params)
-                    mdl.fit(X_all.iloc[tr_idx], self.draw_label_encoder.transform(y_draw.iloc[tr_idx].tolist()), verbose=False)
-                    s = mdl.score(X_all.iloc[te_idx], self.draw_label_encoder.transform(y_draw.iloc[te_idx].tolist()))
+                    X_all_tr = X_all.iloc[tr_idx].drop(columns=["is_draw", "is_home_win"], errors="ignore")
+                    X_all_te = X_all.iloc[te_idx].drop(columns=["is_draw", "is_home_win"], errors="ignore")
+                    mdl.fit(X_all_tr, self.draw_label_encoder.transform(y_draw.iloc[tr_idx].tolist()), verbose=False)
+                    s = mdl.score(X_all_te, self.draw_label_encoder.transform(y_draw.iloc[te_idx].tolist()))
                     cv_draw_scores.append(float(s))
             self.training_metrics.setdefault("draw_model", {})["cv_accuracy"] = {
                 "mean": float(np.mean(cv_draw_scores)) if cv_draw_scores else None,
@@ -366,8 +388,10 @@ class CascadedPredictor:
                 skf_cv_w = StratifiedKFold(n_splits=3, shuffle=True, random_state=int(self.config.model.random_state))
                 for tr_idx, te_idx in skf_cv_w.split(X_non_draw, y_win_enc_full):
                     mdl = XGBClassifier(**win_params)
-                    mdl.fit(X_non_draw.iloc[tr_idx], y_win_enc_full[tr_idx], verbose=False)
-                    s = mdl.score(X_non_draw.iloc[te_idx], y_win_enc_full[te_idx])
+                    X_nd_tr = X_non_draw.iloc[tr_idx].drop(columns=["is_draw", "is_home_win"], errors="ignore")
+                    X_nd_te = X_non_draw.iloc[te_idx].drop(columns=["is_draw", "is_home_win"], errors="ignore")
+                    mdl.fit(X_nd_tr, y_win_enc_full[tr_idx], verbose=False)
+                    s = mdl.score(X_nd_te, y_win_enc_full[te_idx])
                     cv_win_scores.append(float(s))
             self.training_metrics.setdefault("win_model", {})["cv_accuracy"] = {
                 "mean": float(np.mean(cv_win_scores)) if cv_win_scores else None,
