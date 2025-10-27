@@ -12,8 +12,9 @@ import pandas as pd
 
 try:
     import optuna  # type: ignore
+    from optuna.samplers import NSGAIISampler  # type: ignore
 except Exception as exc:  # pragma: no cover - optional dependency
-    optuna = None  # type: ignore
+    optuna = None
 
 from concurrent.futures import ProcessPoolExecutor, as_completed, wait
 
@@ -394,16 +395,16 @@ def run_tuning_v4_sequential(
     # ---------------------- Phase 2: Win Tuning ----------------------
     if model_to_tune in ("win", "both"):
         print("=" * 80)
-        print("OPTUNA TUNING (V4 Cascaded) - Phase 2: Win Model")
+        print("OPTUNA TUNING (V4 Cascaded) - Phase 2: Win Model (Multi-Objective)")
         print("=" * 80)
         print(f"Trials: {n_trials} | Storage: {storage_url}")
-        print(f"Objective: {'maximize' if win_metric == 'accuracy' else 'minimize'} {win_metric}")
+        print(f"Objectives: Maximize accuracy, Minimize log_loss, Minimize draw_rate_error")
         print()
 
         # Load fixed draw params from best_params.yaml (if present)
         cfg_fixed = Config.load()
 
-        def objective_win(trial: optuna.Trial) -> float:
+        def objective_win(trial: optuna.Trial) -> tuple[float, float, float]:
             cfg = Config.load()
             # Fix draw_* to previously saved (cfg_fixed already applied from YAML)
             cfg.model.draw_n_estimators = cfg_fixed.model.draw_n_estimators
@@ -440,35 +441,65 @@ def run_tuning_v4_sequential(
                 dtype=float,
             )
             y_true = val_df["result"].astype(str).tolist()
+            y_true_numeric = np.array([{"H": 0, "D": 1, "A": 2}[t] for t in y_true])
 
-            # Metric
-            if win_metric == "accuracy":
-                acc = float(
-                    np.mean(
-                        np.argmax(proba, axis=1)
-                        == np.array([{ "H": 0, "D": 1, "A": 2 }[t] for t in y_true])
-                    )
-                )
-                score = acc
-            elif win_metric == "log_loss":
-                score = float(ProbabilityMetrics.log_loss_multiclass(y_true, proba))
-            else:
-                raise optuna.TrialPruned(f"Unsupported win_metric: {win_metric}")
+            # Calculate the three metrics
+            # 1. Accuracy
+            accuracy = float(np.mean(np.argmax(proba, axis=1) == y_true_numeric))
+            
+            # 2. Log Loss
+            log_loss = float(ProbabilityMetrics.log_loss_multiclass(y_true, proba))
+            
+            # 3. Draw Rate Error
+            actual_draw_rate = 0.25  # Target draw rate
+            pred_labels = np.argmax(proba, axis=1)
+            predicted_draw_rate = np.mean(pred_labels == 1)
+            draw_rate_error = abs(predicted_draw_rate - actual_draw_rate)
 
-            trial.set_user_attr("metric", win_metric)
-            trial.set_user_attr("score", score)
-            trial.set_user_attr("n_val", int(len(y_true)))
-            return score  # max or min depending on study
+            # Store for analysis
+            trial.set_user_attr("accuracy", accuracy)
+            trial.set_user_attr("log_loss", log_loss)
+            trial.set_user_attr("predicted_draw_rate", predicted_draw_rate)
 
+            return accuracy, log_loss, draw_rate_error
+
+        # Use multi-objective optimization with NSGAIISampler
+        sampler = NSGAIISampler()
         study_win = optuna.create_study(
-            direction="maximize" if win_metric == "accuracy" else "minimize",
+            directions=["maximize", "minimize", "minimize"],
             study_name=f"{study_name}_win",
             storage=storage_for_optuna,
+            sampler=sampler,
             load_if_exists=True,
         )
         study_win.optimize(objective_win, n_trials=int(n_trials), timeout=timeout)
 
-        best_win = study_win.best_trial
+        # Multi-objective selection: filter by realistic draw rate, then select highest accuracy
+        pareto_front = study_win.best_trials
+        
+        # 1. Filter for a realistic draw rate (between 15% and 35%)
+        realistic_trials = [
+            t for t in pareto_front
+            if 0.15 <= t.user_attrs.get("predicted_draw_rate", 0.0) <= 0.35
+        ]
+        
+        if not realistic_trials:
+            print("Warning: No trials in the Pareto front met the draw rate criteria (15%-35%). Falling back to all Pareto trials.")
+            realistic_trials = pareto_front
+            
+        if not realistic_trials:
+            print("Error: No completed trials to select from. Aborting.")
+            return
+        
+        # 2. Select the best trial from the filtered set based on the primary objective (accuracy)
+        best_win = max(realistic_trials, key=lambda t: t.values[0])
+        
+        print(f"\nSelected Trial #{best_win.number} from the Pareto front.")
+        print(f"  Accuracy: {best_win.values[0]:.4f}")
+        print(f"  Log Loss: {best_win.values[1]:.4f}")
+        print(f"  Draw Rate Error: {best_win.values[2]:.4f}")
+        print(f"  Predicted Draw Rate: {best_win.user_attrs.get('predicted_draw_rate', 0.0):.2%}")
+        
         params_w = dict(best_win.params)
         saved_path = _save_best_params(
             {
@@ -492,9 +523,13 @@ def run_tuning_v4_sequential(
                         "n_trials": len(study_win.trials),
                         "best_trial": {
                             "number": best_win.number,
-                            "value": float(best_win.value),
+                            "values": best_win.values if hasattr(best_win, 'values') else [float(best_win.value)] if hasattr(best_win, 'value') else None,
+                            "accuracy": float(best_win.user_attrs.get("accuracy", 0.0)),
+                            "log_loss": float(best_win.user_attrs.get("log_loss", 0.0)),
+                            "draw_rate_error": float(best_win.user_attrs.get("predicted_draw_rate", 0.0)),
+                            "predicted_draw_rate": float(best_win.user_attrs.get("predicted_draw_rate", 0.0)),
                             "params": best_win.params,
-                            "metric": win_metric,
+                            "multi_objective": True,
                         },
                         "updated_file": str(saved_path),
                     },
@@ -603,14 +638,16 @@ def _worker_optimize_win(
     _set_logging_level(log_level)
     _limit_threads(int(os.environ.get("OMP_NUM_THREADS", "1")))
     storage = _resolve_storage_with_timeout(storage_url)
+    sampler = NSGAIISampler()
     study = optuna.create_study(
-        direction="maximize" if win_metric == "accuracy" else "minimize",
+        directions=["maximize", "minimize", "minimize"],
         study_name=study_name,
         storage=storage,
+        sampler=sampler,
         load_if_exists=True,
     )
 
-    def objective_win(trial: optuna.Trial) -> float:
+    def objective_win(trial: optuna.Trial) -> tuple[float, float, float]:
         cfg = Config.load()
         # fix draw params
         cfg.model.draw_n_estimators = cfg_fixed.model.draw_n_estimators
@@ -643,24 +680,27 @@ def _worker_optimize_win(
             dtype=float,
         )
         y_true = val_df["result"].astype(str).tolist()
+        y_true_numeric = np.array([{"H": 0, "D": 1, "A": 2}[t] for t in y_true])
 
-        if win_metric == "accuracy":
-            acc = float(
-                np.mean(
-                    np.argmax(proba, axis=1)
-                    == np.array([{ "H": 0, "D": 1, "A": 2 }[t] for t in y_true])
-                )
-            )
-            score = acc
-        elif win_metric == "log_loss":
-            score = float(ProbabilityMetrics.log_loss_multiclass(y_true, proba))
-        else:
-            raise optuna.TrialPruned(f"Unsupported win_metric: {win_metric}")
+        # Calculate the three metrics
+        # 1. Accuracy
+        accuracy = float(np.mean(np.argmax(proba, axis=1) == y_true_numeric))
+        
+        # 2. Log Loss
+        log_loss = float(ProbabilityMetrics.log_loss_multiclass(y_true, proba))
+        
+        # 3. Draw Rate Error
+        actual_draw_rate = 0.25  # Target draw rate
+        pred_labels = np.argmax(proba, axis=1)
+        predicted_draw_rate = np.mean(pred_labels == 1)
+        draw_rate_error = abs(predicted_draw_rate - actual_draw_rate)
 
-        trial.set_user_attr("metric", win_metric)
-        trial.set_user_attr("score", score)
-        trial.set_user_attr("n_val", int(len(y_true)))
-        return score
+        # Store for analysis
+        trial.set_user_attr("accuracy", accuracy)
+        trial.set_user_attr("log_loss", log_loss)
+        trial.set_user_attr("predicted_draw_rate", predicted_draw_rate)
+
+        return accuracy, log_loss, draw_rate_error
 
     before = len(study.trials)
     error: Optional[str] = None
@@ -935,10 +975,12 @@ def run_tuning_v4_parallel(
     # ---------------------- Phase 2: Win Tuning ----------------------
     if model_to_tune in ("win", "both"):
         cfg_fixed = Config.load()
+        sampler_win = NSGAIISampler()
         optuna.create_study(
-            direction="maximize" if win_metric == "accuracy" else "minimize",
+            directions=["maximize", "minimize", "minimize"],
             study_name=f"{study_name}_win",
             storage=storage_for_optuna,
+            sampler=sampler_win,
             load_if_exists=True,
         )
 
@@ -1053,8 +1095,32 @@ def run_tuning_v4_parallel(
 
         dur_win = time.perf_counter() - start_win
         study_win = optuna.load_study(study_name=f"{study_name}_win", storage=storage_for_optuna)
+        
+        # Multi-objective selection: filter by realistic draw rate, then select highest accuracy
+        pareto_front = study_win.best_trials
+        
+        # 1. Filter for a realistic draw rate (between 15% and 35%)
+        realistic_trials = [
+            t for t in pareto_front
+            if 0.15 <= t.user_attrs.get("predicted_draw_rate", 0.0) <= 0.35
+        ]
+        
+        if not realistic_trials:
+            console.print("[yellow]Warning: No trials in the Pareto front met the draw rate criteria (15%-35%). Falling back to all Pareto trials.[/yellow]")
+            realistic_trials = pareto_front
+            
+        if not realistic_trials:
+            console.print("[bold red]Error: No completed trials to select from. Aborting.[/bold red]")
+            return
+        
+        # 2. Select the best trial from the filtered set based on the primary objective (accuracy)
         try:
-            best_win = study_win.best_trial
+            best_win = max(realistic_trials, key=lambda t: t.values[0])
+            console.print(f"\n[green]Selected Trial #{best_win.number} from the Pareto front.[/green]")
+            console.print(f"  Accuracy: {best_win.values[0]:.4f}")
+            console.print(f"  Log Loss: {best_win.values[1]:.4f}")
+            console.print(f"  Draw Rate Error: {best_win.values[2]:.4f}")
+            console.print(f"  Predicted Draw Rate: {best_win.user_attrs.get('predicted_draw_rate', 0.0):.2%}")
         except Exception:
             best_win = None
 
@@ -1071,10 +1137,13 @@ def run_tuning_v4_parallel(
                 }
             )
 
-    tbl = Table(title="[magenta]Phase 2 Complete: Win Classifier[/magenta]", show_lines=False, box=None)
+    tbl = Table(title="[magenta]Phase 2 Complete: Win Classifier (Multi-Objective)[/magenta]", show_lines=False, box=None)
     tbl.add_column("Metric", style="dim")
     tbl.add_column("Value", style="bold")
-    tbl.add_row("Best score", "-" if best_win is None else f"[green]{float(best_win.value):.4f}[/green]")
+    if best_win is not None:
+        tbl.add_row("Accuracy", f"[green]{best_win.user_attrs.get('accuracy', 0.0):.4f}[/green]")
+        tbl.add_row("Log Loss", f"[yellow]{best_win.user_attrs.get('log_loss', 0.0):.4f}[/yellow]")
+        tbl.add_row("Pred. Draw Rate", f"[cyan]{best_win.user_attrs.get('predicted_draw_rate', 0.0):.2%}[/cyan]")
     tbl.add_row("Trials", f"{len(study_win.trials)}")
     tbl.add_row("Duration", f"[cyan]{dur_win:.1f}s[/cyan]")
     if bench_avg_win is not None:
@@ -1099,9 +1168,13 @@ def run_tuning_v4_parallel(
                     "n_trials": len(study_win.trials),
                     "best_trial": None if best_win is None else {
                         "number": best_win.number,
-                        "value": float(best_win.value),
+                        "values": best_win.values if hasattr(best_win, 'values') else None,
+                        "accuracy": float(best_win.user_attrs.get("accuracy", 0.0)),
+                        "log_loss": float(best_win.user_attrs.get("log_loss", 0.0)),
+                        "draw_rate_error": float(best_win.values[2]) if hasattr(best_win, 'values') and len(best_win.values) >= 3 else None,
+                        "predicted_draw_rate": float(best_win.user_attrs.get("predicted_draw_rate", 0.0)),
                         "params": best_win.params,
-                        "metric": win_metric,
+                        "multi_objective": True,
                     },
                     "updated_file": None if saved_path is None else str(saved_path),
                     "duration_seconds": float(dur_win),

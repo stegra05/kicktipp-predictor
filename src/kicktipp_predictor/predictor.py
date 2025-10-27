@@ -15,9 +15,10 @@ from xgboost import XGBClassifier
 from scipy.stats import norm
 import numpy as np
 from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.calibration import CalibratedClassifierCV
-from typing import Optional
+from sklearn.frozen import FrozenEstimator
+from typing import Optional, Union
 
 from rich.console import Console
 from rich.panel import Panel
@@ -36,8 +37,8 @@ class CascadedPredictor:
 
     Attributes:
     - config: Configuration object; defaults to global `get_config()` when not provided.
-    - draw_model: XGBClassifier for draw prediction; initialized to None until trained/loaded.
-    - win_model: XGBClassifier for win prediction; initialized to None until trained/loaded.
+    - draw_model: CalibratedClassifierCV wrapper around XGBClassifier for draw prediction; initialized to None until trained/loaded.
+    - win_model: CalibratedClassifierCV wrapper around XGBClassifier for win prediction; initialized to None until trained/loaded.
     - feature_columns: List of feature names used during training/prediction.
     - draw_label_encoder: LabelEncoder for draw outcomes (0=NotDraw, 1=Draw).
     - win_label_encoder: LabelEncoder for win outcomes (0=AwayWin, 1=HomeWin).
@@ -50,8 +51,8 @@ class CascadedPredictor:
             config: Optional configuration object. If not provided, uses `get_config()`.
         """
         self.config = config or get_config()
-        self.draw_model: Optional[XGBClassifier] = None
-        self.win_model: Optional[XGBClassifier] = None
+        self.draw_model: Optional[Union[CalibratedClassifierCV, XGBClassifier]] = None
+        self.win_model: Optional[Union[CalibratedClassifierCV, XGBClassifier]] = None
         self.feature_columns: list[str] = []
         self.console = Console()
 
@@ -222,7 +223,6 @@ class CascadedPredictor:
         # First split: train vs (calibrate+val)
         if 0.0 < val_fraction < 0.5 and len(X_all) >= 20 and len(np.unique(y_draw_arr)) > 1:
             try:
-                from sklearn.model_selection import train_test_split
                 # Split into train and tmp (which will be further split into calibrate+val)
                 train_idx, tmp_idx = train_test_split(
                     np.arange(len(X_all)),
@@ -312,9 +312,8 @@ class CascadedPredictor:
             if verbose:
                 self.console.print("[dim]Calibrating Draw Classifier...[/dim]")
             self.draw_model = CalibratedClassifierCV(
-                base_draw_model, 
-                method='isotonic', 
-                cv='prefit'
+                FrozenEstimator(base_draw_model), 
+                method='isotonic'
             )
             # Fit the calibrator on the calibration set
             Xd_calibrate_safe = Xd_calibrate.drop(columns=["is_draw", "is_home_win"], errors="ignore")
@@ -335,7 +334,7 @@ class CascadedPredictor:
             self.console.print(f"[bold red]Error training Draw Model:[/bold red] {str(e)}")
             raise
 
-        # --- Win model training ---
+        # --- Win model training with calibration ---
         if verbose:
             self.console.print(
                 Panel(
@@ -346,40 +345,63 @@ class CascadedPredictor:
                 )
             )
         try:
-            # Set evaluation metric and logging verbosity
-            self.win_model = XGBClassifier(
-                eval_metric=self.config.model.eval_metric,
-                verbosity=0 if not self.config.model.fit_verbose else 1,
-                **win_params,
-            )
-            # Validation split for non-draw
+            # Prepare win model data
             y_win_arr = np.array(list(y_win))
-            # Encode for fitting (numeric expected)
             y_win_enc = self.win_label_encoder.transform(list(y_win))
-            if 0.0 < val_fraction < 0.5 and len(X_non_draw) >= 10 and len(np.unique(y_win_enc)) > 1:
+            
+            # Create train/calibrate/val splits for win model
+            if 0.0 < val_fraction < 0.5 and len(X_non_draw) >= 20 and len(np.unique(y_win_enc)) > 1:
                 try:
-                    skf_w = StratifiedKFold(n_splits=5, shuffle=True, random_state=int(self.config.model.random_state))
-                    w_train_idx, w_val_idx = next(skf_w.split(X_non_draw, y_win_enc))
+                    # Split into train and tmp (which will be further split into calibrate+val)
+                    w_train_idx, w_tmp_idx = train_test_split(
+                        np.arange(len(X_non_draw)),
+                        test_size=0.4,  # 40% for calibrate+val
+                        stratify=y_win_enc,
+                        random_state=int(self.config.model.random_state)
+                    )
+                    # Now split tmp into calibrate and val
+                    w_tmp_y = y_win_enc[w_tmp_idx]
+                    w_calibrate_idx, w_val_idx = train_test_split(
+                        w_tmp_idx,
+                        test_size=0.5,  # Equal split of the 40% -> 20% each
+                        stratify=w_tmp_y,
+                        random_state=int(self.config.model.random_state)
+                    )
                 except Exception:
+                    # Fallback to simple splits without stratification
                     n_w = len(X_non_draw)
                     val_n_w = int(n_w * val_fraction)
-                    w_train_idx = np.arange(n_w - val_n_w)
+                    calibrate_n_w = int(n_w * val_fraction)
+                    w_train_idx = np.arange(n_w - val_n_w - calibrate_n_w)
+                    w_calibrate_idx = np.arange(n_w - val_n_w - calibrate_n_w, n_w - val_n_w)
                     w_val_idx = np.arange(n_w - val_n_w, n_w)
             else:
+                # No calibration split for small datasets
                 w_train_idx = np.arange(len(X_non_draw))
+                w_calibrate_idx = np.arange(len(X_non_draw))  # Use all data for calibration
                 w_val_idx = np.array([], dtype=int)
 
             Xw_train = X_non_draw.iloc[w_train_idx]
             yw_train = y_win_enc[w_train_idx]
+            Xw_calibrate = X_non_draw.iloc[w_calibrate_idx]
+            yw_calibrate = y_win_enc[w_calibrate_idx]
             Xw_val = X_non_draw.iloc[w_val_idx] if len(w_val_idx) else None
             yw_val = y_win_enc[w_val_idx] if len(w_val_idx) else None
 
+            # Set evaluation metric and logging verbosity for base model
+            base_win_model = XGBClassifier(
+                eval_metric=self.config.model.eval_metric,
+                verbosity=0 if not self.config.model.fit_verbose else 1,
+                **win_params,
+            )
+            
+            # Train base model
+            Xw_train_safe = Xw_train.drop(columns=["is_draw", "is_home_win"], errors="ignore")
             if Xw_val is not None:
+                # Use validation for early stopping during base model training
+                Xw_val_safe = Xw_val.drop(columns=["is_draw", "is_home_win"], errors="ignore")
                 try:
-                    # Defensive: drop target columns if present
-                    Xw_train_safe = Xw_train.drop(columns=["is_draw", "is_home_win"], errors="ignore")
-                    Xw_val_safe = Xw_val.drop(columns=["is_draw", "is_home_win"], errors="ignore")
-                    self.win_model.fit(
+                    base_win_model.fit(
                         Xw_train_safe,
                         yw_train,
                         eval_set=[(Xw_train_safe, yw_train), (Xw_val_safe, yw_val)],
@@ -387,22 +409,30 @@ class CascadedPredictor:
                         verbose=self.config.model.fit_verbose,
                     )
                 except TypeError:
-                    Xw_train_safe = Xw_train.drop(columns=["is_draw", "is_home_win"], errors="ignore")
-                    Xw_val_safe = Xw_val.drop(columns=["is_draw", "is_home_win"], errors="ignore")
-                    self.win_model.fit(
+                    base_win_model.fit(
                         Xw_train_safe,
                         yw_train,
                         eval_set=[(Xw_train_safe, yw_train), (Xw_val_safe, yw_val)],
                         verbose=self.config.model.fit_verbose,
                     )
             else:
-                X_non_draw_safe = X_non_draw.drop(columns=["is_draw", "is_home_win"], errors="ignore")
-                self.win_model.fit(
-                    X_non_draw_safe,
-                    y_win_enc,
-                    eval_set=[(X_non_draw_safe, y_win_enc)],
+                base_win_model.fit(
+                    Xw_train_safe,
+                    yw_train,
+                    eval_set=[(Xw_train_safe, yw_train)],
                     verbose=self.config.model.fit_verbose,
                 )
+            
+            # Wrap in calibration layer
+            if verbose:
+                self.console.print("[dim]Calibrating Win Classifier...[/dim]")
+            self.win_model = CalibratedClassifierCV(
+                FrozenEstimator(base_win_model), 
+                method='isotonic'
+            )
+            # Fit the calibrator on the calibration set
+            Xw_calibrate_safe = Xw_calibrate.drop(columns=["is_draw", "is_home_win"], errors="ignore")
+            self.win_model.fit(Xw_calibrate_safe, yw_calibrate)
             self.training_metrics["win_model"] = {
                 "train_score": float(self.win_model.score(
                     X_non_draw.drop(columns=["is_draw", "is_home_win"], errors="ignore"),
