@@ -828,10 +828,14 @@ def run_tuning_v4_parallel(
 
                 while futures:
                     done, not_done = wait(futures, timeout=0.5)
+                    
+                    # Update progress (best effort, don't block on DB locks)
                     try:
                         s = optuna.load_study(study_name=f"{study_name}_draw", storage=storage_for_optuna)
-                        progress.update(task_draw, completed=min(len(s.trials), int(n_trials)))
+                        n_completed = len(s.trials)
+                        progress.update(task_draw, completed=min(n_completed, int(n_trials)))
                     except Exception:
+                        # Silently skip progress update on DB lock/timeout
                         pass
                     
                     # Process completed futures immediately
@@ -844,6 +848,19 @@ def run_tuning_v4_parallel(
                             failures_draw += 1
                     
                     futures = list(not_done)
+                    
+                    # Safety check: if no futures are done and all might be stuck, check progress
+                    if not done and len(futures) > 0:
+                        try:
+                            # Quick check if we've hit the trial limit
+                            s = optuna.load_study(study_name=f"{study_name}_draw", storage=storage_for_optuna)
+                            if len(s.trials) >= int(n_trials):
+                                # Manually cancel remaining futures
+                                for f in futures:
+                                    f.cancel()
+                                futures = []
+                        except Exception:
+                            pass
 
         dur_draw = time.perf_counter() - start_draw
         study_draw = optuna.load_study(study_name=f"{study_name}_draw", storage=storage_for_optuna)
@@ -993,10 +1010,14 @@ def run_tuning_v4_parallel(
 
                 while futures:
                     done, not_done = wait(futures, timeout=0.5)
+                    
+                    # Update progress (best effort, don't block on DB locks)
                     try:
                         s = optuna.load_study(study_name=f"{study_name}_win", storage=storage_for_optuna)
-                        progress.update(task_win, completed=min(len(s.trials), int(n_trials)))
+                        n_completed = len(s.trials)
+                        progress.update(task_win, completed=min(n_completed, int(n_trials)))
                     except Exception:
+                        # Silently skip progress update on DB lock/timeout
                         pass
                     
                     # Process completed futures immediately
@@ -1009,6 +1030,19 @@ def run_tuning_v4_parallel(
                             failures_win += 1
                     
                     futures = list(not_done)
+                    
+                    # Safety check: if no futures are done and all might be stuck, check progress
+                    if not done and len(futures) > 0:
+                        try:
+                            # Quick check if we've hit the trial limit
+                            s = optuna.load_study(study_name=f"{study_name}_win", storage=storage_for_optuna)
+                            if len(s.trials) >= int(n_trials):
+                                # Manually cancel remaining futures
+                                for f in futures:
+                                    f.cancel()
+                                futures = []
+                        except Exception:
+                            pass
 
         dur_win = time.perf_counter() - start_win
         study_win = optuna.load_study(study_name=f"{study_name}_win", storage=storage_for_optuna)
