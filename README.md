@@ -107,6 +107,21 @@ To produce realistic draw prediction rates while maintaining accuracy, the tunin
 *   Draw rate stability is evaluated across 3 splits of the validation set (by `matchday` or `date`), recording `draw_rate_std` and whether each split falls in `[0.15, 0.30]`.
 *   Study summary includes correlations (`balanced_accuracy` vs `log_loss`, `draw_balance_factor` vs `log_loss`) and draw-rate statistics. Per-trial uncertainty diagnostics capture the correlation between `|predicted_goal_difference|` and `uncertainty_stddev`, along with stddev min/mean/max.
 
+**Installation**
+
+To set up the project with optional plotting (SHAP) and development tools, use a virtual environment and install via `pyproject.toml` extras:
+
+```
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .[plots,dev]
+```
+
+Notes:
+- The `plots` extra includes `shap` for SHAP value analysis.
+- The `dev` extra includes tooling like `ruff`, `mypy`, and `pre-commit`.
+- For Optuna-based hyperparameter tuning, install the `tuning` extra: `pip install -e .[tuning]`.
+
 **E. Running Tuning**
 
 ```
