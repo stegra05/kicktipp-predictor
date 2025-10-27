@@ -157,6 +157,46 @@ def _set_logging_level(level: int) -> None:
     logging.getLogger("kicktipp_predictor").setLevel(level)
 
 
+def _limit_threads(max_threads: int) -> None:
+    """Limit per-process threads to avoid oversubscription.
+
+    Sets common thread-related env vars so libraries like OpenMP, BLAS, and
+    XGBoost respect the cap. Also used so Config picks a safe `n_jobs`.
+    """
+    n = max(1, int(max_threads))
+    for var in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        # XGBoost mostly uses n_jobs param; keep env for good measure
+        "XGB_NUM_THREADS",
+    ):
+        os.environ[var] = str(n)
+
+
+def _resolve_storage_with_timeout(storage_url: str):
+    """Return an Optuna storage object with a friendly SQLite timeout.
+
+    For SQLite URLs, creates RDBStorage with `connect_args={'timeout': 60.0}`
+    to reduce 'database is locked' commit errors under concurrency.
+    Otherwise returns the input URL.
+    """
+    if optuna is None:
+        return storage_url
+    try:
+        if isinstance(storage_url, str) and storage_url.startswith("sqlite:///"):
+            return optuna.storages.RDBStorage(
+                url=storage_url,
+                engine_kwargs={"connect_args": {"timeout": 60.0}},
+            )
+    except Exception:
+        # Fallback to plain URL if RDBStorage construction fails
+        pass
+    return storage_url
+
+
 if __name__ == "__main__":
     # Default quick run for V4 sequential tuning
     run_tuning_v4_sequential()
@@ -303,10 +343,11 @@ def run_tuning_v4_sequential(
             trial.set_user_attr("mean_p_draw", float(np.mean(p_draw)))
             return score  # maximize
 
+        storage_for_optuna = _resolve_storage_with_timeout(storage_url)
         study_draw = optuna.create_study(
             direction="maximize",
             study_name=f"{study_name}_draw",
-            storage=storage_url,
+            storage=storage_for_optuna,
             load_if_exists=True,
         )
         study_draw.optimize(objective_draw, n_trials=int(n_trials), timeout=timeout)
@@ -422,7 +463,7 @@ def run_tuning_v4_sequential(
         study_win = optuna.create_study(
             direction="maximize" if win_metric == "accuracy" else "minimize",
             study_name=f"{study_name}_win",
-            storage=storage_url,
+            storage=storage_for_optuna,
             load_if_exists=True,
         )
         study_win.optimize(objective_win, n_trials=int(n_trials), timeout=timeout)
@@ -488,10 +529,12 @@ def _worker_optimize_draw(
     Returns (n_completed_trials, error_message_if_any).
     """
     _set_logging_level(log_level)
+    _limit_threads(int(os.environ.get("OMP_NUM_THREADS", "1")))
+    storage = _resolve_storage_with_timeout(storage_url)
     study = optuna.create_study(
         direction="maximize",
         study_name=study_name,
-        storage=storage_url,
+        storage=storage,
         load_if_exists=True,
     )
 
@@ -558,10 +601,12 @@ def _worker_optimize_win(
     Returns (n_completed_trials, error_message_if_any).
     """
     _set_logging_level(log_level)
+    _limit_threads(int(os.environ.get("OMP_NUM_THREADS", "1")))
+    storage = _resolve_storage_with_timeout(storage_url)
     study = optuna.create_study(
         direction="maximize" if win_metric == "accuracy" else "minimize",
         study_name=study_name,
-        storage=storage_url,
+        storage=storage,
         load_if_exists=True,
     )
 
@@ -638,10 +683,11 @@ def _bench_sequential(
 
     Returns average seconds per trial.
     """
+    storage = _resolve_storage_with_timeout(storage_url)
     study = optuna.create_study(
         direction=direction,
         study_name=study_name,
-        storage=storage_url,
+        storage=storage,
         load_if_exists=True,
     )
     start = time.perf_counter()
@@ -696,6 +742,11 @@ def run_tuning_v4_parallel(
     w = _compute_workers(workers, n_trials)
     parts = _split_trials(n_trials, w)
 
+    # Limit per-process threads to avoid libgomp thread creation failures
+    tpw = max(1, (os.cpu_count() or 1) // max(1, w))
+    _limit_threads(tpw)
+    storage_for_optuna = _resolve_storage_with_timeout(storage_url)
+
     console.rule("OPTUNA TUNING (Parallel)")
     console.print(
         f"Training seasons: {current_season - seasons_back}..{current_season - 1}\n"
@@ -718,7 +769,7 @@ def run_tuning_v4_parallel(
         optuna.create_study(
             direction="maximize",
             study_name=f"{study_name}_draw",
-            storage=storage_url,
+            storage=storage_for_optuna,
             load_if_exists=True,
         )
 
@@ -778,7 +829,7 @@ def run_tuning_v4_parallel(
                 while futures:
                     done, not_done = wait(futures, timeout=0.5)
                     try:
-                        s = optuna.load_study(study_name=f"{study_name}_draw", storage=storage_url)
+                        s = optuna.load_study(study_name=f"{study_name}_draw", storage=storage_for_optuna)
                         progress.update(task_draw, completed=min(len(s.trials), int(n_trials)))
                     except Exception:
                         pass
@@ -794,26 +845,31 @@ def run_tuning_v4_parallel(
                         failures_draw += 1
 
         dur_draw = time.perf_counter() - start_draw
-        study_draw = optuna.load_study(study_name=f"{study_name}_draw", storage=storage_url)
-        best_draw = study_draw.best_trial
+        study_draw = optuna.load_study(study_name=f"{study_name}_draw", storage=storage_for_optuna)
+        try:
+            best_draw = study_draw.best_trial
+        except Exception as exc:
+            best_draw = None
 
-        params_d = dict(best_draw.params)
-        saved_path = _save_best_params(
-            {
-                "draw_n_estimators": int(params_d.get("draw_n_estimators", cfg_base.model.draw_n_estimators)),
-                "draw_max_depth": int(params_d.get("draw_max_depth", cfg_base.model.draw_max_depth)),
-                "draw_learning_rate": float(params_d.get("draw_learning_rate", cfg_base.model.draw_learning_rate)),
-                "draw_subsample": float(params_d.get("draw_subsample", cfg_base.model.draw_subsample)),
-                "draw_colsample_bytree": float(params_d.get("draw_colsample_bytree", cfg_base.model.draw_colsample_bytree)),
-                "draw_scale_pos_weight": float(params_d.get("draw_scale_pos_weight", cfg_base.model.draw_scale_pos_weight)),
-            }
-        )
+        saved_path = None
+        if best_draw is not None:
+            params_d = dict(best_draw.params)
+            saved_path = _save_best_params(
+                {
+                    "draw_n_estimators": int(params_d.get("draw_n_estimators", cfg_base.model.draw_n_estimators)),
+                    "draw_max_depth": int(params_d.get("draw_max_depth", cfg_base.model.draw_max_depth)),
+                    "draw_learning_rate": float(params_d.get("draw_learning_rate", cfg_base.model.draw_learning_rate)),
+                    "draw_subsample": float(params_d.get("draw_subsample", cfg_base.model.draw_subsample)),
+                    "draw_colsample_bytree": float(params_d.get("draw_colsample_bytree", cfg_base.model.draw_colsample_bytree)),
+                    "draw_scale_pos_weight": float(params_d.get("draw_scale_pos_weight", cfg_base.model.draw_scale_pos_weight)),
+                }
+            )
 
         # Summary table
         tbl = Table(title="Phase 1 Summary", show_lines=False)
         tbl.add_column("Metric")
         tbl.add_column("Value")
-        tbl.add_row("Best score", f"{float(best_draw.value):.4f}")
+        tbl.add_row("Best score", "-" if best_draw is None else f"{float(best_draw.value):.4f}")
         tbl.add_row("Trials completed", f"{len(study_draw.trials)}")
         tbl.add_row("Duration (s)", f"{dur_draw:.2f}")
         if bench_avg_draw is not None:
@@ -837,13 +893,13 @@ def run_tuning_v4_parallel(
                         "study_name": f"{study_name}_draw",
                         "storage": storage_url,
                         "n_trials": len(study_draw.trials),
-                        "best_trial": {
+                        "best_trial": None if best_draw is None else {
                             "number": best_draw.number,
                             "value": float(best_draw.value),
                             "params": best_draw.params,
                             "metric": draw_metric,
                         },
-                        "updated_file": str(saved_path),
+                        "updated_file": None if saved_path is None else str(saved_path),
                         "duration_seconds": float(dur_draw),
                         "workers": int(w),
                     },
@@ -860,7 +916,7 @@ def run_tuning_v4_parallel(
         optuna.create_study(
             direction="maximize" if win_metric == "accuracy" else "minimize",
             study_name=f"{study_name}_win",
-            storage=storage_url,
+            storage=storage_for_optuna,
             load_if_exists=True,
         )
 
@@ -937,7 +993,7 @@ def run_tuning_v4_parallel(
                 while futures:
                     done, not_done = wait(futures, timeout=0.5)
                     try:
-                        s = optuna.load_study(study_name=f"{study_name}_win", storage=storage_url)
+                        s = optuna.load_study(study_name=f"{study_name}_win", storage=storage_for_optuna)
                         progress.update(task_win, completed=min(len(s.trials), int(n_trials)))
                     except Exception:
                         pass
@@ -952,24 +1008,29 @@ def run_tuning_v4_parallel(
                         failures_win += 1
 
         dur_win = time.perf_counter() - start_win
-        study_win = optuna.load_study(study_name=f"{study_name}_win", storage=storage_url)
-        best_win = study_win.best_trial
+        study_win = optuna.load_study(study_name=f"{study_name}_win", storage=storage_for_optuna)
+        try:
+            best_win = study_win.best_trial
+        except Exception:
+            best_win = None
 
-        params_w = dict(best_win.params)
-        saved_path = _save_best_params(
-            {
-                "win_n_estimators": int(params_w.get("win_n_estimators", cfg_base.model.win_n_estimators)),
-                "win_max_depth": int(params_w.get("win_max_depth", cfg_base.model.win_max_depth)),
-                "win_learning_rate": float(params_w.get("win_learning_rate", cfg_base.model.win_learning_rate)),
-                "win_subsample": float(params_w.get("win_subsample", cfg_base.model.win_subsample)),
-                "win_colsample_bytree": float(params_w.get("win_colsample_bytree", cfg_base.model.win_colsample_bytree)),
-            }
-        )
+        saved_path = None
+        if best_win is not None:
+            params_w = dict(best_win.params)
+            saved_path = _save_best_params(
+                {
+                    "win_n_estimators": int(params_w.get("win_n_estimators", cfg_base.model.win_n_estimators)),
+                    "win_max_depth": int(params_w.get("win_max_depth", cfg_base.model.win_max_depth)),
+                    "win_learning_rate": float(params_w.get("win_learning_rate", cfg_base.model.win_learning_rate)),
+                    "win_subsample": float(params_w.get("win_subsample", cfg_base.model.win_subsample)),
+                    "win_colsample_bytree": float(params_w.get("win_colsample_bytree", cfg_base.model.win_colsample_bytree)),
+                }
+            )
 
         tbl = Table(title="Phase 2 Summary", show_lines=False)
         tbl.add_column("Metric")
         tbl.add_column("Value")
-        tbl.add_row("Best score", f"{float(best_win.value):.4f}")
+        tbl.add_row("Best score", "-" if best_win is None else f"{float(best_win.value):.4f}")
         tbl.add_row("Trials completed", f"{len(study_win.trials)}")
         tbl.add_row("Duration (s)", f"{dur_win:.2f}")
         if bench_avg_win is not None:
@@ -992,13 +1053,13 @@ def run_tuning_v4_parallel(
                         "study_name": f"{study_name}_win",
                         "storage": storage_url,
                         "n_trials": len(study_win.trials),
-                        "best_trial": {
+                        "best_trial": None if best_win is None else {
                             "number": best_win.number,
                             "value": float(best_win.value),
                             "params": best_win.params,
                             "metric": win_metric,
                         },
-                        "updated_file": str(saved_path),
+                        "updated_file": None if saved_path is None else str(saved_path),
                         "duration_seconds": float(dur_win),
                         "workers": int(w),
                     },
