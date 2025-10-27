@@ -1,6 +1,11 @@
 import typer
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.rule import Rule
 
 app = typer.Typer(help="Kicktipp Predictor CLI (V4 Cascaded Architecture)")
+console = Console()
 
 
 @app.command()
@@ -19,44 +24,56 @@ def train(
     from kicktipp_predictor.data import DataLoader
     from kicktipp_predictor.predictor import CascadedPredictor
 
-    print("=" * 80)
-    print("TRAINING MATCH PREDICTOR")
-    print("=" * 80)
-    print()
+    console.print(
+        Panel(
+            "[bold cyan]TRAINING MATCH PREDICTOR[/bold cyan]\n"
+            "[dim]Training two binary classifiers in cascade: Draw vs NotDraw, HomeWin vs AwayWin[/dim]",
+            border_style="cyan",
+            expand=False,
+        )
+    )
 
     # Load data
-    print("Loading data...")
+    console.print("[cyan]Loading data...[/cyan]")
     loader = DataLoader()
     current_season = loader.get_current_season()
     start_season = current_season - seasons_back
 
-    print(f"Fetching seasons {start_season} to {current_season}...")
+    console.print(f"[dim]Fetching seasons {start_season} to {current_season}...[/dim]")
     all_matches = loader.fetch_historical_seasons(start_season, current_season)
-    print(f"Loaded {len(all_matches)} matches")
+    console.print(f"[green]✓ Loaded {len(all_matches)} matches[/green]")
 
     # Create features
-    print("Creating features...")
+    console.print("[cyan]Creating features...[/cyan]")
     features_df = loader.create_features_from_matches(all_matches)
-    print(
-        f"Created {len(features_df)} training samples with {len(features_df.columns)} columns"
+    console.print(
+        f"[green]✓ Created {len(features_df)} training samples with {len(features_df.columns)} columns[/green]"
     )
 
     # Train predictor
-    print("\nTraining predictor...")
+    console.print("")
     predictor = CascadedPredictor()
     predictor.train(features_df)
 
     if validate:
-        print("\nRunning cross-validation diagnostics (opt-in)...")
+        console.print("")
+        console.print("[cyan]Running cross-validation diagnostics...[/cyan]")
         predictor.run_cv_diagnostics(features_df)
 
     # Save models
-    print("\nSaving models...")
+    console.print("")
+    console.print("[cyan]Saving models...[/cyan]")
     predictor.save_models()
+    console.print("[green]✓ Models saved successfully[/green]")
 
-    print("\n" + "=" * 80)
-    print("TRAINING COMPLETE")
-    print("=" * 80)
+    console.print("")
+    console.print(
+        Panel(
+            "[bold green]TRAINING COMPLETE[/bold green]",
+            border_style="green",
+            expand=False,
+        )
+    )
 
 
 @app.command()
@@ -71,11 +88,13 @@ def predict(
     from kicktipp_predictor.data import DataLoader
     from kicktipp_predictor.predictor import CascadedPredictor
 
-    print("=" * 80)
-    print("MATCH PREDICTIONS")
-    print("=" * 80)
-    print()
-
+    console.print(
+        Panel(
+            "[bold yellow]MATCH PREDICTIONS[/bold yellow]",
+            border_style="yellow",
+            expand=False,
+        )
+    )
 
     # Load data
     loader = DataLoader()
@@ -83,57 +102,79 @@ def predict(
 
     # Load trained models
     try:
+        console.print("[cyan]Loading trained models...[/cyan]")
         predictor.load_models()
+        console.print("[green]✓ Models loaded successfully[/green]")
     except FileNotFoundError:
-        print("ERROR: No trained models found. Run 'train' command first.")
+        console.print("[bold red]ERROR: No trained models found. Run 'train' command first.[/bold red]")
         raise typer.Exit(code=1)
 
     # Get upcoming matches
     if matchday is not None:
-        print(f"Getting matches for matchday {matchday}...")
+        console.print(f"[dim]Getting matches for matchday {matchday}...[/dim]")
         upcoming_matches = loader.fetch_matchday(matchday)
     else:
-        print(f"Getting upcoming matches (next {days} days)...")
+        console.print(f"[dim]Getting upcoming matches (next {days} days)...[/dim]")
         upcoming_matches = loader.get_upcoming_matches(days=days)
 
     if not upcoming_matches:
-        print("No upcoming matches found.")
+        console.print("[yellow]No upcoming matches found.[/yellow]")
         return
 
-    print(f"Found {len(upcoming_matches)} upcoming matches")
+    console.print(f"[green]✓ Found {len(upcoming_matches)} upcoming matches[/green]")
 
     # Get historical data for context
     current_season = loader.get_current_season()
     historical_matches = loader.fetch_season_matches(current_season)
 
     # Create features
+    console.print("[cyan]Creating prediction features...[/cyan]")
     features_df = loader.create_prediction_features(
         upcoming_matches, historical_matches
     )
 
     if len(features_df) == 0:
-        print("Could not create features (insufficient data). Try a later matchday.")
+        console.print("[red]Could not create features (insufficient data). Try a later matchday.[/red]")
         return
 
     # Make predictions
     predictions = predictor.predict(features_df)
 
-    # Display predictions
-    print("\n" + "=" * 80)
-    print("PREDICTIONS")
-    print("=" * 80)
+    # Display predictions in a table
+    console.print("")
+    table = Table(title="Predictions", show_header=True, header_style="bold magenta")
+    table.add_column("Match", style="cyan", width=30)
+    table.add_column("Score", justify="center")
+    table.add_column("Outcome", justify="center", style="bold")
+    table.add_column("H %", justify="right")
+    table.add_column("D %", justify="right")
+    table.add_column("A %", justify="right")
+    
     for pred in predictions:
-        home = pred["home_team"]
-        away = pred["away_team"]
+        home = pred.get("home_team", "?")
+        away = pred.get("away_team", "?")
+        match_display = f"{home} vs {away}"
         score = f"{pred['predicted_home_score']}-{pred['predicted_away_score']}"
         outcome = pred.get("predicted_outcome") or pred.get("predicted_result")
-
-        print(f"\n{home} vs {away}")
-        print(f"  Predicted Score: {score} ({outcome})")
-        print(
-            f"  Probabilities: H={pred['home_win_probability']:.2%} "
-            f"D={pred['draw_probability']:.2%} A={pred['away_win_probability']:.2%}"
+        
+        # Color the outcome
+        if outcome == "H":
+            outcome_display = f"[green]{outcome}[/green]"
+        elif outcome == "A":
+            outcome_display = f"[red]{outcome}[/red]"
+        else:
+            outcome_display = f"[yellow]{outcome}[/yellow]"
+        
+        table.add_row(
+            match_display,
+            score,
+            outcome_display,
+            f"{pred['home_win_probability']:.1%}",
+            f"{pred['draw_probability']:.1%}",
+            f"{pred['away_win_probability']:.1%}",
         )
+    
+    console.print(table)
 
 
 @app.command()
@@ -148,11 +189,14 @@ def evaluate(
     """
     from kicktipp_predictor.evaluate import run_season_dynamic_evaluation
 
-    print("=" * 80)
-    print("MODEL EVALUATION (Dynamic Season)")
-    print("=" * 80)
-    print()
-
+    console.print(
+        Panel(
+            "[bold blue]MODEL EVALUATION (Dynamic Season)[/bold blue]\n"
+            f"[dim]Retrain every {retrain_every} matchday(s)[/dim]",
+            border_style="blue",
+            expand=False,
+        )
+    )
 
     # Run dynamic season evaluation
     run_season_dynamic_evaluation(retrain_every=retrain_every)
@@ -160,8 +204,17 @@ def evaluate(
 
 @app.command()
 def web(host: str = "127.0.0.1", port: int = 8000):
+    """Start the web application for match predictions."""
     from kicktipp_predictor.web.app import app as flask_app
 
+    console.print(
+        Panel(
+            f"[bold green]Starting web application...[/bold green]\n"
+            f"[dim]Access at: http://{host}:{port}[/dim]",
+            border_style="green",
+            expand=False,
+        )
+    )
     flask_app.run(host=host, port=port)
 
 @app.command()
@@ -199,9 +252,7 @@ def tune(
 
     Supports phase-specific metrics and optional parallel workers.
     """
-    from rich.console import Console
-    console = Console()
-    console.rule("OPTUNA TUNING")
+    console.rule("[bold]OPTUNA TUNING[/bold]")
 
     try:
         # Explicit storage reset control with confirmation

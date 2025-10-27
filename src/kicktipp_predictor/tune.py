@@ -833,16 +833,17 @@ def run_tuning_v4_parallel(
                         progress.update(task_draw, completed=min(len(s.trials), int(n_trials)))
                     except Exception:
                         pass
-                    futures = list(not_done)
-
-                # Collect results
-                for f in done:
-                    try:
-                        n_done, err = f.result()
-                        if err:
+                    
+                    # Process completed futures immediately
+                    for f in done:
+                        try:
+                            n_done, err = f.result()
+                            if err:
+                                failures_draw += 1
+                        except Exception as exc:  # pragma: no cover - defensive
                             failures_draw += 1
-                    except Exception as exc:  # pragma: no cover - defensive
-                        failures_draw += 1
+                    
+                    futures = list(not_done)
 
         dur_draw = time.perf_counter() - start_draw
         study_draw = optuna.load_study(study_name=f"{study_name}_draw", storage=storage_for_optuna)
@@ -997,15 +998,17 @@ def run_tuning_v4_parallel(
                         progress.update(task_win, completed=min(len(s.trials), int(n_trials)))
                     except Exception:
                         pass
-                    futures = list(not_done)
-
-                for f in done:
-                    try:
-                        n_done, err = f.result()
-                        if err:
+                    
+                    # Process completed futures immediately
+                    for f in done:
+                        try:
+                            n_done, err = f.result()
+                            if err:
+                                failures_win += 1
+                        except Exception:
                             failures_win += 1
-                    except Exception:
-                        failures_win += 1
+                    
+                    futures = list(not_done)
 
         dur_win = time.perf_counter() - start_win
         study_win = optuna.load_study(study_name=f"{study_name}_win", storage=storage_for_optuna)
