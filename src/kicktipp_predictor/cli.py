@@ -1,6 +1,6 @@
 import typer
 
-app = typer.Typer(help="Kicktipp Predictor CLI")
+app = typer.Typer(help="Kicktipp Predictor CLI (V4 Cascaded Architecture)")
 
 
 @app.command()
@@ -9,7 +9,12 @@ def train(
         5, help="Number of past seasons to use for training"
     ),
 ):
-    """Train the match predictor on historical data."""
+    """Train the V4 cascaded match predictor on historical data.
+
+    Trains two binary classifiers in cascade:
+    - Draw vs NotDraw (gatekeeper)
+    - HomeWin vs AwayWin (finisher conditioned on NotDraw)
+    """
     from kicktipp_predictor.data import DataLoader
     from kicktipp_predictor.predictor import CascadedPredictor
 
@@ -54,7 +59,10 @@ def predict(
     days: int = typer.Option(7, help="Days ahead to predict"),
     matchday: int | None = typer.Option(None, help="Specific matchday to predict"),
 ):
-    """Make predictions for upcoming matches."""
+    """Make predictions for upcoming matches using the V4 cascaded predictor.
+
+    Produces calibrated H/D/A probabilities by combining draw and win-stage outputs.
+    """
     from kicktipp_predictor.data import DataLoader
     from kicktipp_predictor.predictor import CascadedPredictor
 
@@ -129,7 +137,10 @@ def evaluate(
         1, help="Retrain every N matchdays during dynamic season evaluation"
     )
 ):
-    """Evaluate performance across the current season using expanding-window retraining."""
+    """Evaluate season performance (expanding-window) with the V4 cascaded predictor.
+
+    Retrains periodically and reports accuracy, log_loss, RPS, Brier, and draw-rate realism.
+    """
     from kicktipp_predictor.evaluate import run_season_dynamic_evaluation
 
     print("=" * 80)
@@ -170,28 +181,49 @@ def tune(
         "accuracy",
         help="Phase 2 win metric: accuracy or log_loss",
     ),
+    parallel: bool = typer.Option(False, help="Run tuning in parallel across multiple workers"),
+    workers: int = typer.Option(0, help="Number of parallel workers (0 = auto)"),
+    bench_trials: int = typer.Option(0, help="Optional small sequential benchmark trial count"),
+    log_level: str = typer.Option("warning", help="Logging level: debug/info/warning/error")
 ):
-    """Run Optuna tuning for the V4 CascadedPredictor (sequential draw → win)."""
-    from kicktipp_predictor.tune import run_tuning_v4_sequential
+    """Run Optuna tuning for the V4 cascaded predictor (sequential draw → win).
 
-    print("=" * 80)
-    print("OPTUNA TUNING")
-    print("=" * 80)
-    print()
+    Supports phase-specific metrics and optional parallel workers.
+    """
+    from rich.console import Console
+    console = Console()
+    console.rule("OPTUNA TUNING")
 
     try:
-        run_tuning_v4_sequential(
-            n_trials=n_trials,
-            seasons_back=seasons_back,
-            storage=storage,
-            study_name=study_name,
-            timeout=timeout,
-            model_to_tune=model_to_tune,
-            draw_metric=draw_metric,
-            win_metric=win_metric,
-        )
+        if parallel:
+            from kicktipp_predictor.tune import run_tuning_v4_parallel
+            run_tuning_v4_parallel(
+                n_trials=n_trials,
+                seasons_back=seasons_back,
+                storage=storage,
+                study_name=(study_name if study_name else "v4_cascaded_parallel"),
+                timeout=timeout,
+                model_to_tune=model_to_tune,
+                draw_metric=draw_metric,
+                win_metric=win_metric,
+                workers=(None if workers <= 0 else workers),
+                bench_trials=(None if bench_trials <= 0 else bench_trials),
+                log_level=log_level,
+            )
+        else:
+            from kicktipp_predictor.tune import run_tuning_v4_sequential
+            run_tuning_v4_sequential(
+                n_trials=n_trials,
+                seasons_back=seasons_back,
+                storage=storage,
+                study_name=(study_name if study_name else "v4_cascaded_sequential"),
+                timeout=timeout,
+                model_to_tune=model_to_tune,
+                draw_metric=draw_metric,
+                win_metric=win_metric,
+            )
     except RuntimeError as e:
-        print(f"ERROR: {e}")
+        console.print(f"[red]ERROR[/red]: {e}")
         raise typer.Exit(code=1)
 
 if __name__ == "__main__":

@@ -6,6 +6,17 @@ def test_imports():
     assert CascadedPredictor is not None
 
 
+def test_cascaded_predictor_attrs():
+    from kicktipp_predictor.predictor import CascadedPredictor
+
+    p = CascadedPredictor()
+    # Basic attributes and methods exist
+    assert hasattr(p, "draw_model")
+    assert hasattr(p, "win_model")
+    assert hasattr(p, "train")
+    assert hasattr(p, "predict")
+
+
 def test_cli_help():
     import subprocess
     import sys
