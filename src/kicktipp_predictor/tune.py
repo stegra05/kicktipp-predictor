@@ -298,6 +298,7 @@ def run_tuning_v4_sequential(
         # Define objective for draw-only metric
         def objective_draw(trial: optuna.Trial) -> float:
             cfg = Config.load()
+            cfg.model.n_jobs = 1  # Ensure single-threaded operation
             # Suggest only draw_* params
             cfg.model.draw_n_estimators = trial.suggest_int("draw_n_estimators", 100, 1500)
             cfg.model.draw_max_depth = trial.suggest_int("draw_max_depth", 3, 10)
@@ -406,6 +407,7 @@ def run_tuning_v4_sequential(
 
         def objective_win(trial: optuna.Trial) -> tuple[float, float, float]:
             cfg = Config.load()
+            cfg.model.n_jobs = 1  # Ensure single-threaded operation
             # Fix draw_* to previously saved (cfg_fixed already applied from YAML)
             cfg.model.draw_n_estimators = cfg_fixed.model.draw_n_estimators
             cfg.model.draw_max_depth = cfg_fixed.model.draw_max_depth
@@ -602,6 +604,9 @@ def _worker_optimize_draw(
 
     def objective_draw(trial: optuna.Trial) -> float:
         cfg = Config.load()
+        logging.info(f"Worker PID {os.getpid()}: Config n_jobs={cfg.model.n_jobs}")
+        # Force n_jobs to 1 to ensure single-threaded operation per worker
+        cfg.model.n_jobs = 1
         # draw hyperparams
         cfg.model.draw_n_estimators = trial.suggest_int("draw_n_estimators", 100, 1500)
         cfg.model.draw_max_depth = trial.suggest_int("draw_max_depth", 3, 10)
@@ -681,6 +686,9 @@ def _worker_optimize_win(
 
     def objective_win(trial: optuna.Trial) -> tuple[float, float, float]:
         cfg = Config.load()
+        logging.info(f"Worker PID {os.getpid()}: Config n_jobs={cfg.model.n_jobs}")
+        # Force n_jobs to 1 to ensure single-threaded operation per worker
+        cfg.model.n_jobs = 1
         # fix draw params
         cfg.model.draw_n_estimators = cfg_fixed.model.draw_n_estimators
         cfg.model.draw_max_depth = cfg_fixed.model.draw_max_depth
