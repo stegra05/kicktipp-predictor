@@ -184,7 +184,11 @@ def tune(
     parallel: bool = typer.Option(False, help="Run tuning in parallel across multiple workers"),
     workers: int = typer.Option(0, help="Number of parallel workers (0 = auto)"),
     bench_trials: int = typer.Option(0, help="Optional small sequential benchmark trial count"),
-    log_level: str = typer.Option("warning", help="Logging level: debug/info/warning/error")
+    log_level: str = typer.Option("warning", help="Logging level: debug/info/warning/error"),
+    reset_storage: bool = typer.Option(
+        False,
+        help="Reset Optuna storage before tuning (WARNING: This will delete existing studies)",
+    ),
 ):
     """Run Optuna tuning for the V4 cascaded predictor (sequential draw → win).
 
@@ -195,6 +199,10 @@ def tune(
     console.rule("OPTUNA TUNING")
 
     try:
+        # Explicit storage reset control with confirmation
+        if reset_storage:
+            console.print("[yellow]WARNING:[/yellow] Resetting storage will [bold]delete[/bold] existing Optuna studies.")
+            typer.confirm("Proceed with storage reset?", abort=True)
         if parallel:
             from kicktipp_predictor.tune import run_tuning_v4_parallel
             run_tuning_v4_parallel(
@@ -209,6 +217,7 @@ def tune(
                 workers=(None if workers <= 0 else workers),
                 bench_trials=(None if bench_trials <= 0 else bench_trials),
                 log_level=log_level,
+                reset_storage=reset_storage,
             )
         else:
             from kicktipp_predictor.tune import run_tuning_v4_sequential
@@ -221,6 +230,7 @@ def tune(
                 model_to_tune=model_to_tune,
                 draw_metric=draw_metric,
                 win_metric=win_metric,
+                reset_storage=reset_storage,
             )
     except RuntimeError as e:
         console.print(f"[red]ERROR[/red]: {e}")

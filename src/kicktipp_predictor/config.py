@@ -92,22 +92,6 @@ def _apply_model_params_from_dict(config: "Config", params: dict[str, Any]) -> N
         "random_state": int,
         "n_jobs": int,
         "selected_features_file": str,
-        # --- Legacy V3 Goal Difference Regressor ---
-        "gd_n_estimators": int,
-        "gd_max_depth": int,
-        "gd_learning_rate": float,
-        "gd_subsample": float,
-        "gd_colsample_bytree": float,
-        "gd_reg_lambda": float,
-        "gd_min_child_weight": float,
-        "gd_gamma": float,
-        "gd_early_stopping_rounds": int,
-        "gd_uncertainty_stddev": float,
-        "gd_uncertainty_base_stddev": float,
-        "gd_uncertainty_scale": float,
-        "gd_uncertainty_min_stddev": float,
-        "gd_uncertainty_max_stddev": float,
-        "gd_score_alpha": float,
         # --- V4 Cascaded Model: Draw Classifier ---
         "draw_n_estimators": int,
         "draw_max_depth": int,
@@ -149,13 +133,19 @@ def _apply_model_params_from_dict(config: "Config", params: dict[str, Any]) -> N
         "fit_verbose": bool,
     }
 
-    for key, caster in casts.items():
-        if key in params:
-            try:
-                value = caster(params[key])
-                setattr(config.model, key, value)
-            except Exception as exc:  # pragma: no cover - robust error path
-                warnings.warn(f"Invalid value for '{key}': {exc}")
+    # Apply known keys; warn and ignore legacy/unknown
+    for key, value in params.items():
+        if key.startswith("gd_"):
+            warnings.warn(f"Ignoring legacy V3 key '{key}' in config YAML.")
+            continue
+        caster = casts.get(key)
+        if caster is None:
+            warnings.warn(f"Unknown config key '{key}' in YAML; skipping.")
+            continue
+        try:
+            setattr(config.model, key, caster(value))
+        except Exception as exc:  # pragma: no cover - robust error path
+            warnings.warn(f"Invalid value for '{key}': {exc}")
 
 # === Paths ===
 @dataclass

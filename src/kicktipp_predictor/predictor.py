@@ -52,6 +52,9 @@ class CascadedPredictor:
         self.win_label_encoder = LabelEncoder()
         # Training metrics container
         self.training_metrics: dict[str, dict] = {}
+        # Deterministic mapping for predict_proba columns
+        # {'draw_positive': idx, 'win_home': idx, 'win_away': idx}
+        self.class_index_map: dict[str, int] = {}
 
     def _prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Prepare feature matrix from input DataFrame.
@@ -82,6 +85,41 @@ class CascadedPredictor:
                 raise ValueError("No usable feature columns found.")
         X = df.reindex(columns=self.feature_columns).fillna(0.0)
         return X
+
+    def _prepare_targets(self, df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, np.ndarray]:
+        """Prepare target variables for cascaded training.
+
+        Validates input and constructs:
+        - 'is_draw' for all rows (1 if result == 'D')
+        - 'is_home_win' for non-draw rows (1 if result == 'H')
+
+        Returns (df_with_targets, y_draw_series, y_win_array_of_str).
+        """
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            raise ValueError("Input must be a non-empty pandas DataFrame.")
+        if "result" not in df.columns:
+            raise ValueError("DataFrame must include a 'result' column.")
+
+        df = df.copy()
+        res = df["result"].astype(str).str.upper()
+        valid = {"H", "D", "A"}
+        if (~res.isin(valid)).any():
+            raise ValueError("Invalid values in 'result'; expected only 'H','D','A'.")
+
+        df["is_draw"] = (res == "D").astype(int)
+        y_draw = df["is_draw"].astype(int)
+
+        non_draw_mask = df["is_draw"] == 0
+        df_nd = df.loc[non_draw_mask].copy()
+        if df_nd.empty:
+            raise ValueError("No non-draw samples available to train win classifier.")
+        df_nd.loc[:, "is_home_win"] = (df_nd["result"] == "H").astype(int)
+        y_win = np.where(df_nd["is_home_win"].astype(int) == 1, "H", "A")
+
+        # Merge back is_home_win for completeness
+        df.loc[df_nd.index, "is_home_win"] = df_nd["is_home_win"].values
+
+        return df, y_draw, y_win
 
     def train(self, matches_df: pd.DataFrame) -> None:
         """Train the two-stage cascaded classifiers with in-method data preparation.
@@ -120,29 +158,14 @@ class CascadedPredictor:
             raise ValueError(f"Insufficient training samples: {len(df)} < {min_n}")
 
         # --- Target preparation ---
-        # 1) Draw target
-        df["is_draw"] = (df["result"] == "D").astype(int)
-        # Reflect new target column in the original input (non-destructive for other rows)
+        df, y_draw, y_win = self._prepare_targets(df)
+        # Reflect targets back to original dataframe view (best-effort)
         try:
             matches_df.loc[df.index, "is_draw"] = df["is_draw"].values
+            if "is_home_win" in df.columns:
+                matches_df.loc[df.index, "is_home_win"] = df["is_home_win"].values
         except Exception:
             pass
-        y_draw = df["is_draw"].astype(int)
-
-        # 2) Win target on non-draw subset
-        non_draw_mask = df["is_draw"] == 0
-        # Work on a copy to avoid SettingWithCopyWarning when creating targets
-        df_nd = df.loc[non_draw_mask].copy()
-        if df_nd.empty:
-            raise ValueError("No non-draw samples available to train win classifier.")
-        df_nd.loc[:, "is_home_win"] = (df_nd["result"] == "H").astype(int)
-        # Reflect new target column in the original input on non-draw rows
-        try:
-            matches_df.loc[df_nd.index, "is_home_win"] = df_nd["is_home_win"].values
-        except Exception:
-            pass
-        # Map to label strings for encoder ['A','H']
-        y_win = np.where(df_nd["is_home_win"].astype(int) == 1, "H", "A")
 
         # --- Feature preparation ---
         X_all = self._prepare_features(df)
@@ -166,10 +189,11 @@ class CascadedPredictor:
             sample_weight_all = None
 
         # --- Label encoders ---
-        # Draw: explicit [0,1]
+        # Explicit ordering ensures deterministic mapping (positive class index = 1)
         self.draw_label_encoder.fit([0, 1])
-        # Win: explicit ['A','H'] for away/home win classes
         self.win_label_encoder.fit(["A", "H"])
+        # Predefine class index mapping (avoid runtime reliance on model.classes_)
+        self.class_index_map = {"draw_positive": 1, "win_home": 1, "win_away": 0}
 
         # --- Initialize classifiers ---
         draw_params = dict(self.config.model.draw_params)
@@ -411,24 +435,26 @@ class CascadedPredictor:
         # 2. Draw probabilities
         print("Calculating Draw probabilities...")
         draw_proba = self.draw_model.predict_proba(X)
-        # Map encoder label to index within model classes_
-        try:
-            draw_label = int(self.draw_label_encoder.transform([1])[0])
-            draw_class_index = int(np.where(self.draw_model.classes_ == draw_label)[0][0])
-        except Exception:
-            # Fallback to assuming label '1' is positive class
-            draw_class_index = int(np.where(self.draw_model.classes_ == 1)[0][0])
+        draw_class_index = int(self.class_index_map.get("draw_positive", 1))
+        if draw_class_index < 0 or draw_class_index >= draw_proba.shape[1]:
+            # Fallback to encoder/classes_ mapping if available
+            try:
+                draw_label = int(self.draw_label_encoder.transform([1])[0])
+                draw_class_index = int(np.where(getattr(self.draw_model, "classes_", np.array([0, 1])) == draw_label)[0][0])
+            except Exception:
+                draw_class_index = 1
         p_draw = draw_proba[:, draw_class_index]
 
         # 3. Win probabilities
         print("Calculating conditional Win probabilities...")
         win_proba = self.win_model.predict_proba(X)
-        # Identify 'H' class index via encoder mapping
-        try:
-            h_label = int(self.win_label_encoder.transform(["H"])[0])
-            home_class_index = int(np.where(self.win_model.classes_ == h_label)[0][0])
-        except Exception:
-            home_class_index = int(np.where(self.win_model.classes_ == 1)[0][0])
+        home_class_index = int(self.class_index_map.get("win_home", 1))
+        if home_class_index < 0 or home_class_index >= win_proba.shape[1]:
+            try:
+                h_label = int(self.win_label_encoder.transform(["H"])[0])
+                home_class_index = int(np.where(getattr(self.win_model, "classes_", np.array([0, 1])) == h_label)[0][0])
+            except Exception:
+                home_class_index = 1
         p_home_given_not_draw = win_proba[:, home_class_index]
 
         # 4. Combine probabilities via law of total probability
@@ -521,6 +547,7 @@ class CascadedPredictor:
             "feature_columns": list(self.feature_columns),
             "draw_label_encoder": self.draw_label_encoder,
             "win_label_encoder": self.win_label_encoder,
+            "class_index_map": dict(self.class_index_map),
         }
         try:
             joblib.dump(metadata, out_path / "metadata_v4.joblib")
@@ -573,6 +600,12 @@ class CascadedPredictor:
                     raise RuntimeError("Missing label encoders in metadata.")
                 self.draw_label_encoder = dle
                 self.win_label_encoder = wle
+                cim = metadata.get("class_index_map")
+                if isinstance(cim, dict):
+                    self.class_index_map = {k: int(v) for k, v in cim.items() if k in ("draw_positive", "win_home", "win_away")}
+                else:
+                    # Default deterministic mapping
+                    self.class_index_map = {"draw_positive": 1, "win_home": 1, "win_away": 0}
             except Exception as exc:
                 raise RuntimeError(f"Failed to load v4 metadata: {exc}")
         else:

@@ -1,16 +1,3 @@
-gd_n_estimators: 778
-gd_max_depth: 10
-gd_learning_rate: 0.07328949124395477
-gd_subsample: 0.6919374176393597
-gd_reg_lambda: 1.636815215175683e-06
-gd_min_child_weight: 0.236895578099816
-gd_colsample_bytree: 0.9927062034393075
-gd_gamma: 0.0
-gd_uncertainty_stddev: 1.9280697470484418
-gd_uncertainty_base_stddev: 1.9280697470484418
-gd_uncertainty_scale: 0.0
-gd_uncertainty_min_stddev: 0.2
-gd_uncertainty_max_stddev: 4.0
 draw_margin: 0.6900411581135488
 draw_n_estimators: 362
 draw_max_depth: 9

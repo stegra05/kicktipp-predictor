@@ -216,6 +216,7 @@ def run_tuning_v4_sequential(
     model_to_tune: str = "both",  # 'draw' | 'win' | 'both'
     draw_metric: str = "roc_auc",  # 'roc_auc' | 'f1'
     win_metric: str = "accuracy",  # 'accuracy' | 'log_loss'
+    reset_storage: bool = False,
 ) -> None:
     """Sequential tuning for V4 CascadedPredictor.
 
@@ -235,11 +236,12 @@ def run_tuning_v4_sequential(
     default_storage = f"sqlite:///{cfg_base.paths.data_dir / 'optuna_studies.db'}"
     storage_url = storage or default_storage
 
-    # Reset storage before each run for reproducibility
-    try:
-        _reset_optuna_storage(storage_url)
-    except Exception as exc:
-        raise RuntimeError(f"Database reset failed: {exc}")
+    # Optional storage reset for reproducibility (explicitly controlled)
+    if reset_storage:
+        try:
+            _reset_optuna_storage(storage_url)
+        except Exception as exc:
+            raise RuntimeError(f"Database reset failed: {exc}")
 
     # ---------------------- Phase 1: Draw Tuning ----------------------
     if model_to_tune in ("draw", "both"):
@@ -660,6 +662,7 @@ def run_tuning_v4_parallel(
     workers: Optional[int] = None,
     bench_trials: Optional[int] = None,
     log_level: str = "warning",
+    reset_storage: bool = False,
 ) -> None:
     """Parallel tuning for V4 CascadedPredictor using multiple workers.
 
@@ -685,8 +688,9 @@ def run_tuning_v4_parallel(
     default_storage = f"sqlite:///{cfg_base.paths.data_dir / 'optuna_studies.db'}"
     storage_url = storage or default_storage
 
-    # Reset storage for reproducibility
-    _reset_optuna_storage(storage_url)
+    # Optional storage reset for reproducibility
+    if reset_storage:
+        _reset_optuna_storage(storage_url)
 
     # Compute workers and split trials
     w = _compute_workers(workers, n_trials)
