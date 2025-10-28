@@ -378,8 +378,39 @@ def create_objective_function(
             pred_home_scores = [int(s[0]) for s in scoreline_preds]
             pred_away_scores = [int(s[1]) for s in scoreline_preds]
 
-            actual_home_scores = val_df["home_score"].astype(int).tolist()
-            actual_away_scores = val_df["away_score"].astype(int).tolist()
+            # Ensure actual scores are available; if missing, reconstruct via DataLoader
+            local_val = val_df.copy()
+            if ("home_score" not in local_val.columns) or ("away_score" not in local_val.columns):
+                try:
+                    dl = DataLoader()
+                    season_now = dl.get_current_season()
+                    matches_now = dl.fetch_season_matches(season_now)
+                    vm2 = pd.DataFrame(matches_now)
+                    vm2["match_id"] = vm2.get("match_id").astype(str)
+                    local_val["match_id"] = local_val["match_id"].astype(str)
+                    local_val = local_val.merge(
+                        vm2[["match_id", "home_score", "away_score"]],
+                        on="match_id",
+                        how="left",
+                    )
+                except Exception:
+                    pass
+
+            if ("home_score" not in local_val.columns) or ("away_score" not in local_val.columns):
+                # Fallback: cannot compute true PPG without scores. Use 2-point outcome scoring.
+                act_outcomes = local_val["result"].astype(str).tolist()
+                pred_outcomes = np.where(
+                    proba[:, 1] >= np.maximum(proba[:, 0], proba[:, 2]),
+                    "D",
+                    np.where(proba[:, 0] >= proba[:, 2], "H", "A"),
+                )
+                points = np.where(np.array(act_outcomes) == pred_outcomes, 2, 0)
+                ppg = float(np.mean(points))
+            else:
+                actual_home_scores = local_val["home_score"].astype(int).tolist()
+                actual_away_scores = local_val["away_score"].astype(int).tolist()
+                points = compute_points(pred_home_scores, pred_away_scores, actual_home_scores, actual_away_scores)
+                ppg = float(np.mean(points))
 
             points = compute_points(pred_home_scores, pred_away_scores, actual_home_scores, actual_away_scores)
             ppg = float(np.mean(points))
