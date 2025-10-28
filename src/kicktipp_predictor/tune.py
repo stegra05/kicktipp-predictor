@@ -556,7 +556,6 @@ def _worker_optimize_draw(
     env_omp = os.environ.get("OMP_NUM_THREADS", "NOT_SET")
     logging.info(f"Worker PID {os.getpid()}: OMP_NUM_THREADS={env_omp}")
     _limit_threads(int(env_omp) if env_omp != "NOT_SET" else 1)
-    logging.info(f"Worker PID {os.getpid()}: Set thread limits")
     _set_logging_level(log_level)
     storage = _resolve_storage_with_timeout(storage_url)
     
@@ -613,7 +612,6 @@ def _worker_optimize_win(
     # CRITICAL: Set thread limits FIRST, before any library initialization
     # This prevents OpenMP from creating too many threads
     env_omp = os.environ.get("OMP_NUM_THREADS", "NOT_SET")
-    logging.info(f"Worker PID {os.getpid()}: OMP_NUM_THREADS={env_omp}")
     _limit_threads(int(env_omp) if env_omp != "NOT_SET" else 1)
     logging.info(f"Worker PID {os.getpid()}: Set thread limits")
     _set_logging_level(log_level)
