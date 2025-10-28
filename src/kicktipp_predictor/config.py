@@ -9,7 +9,7 @@ import os
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Tuple, List
 
 try:
     import yaml  # type: ignore
@@ -282,6 +282,31 @@ class ModelConfig:
 
     # Feature selection file (optional)
     selected_features_file: str = "kept_features.yaml"
+
+    # --- Scoreline heuristic configuration ---
+    # Bins are (lower_bound, (home_goals, away_goals)); evaluated in descending order
+    heuristic_home_win_bins: List[Tuple[float, Tuple[int, int]]] = field(
+        default_factory=lambda: [
+            (0.75, (3, 0)),
+            (0.65, (2, 0)),
+            (0.55, (3, 1)),
+            (0.0, (2, 1)),
+        ]
+    )
+    heuristic_away_win_bins: List[Tuple[float, Tuple[int, int]]] = field(
+        default_factory=lambda: [
+            (0.75, (0, 3)),
+            (0.65, (0, 2)),
+            (0.55, (1, 3)),
+            (0.0, (1, 2)),
+        ]
+    )
+    heuristic_draw_bins: List[Tuple[float, Tuple[int, int]]] = field(
+        default_factory=lambda: [
+            (0.5, (0, 0)),
+            (0.0, (1, 1)),
+        ]
+    )
 
     # --- Optional: Neural network training defaults ---
     # These parameters are provided to support potential NN-based models.

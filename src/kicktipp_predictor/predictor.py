@@ -565,6 +565,28 @@ class CascadedPredictor:
 
         return metrics
 
+    def _get_scoreline_from_probs(self, probs: np.ndarray) -> tuple[int, int]:
+        """Map outcome probabilities to a concrete scoreline using config bins.
+
+        The bins are evaluated in descending threshold order within the chosen outcome.
+        """
+        p_h, p_d, p_a = float(probs[0]), float(probs[1]), float(probs[2])
+        outcome_idx = int(np.argmax(probs))
+
+        if outcome_idx == 0:  # Home win
+            for threshold, score in sorted(self.config.model.heuristic_home_win_bins, reverse=True):
+                if p_h > float(threshold):
+                    return int(score[0]), int(score[1])
+        elif outcome_idx == 1:  # Draw
+            for threshold, score in sorted(self.config.model.heuristic_draw_bins, reverse=True):
+                if p_d > float(threshold):
+                    return int(score[0]), int(score[1])
+        else:  # Away win
+            for threshold, score in sorted(self.config.model.heuristic_away_win_bins, reverse=True):
+                if p_a > float(threshold):
+                    return int(score[0]), int(score[1])
+        return 1, 1
+
     def predict(self, X_test: pd.DataFrame, verbose: bool = True) -> list[dict]:
         """Make predictions using two-stage probability combination.
 
@@ -665,18 +687,11 @@ class CascadedPredictor:
                     pred[key] = row.get(key)
             results.append(pred)
 
-        # --- Deterministic scoreline heuristic (production-ready baseline) ---
-        # Maps predicted outcome to a plausible scoreline deterministically.
-        scoreline_map: dict[str, tuple[int, int]] = {
-            "H": (2, 1),
-            "D": (1, 1),
-            "A": (1, 2),
-        }
-        for r in results:
-            outcome = str(r.get("predicted_outcome", "D"))
-            home_score, away_score = scoreline_map.get(outcome, (1, 1))
-            r["predicted_home_score"] = int(home_score)
-            r["predicted_away_score"] = int(away_score)
+        # --- Scoreline heuristic from configuration ---
+        for i, r in enumerate(results):
+            score_h, score_a = self._get_scoreline_from_probs(final_probs[i])
+            r["predicted_home_score"] = int(score_h)
+            r["predicted_away_score"] = int(score_a)
 
         return results
 

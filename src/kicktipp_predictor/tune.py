@@ -32,7 +32,7 @@ from rich.table import Table
 
 from .config import Config, get_config
 from .data import DataLoader
-from .metrics import ProbabilityMetrics, ConfusionMetrics
+from .metrics import ProbabilityMetrics, ConfusionMetrics, compute_points
 from .predictor import CascadedPredictor
 from sklearn.metrics import roc_auc_score, f1_score
 
@@ -67,7 +67,7 @@ def _prepare_datasets(seasons_back: int) -> tuple[pd.DataFrame, pd.DataFrame, Da
         "H",
         np.where(vm.loc[mask, "goal_difference"] < 0, "A", "D"),
     )
-    val_match_results = vm.loc[mask, ["match_id", "result", "goal_difference"]]
+    val_match_results = vm.loc[mask, ["match_id", "result", "goal_difference", "home_score", "away_score"]]
     val_df["match_id"] = val_df["match_id"].astype(str)
     val_df = val_df.merge(val_match_results, on="match_id", how="left")
     # Evaluate only finished matches with known labels
@@ -368,18 +368,32 @@ def create_objective_function(
             # 2. Log Loss
             log_loss = float(ProbabilityMetrics.log_loss_multiclass(y_true, proba))
             
-            # 3. Draw Rate Error
-            actual_draw_rate = 0.25  # Target draw rate
-            pred_labels = np.argmax(proba, axis=1)
-            predicted_draw_rate = np.mean(pred_labels == 1)
-            draw_rate_error = abs(predicted_draw_rate - actual_draw_rate)
+            # 3. PPG via scoreline heuristic
+            # Ensure predictor uses current cfg heuristic bins
+            predictor.config.model.heuristic_home_win_bins = cfg.model.heuristic_home_win_bins
+            predictor.config.model.heuristic_away_win_bins = cfg.model.heuristic_away_win_bins
+            predictor.config.model.heuristic_draw_bins = cfg.model.heuristic_draw_bins
+
+            scoreline_preds = [predictor._get_scoreline_from_probs(p) for p in proba]
+            pred_home_scores = [int(s[0]) for s in scoreline_preds]
+            pred_away_scores = [int(s[1]) for s in scoreline_preds]
+
+            actual_home_scores = val_df["home_score"].astype(int).tolist()
+            actual_away_scores = val_df["away_score"].astype(int).tolist()
+
+            points = compute_points(pred_home_scores, pred_away_scores, actual_home_scores, actual_away_scores)
+            ppg = float(np.mean(points))
             
             # Store for analysis
             trial.set_user_attr("accuracy", accuracy)
             trial.set_user_attr("log_loss", log_loss)
+            # Keep draw rate for analysis
+            pred_labels = np.argmax(proba, axis=1)
+            predicted_draw_rate = float(np.mean(pred_labels == 1))
             trial.set_user_attr("predicted_draw_rate", predicted_draw_rate)
+            trial.set_user_attr("ppg", ppg)
             
-            return accuracy, log_loss, draw_rate_error
+            return accuracy, log_loss, ppg
         
         return objective
     
@@ -578,7 +592,7 @@ def _worker_optimize_win(
     # Simply load the study - it should already exist from main process
     # Use load_if_exists to avoid race conditions with many workers
     study = optuna.create_study(
-        directions=["maximize", "minimize", "minimize"],
+        directions=["maximize", "minimize", "maximize"],
         study_name=study_name,
         storage=storage,
         sampler=sampler,
@@ -920,11 +934,11 @@ def run_tuning_v4_parallel(
         try:
             existing_study = optuna.load_study(study_name=f"{study_name}_win", storage=storage_for_optuna)
             directions = existing_study.directions
-            if len(directions) != 3 or directions != [optuna.study.StudyDirection.MAXIMIZE, optuna.study.StudyDirection.MINIMIZE, optuna.study.StudyDirection.MINIMIZE]:
+            if len(directions) != 3 or directions != [optuna.study.StudyDirection.MAXIMIZE, optuna.study.StudyDirection.MINIMIZE, optuna.study.StudyDirection.MAXIMIZE]:
                 console.print(f"[yellow]Warning: Existing study has incorrect directions. Deleting and recreating with multi-objective directions.[/yellow]")
                 optuna.delete_study(study_name=f"{study_name}_win", storage=storage_for_optuna)
                 optuna.create_study(
-                    directions=["maximize", "minimize", "minimize"],
+                    directions=["maximize", "minimize", "maximize"],
                     study_name=f"{study_name}_win",
                     storage=storage_for_optuna,
                     sampler=sampler_win,
@@ -936,7 +950,7 @@ def run_tuning_v4_parallel(
             # Study doesn't exist, create it
             console.print(f"[cyan]Creating new multi-objective study.[/cyan]")
             optuna.create_study(
-                directions=["maximize", "minimize", "minimize"],
+                directions=["maximize", "minimize", "maximize"],
                 study_name=f"{study_name}_win",
                 storage=storage_for_optuna,
                 sampler=sampler_win,
@@ -1070,30 +1084,25 @@ def run_tuning_v4_parallel(
             console.print(f"  Trial states: {state_counts}")
             return
         
-        # Multi-objective selection: filter by realistic draw rate, then select highest accuracy
+        # Multi-objective selection: prioritize PPG with sanity accuracy filter
         pareto_front = study_win.best_trials
         
-        # 1. Filter for a realistic draw rate (between 15% and 35%)
-        realistic_trials = [
-            t for t in pareto_front
-            if 0.15 <= t.user_attrs.get("predicted_draw_rate", 0.0) <= 0.35
-        ]
-        
-        if not realistic_trials:
-            console.print("[yellow]Warning: No trials in the Pareto front met the draw rate criteria (15%-35%). Falling back to all Pareto trials.[/yellow]")
-            realistic_trials = pareto_front
-            
-        if not realistic_trials:
+        # 1. Optional sanity filter for minimum acceptable accuracy
+        sane_trials = [t for t in pareto_front if t.values and len(t.values) >= 1 and float(t.values[0]) > 0.38]
+        if not sane_trials:
+            sane_trials = pareto_front
+
+        if not sane_trials:
             console.print("[bold red]Error: No completed trials to select from. Aborting.[/bold red]")
             return
         
-        # 2. Select the best trial from the filtered set based on the primary objective (accuracy)
+        # 2. Select by highest PPG (objective index 2)
         try:
-            best_win = max(realistic_trials, key=lambda t: t.values[0])
+            best_win = max(sane_trials, key=lambda t: float(t.values[2]) if (t.values and len(t.values) >= 3) else -1e9)
             console.print(f"\n[green]Selected Trial #{best_win.number} from the Pareto front.[/green]")
             console.print(f"  Accuracy: {best_win.values[0]:.4f}")
             console.print(f"  Log Loss: {best_win.values[1]:.4f}")
-            console.print(f"  Draw Rate Error: {best_win.values[2]:.4f}")
+            console.print(f"  PPG: {best_win.values[2]:.4f}")
             console.print(f"  Predicted Draw Rate: {best_win.user_attrs.get('predicted_draw_rate', 0.0):.2%}")
         except Exception:
             best_win = None
@@ -1117,6 +1126,7 @@ def run_tuning_v4_parallel(
     if best_win is not None:
         tbl.add_row("Accuracy", f"[green]{best_win.user_attrs.get('accuracy', 0.0):.4f}[/green]")
         tbl.add_row("Log Loss", f"[yellow]{best_win.user_attrs.get('log_loss', 0.0):.4f}[/yellow]")
+        tbl.add_row("PPG", f"[green]{best_win.user_attrs.get('ppg', best_win.values[2] if best_win.values and len(best_win.values) >= 3 else 0.0):.4f}[/green]")
         tbl.add_row("Pred. Draw Rate", f"[cyan]{best_win.user_attrs.get('predicted_draw_rate', 0.0):.2%}[/cyan]")
     tbl.add_row("Trials", f"{len(study_win.trials)}")
     tbl.add_row("Duration", f"[cyan]{dur_win:.1f}s[/cyan]")
@@ -1145,7 +1155,7 @@ def run_tuning_v4_parallel(
                         "values": best_win.values if hasattr(best_win, 'values') else None,
                         "accuracy": float(best_win.user_attrs.get("accuracy", 0.0)),
                         "log_loss": float(best_win.user_attrs.get("log_loss", 0.0)),
-                        "draw_rate_error": float(best_win.values[2]) if hasattr(best_win, 'values') and len(best_win.values) >= 3 else None,
+                        "ppg": float(best_win.values[2]) if hasattr(best_win, 'values') and len(best_win.values) >= 3 else None,
                         "predicted_draw_rate": float(best_win.user_attrs.get("predicted_draw_rate", 0.0)),
                         "params": best_win.params,
                         "multi_objective": True,
