@@ -1,4 +1,4 @@
-### Analysis and Blueprint for the Kicktipp Predictor V3 Architecture
+### Kicktipp Predictor — Final V3 Champion Architecture
 
 **Installation**
 
@@ -17,9 +17,7 @@ pip install -e .[plots,dev]
 
 #### Executive Summary
 
-The project is undergoing a strategic pivot. Analysis of the V2 architecture revealed that despite its sophistication, it had reached a performance ceiling, often producing biased or low-accuracy results. The complexity of its multi-model pipeline (outcome classifier, two goal regressors, blending logic) created multiple points of failure and made true optimization difficult.
-
-The new V3 architecture represents a radical simplification designed to overcome these fundamental issues. We are moving from a complex, multi-class classification approach to a more elegant and powerful **ordinal regression framework.** The core of the project will be a single, focused model trained to predict **goal difference**. This change better reflects the nature of the problem, solves inherent class imbalance issues, and provides a much stronger foundation for achieving high accuracy.
+This repository now ships the final, production-ready V3 champion model. V3 centers on a single goal-difference regressor with a probabilistic bridge for H/D/A and a tuned, tiered scoreline heuristic that acts as a strong winner-picker.
 
 ---
 
@@ -34,7 +32,7 @@ Our decision to rebuild is rooted in a clear understanding of the previous archi
 
 ---
 
-#### 2. The New V3 Architecture: A Blueprint for "Goal Difference Regression"
+#### 1. Final V3 Architecture: Goal Difference Regression
 
 The V3 architecture is built on a single, powerful premise: **the most direct path to predicting the outcome is to predict the goal difference.**
 
@@ -56,7 +54,7 @@ A raw goal difference prediction (e.g., `+0.67`) is not enough; we need H/D/A pr
     *   Otherwise → Draw
     *(Note: The `0.5` boundary is a sensible starting point but can be tuned).*
 
-2.  **Definitive Implementation (Probabilistic Translation):** The core innovation is to treat the regressor's output not as a point estimate, but as the *mean* (`μ`) of a probability distribution. This acknowledges the uncertainty in the prediction. We then calculate the probabilities by integrating over the relevant parts of the distribution.
+2.  **Definitive Implementation (Probabilistic Translation):** The regressor's output is treated as the *mean* (μ) of a Normal distribution. We compute H/D/A via CDF integration, with calibrated σ and draw-margin.
 
     *   **Distribution Choice:** We can use a Normal distribution (`scipy.stats.norm`) or, more appropriately, a Skellam distribution (`scipy.stats.skellam`), which models the difference between two Poisson variables.
     *   **Calculation:**
@@ -74,7 +72,44 @@ This is a strategic rebuild, not a complete rewrite. We will retain the high-qua
 
 ---
 
-#### 3. Summary of Key Decisions and Strategic Advantages
+**C. Tuned Tiered Scoreline Heuristic (Winner-Picker)**
+
+Final tips are generated via a configurable tiered heuristic on predicted goal difference `pred_gd`:
+
+- if `pred_gd ≥ t3`: 3-0
+- elif `pred_gd ≥ t2`: 2-0
+- elif `pred_gd ≥ t1`: 2-1
+- elif `pred_gd ≤ -t3`: 0-3
+- elif `pred_gd ≤ -t2`: 0-2
+- elif `pred_gd ≤ -t1`: 1-2
+- else: 1-1 (or 0-0 via config)
+
+Thresholds are tuned with Optuna to maximize points per game (PPG) on a validation season without retraining the model. See `scripts/tune_heuristic.py`.
+
+#### 2. Usage
+
+- Training: `kicktipp-predictor train`
+- Predict upcoming: `kicktipp-predictor predict --days 7`
+- Evaluate dynamic season: `kicktipp-predictor evaluate --retrain-every 1`
+- Tune heuristic only (no retrain): `python -m scripts.tune_heuristic --season 2024 --trials 200`
+
+The tuned thresholds are stored in `src/kicktipp_predictor/config/best_params.yaml`:
+
+```
+use_tiered_heuristic: true
+gd_tier_t1: 0.3861
+gd_tier_t2: 1.4134
+gd_tier_t3: 3.0336
+draw_goal: 1
+```
+
+#### 3. Notes on Evaluation
+
+The dynamic season evaluation retrains each matchday. The tiered heuristic tuner optimizes thresholds for a fixed, pre-trained champion model. For apples-to-apples validation, run the tuner on a chosen season (e.g., 2024), which reports PPG directly for the frozen model.
+
+#### 4. Project History and V4 Experiments
+
+The prior V4 cascaded experiments and their findings have been archived under `docs/V4-experiments.md` to preserve the journey while keeping the repository focused on the V3 champion.
 
 This new architecture is a direct response to the failings of the old one. Here is a summary of our decisions:
 

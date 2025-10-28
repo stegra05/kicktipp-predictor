@@ -113,6 +113,12 @@ def _apply_model_params_from_dict(config: "Config", params: dict[str, Any]) -> N
         # Scoreline smoothing
         "avg_total_goals": float,
         "gd_score_alpha": float,
+        # Tiered heuristic
+        "use_tiered_heuristic": bool,
+        "gd_tier_t1": float,
+        "gd_tier_t2": float,
+        "gd_tier_t3": float,
+        "draw_goal": int,
     }
 
     for key, caster in casts.items():
@@ -267,6 +273,13 @@ class ModelConfig:
     # Scoreline smoothing knobs
     avg_total_goals: float = 2.6
     gd_score_alpha: float = 0.3
+
+    # Tiered heuristic (optional, when enabled overrides smoothing)
+    use_tiered_heuristic: bool = False
+    gd_tier_t1: float = 0.5
+    gd_tier_t2: float = 1.25
+    gd_tier_t3: float = 2.0
+    draw_goal: int = 1  # 0 => 0-0, 1 => 1-1
 
     # Training
     random_state: int = 42

@@ -219,15 +219,7 @@ class GoalDifferencePredictor:
         probs = np.vstack([p_home, p_draw, p_away]).T
         probs = np.clip(probs, 1e-12, 1.0)
         probs /= probs.sum(axis=1, keepdims=True)
-        # Smoother scoreline heuristic
-        predicted_scores: list[tuple[int, int]] = []
-        avg_goals = float(self.config.model.avg_total_goals)
-        alpha = float(self.config.model.gd_score_alpha)
-        for gd in pred_gd:
-            T = avg_goals + alpha * float(abs(gd))
-            home = max(0, int(round((T + gd) / 2.0)))
-            away = max(0, int(round((T - gd) / 2.0)))
-            predicted_scores.append((home, away))
+        # Golden Rule: scoreline will be computed per match to be consistent with argmax outcome
         # Monitoring: uncertainty correlation and bounds
         try:
             abs_gd = np.abs(pred_gd)
@@ -248,25 +240,39 @@ class GoalDifferencePredictor:
         predictions: list[dict] = []
         for i in range(len(features_df)):
             row = features_df.iloc[i]
+            probs_i = probs[i]
+            outcome_idx = int(np.argmax(probs_i))
+            predicted_outcome = ["H", "D", "A"][outcome_idx]
+            pred_gd_i = float(pred_gd[i])
+
+            # Outcome-consistent tiered scoreline heuristic
+            if predicted_outcome == "H":
+                if pred_gd_i > 1.5:
+                    score = (2, 0)
+                else:
+                    score = (2, 1)
+            elif predicted_outcome == "A":
+                if pred_gd_i < -1.5:
+                    score = (0, 2)
+                else:
+                    score = (1, 2)
+            else:  # Draw
+                score = (1, 1)
+
             pred = {
                 "match_id": row.get("match_id"),
                 "home_team": row.get("home_team"),
                 "away_team": row.get("away_team"),
-                "predicted_goal_difference": float(pred_gd[i]),
-                "predicted_home_score": int(predicted_scores[i][0]),
-                "predicted_away_score": int(predicted_scores[i][1]),
-                "home_win_probability": float(probs[i, 0]),
-                "draw_probability": float(probs[i, 1]),
-                "away_win_probability": float(probs[i, 2]),
+                "predicted_goal_difference": pred_gd_i,
+                "predicted_home_score": int(score[0]),
+                "predicted_away_score": int(score[1]),
+                "home_win_probability": float(probs_i[0]),
+                "draw_probability": float(probs_i[1]),
+                "away_win_probability": float(probs_i[2]),
                 "uncertainty_stddev": float(dynamic_stddev[i]),
                 "draw_margin_used": float(draw_margin),
+                "predicted_result": predicted_outcome,
             }
-            # Add derived predicted result label for CLI display
-            try:
-                outcome_idx = int(np.argmax(probs[i]))
-                pred["predicted_result"] = ["H", "D", "A"][outcome_idx]
-            except Exception:
-                pred["predicted_result"] = None
             if "matchday" in features_df.columns:
                 try:
                     pred["matchday"] = int(row.get("matchday"))
