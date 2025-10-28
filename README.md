@@ -93,6 +93,29 @@ Thresholds are tuned with Optuna to maximize points per game (PPG) on a validati
 - Evaluate dynamic season: `kicktipp-predictor evaluate --retrain-every 1`
 - Tune heuristic only (no retrain): `python -m scripts.tune_heuristic --season 2024 --trials 200`
 
+#### 2.1 Run the Flask API
+
+This repository includes a minimal Flask API skeleton to integrate frontend endpoints.
+
+Run locally:
+
+```
+export FLASK_DEBUG=1
+python app.py
+```
+
+Health check:
+
+```
+curl http://localhost:8000/health
+```
+
+API status (v1):
+
+```
+curl http://localhost:8000/api/v1/status
+```
+
 The tuned thresholds are stored in `src/kicktipp_predictor/config/best_params.yaml`:
 
 ```

@@ -13,3 +13,10 @@ __all__ = [
     "DataLoader",
     "GoalDifferencePredictor",
 ]
+
+# Optional web app factory re-export
+try:  # pragma: no cover - optional import
+    from .web import create_app as create_flask_app  # type: ignore
+    __all__.append("create_flask_app")
+except Exception:  # pragma: no cover
+    pass
