@@ -132,18 +132,17 @@ def _apply_model_params_from_dict(config: "Config", params: dict[str, Any]) -> N
 # === Paths ===
 @dataclass
 class PathConfig:
-    """File system paths configuration.
+    """Manages file system paths for the project.
 
-    Manages directories and file locations used by the project.
+    This class defines the directory structure for data, models, caches, and
+    configuration files, ensuring that all necessary directories are created
+    upon initialization.
 
-    Directories:
-    - data_dir: Root directory for cached data and artifacts.
-    - models_dir: Directory where trained models are stored.
-    - cache_dir: Directory for HTTP/data caches.
-    - config_dir: Directory containing YAML and configuration files.
-
-    Model artifacts:
-    - gd_model_path: GoalDifferenceRegressor model path.
+    Attributes:
+        data_dir: The root directory for all data-related files.
+        models_dir: The directory where trained models are stored.
+        cache_dir: The directory for caching downloaded data.
+        config_dir: The directory containing configuration files.
     """
 
     # Data directories
@@ -171,20 +170,22 @@ class PathConfig:
 # === API Settings ===
 @dataclass
 class APIConfig:
-    """API and data fetching configuration.
+    """Configuration for API interactions and data fetching.
 
-    Parameters:
-    - base_url (str): Root URL for OpenLigaDB or alternate provider.
-    - league_code (str): League identifier (e.g., 'bl3'). Use provider's codes.
-    - cache_ttl (int): Cache TTL in seconds. Range 0–86400.
-    - request_timeout (int): HTTP timeout seconds. Range 1–60.
-    - auth_token (str | None): Optional bearer/API token for authenticated endpoints.
-    - rate_limit_per_minute (int): Max requests per minute when self-throttling.
-    - retry_count (int): Number of retries on transient failures. Range 0–10.
-    - backoff_initial (float): Initial backoff seconds. Range 0.0–10.0.
-    - backoff_max (float): Maximum backoff seconds. Range 0.0–60.0.
-    - endpoints (dict[str, str]): Relative endpoint templates used by the data loader.
-      Example keys: 'season_matches', 'matchday', 'team', 'table'.
+    This class holds all settings related to the OpenLigaDB API, including
+    URLs, league codes, caching, and rate limiting.
+
+    Attributes:
+        base_url: The base URL of the OpenLigaDB API.
+        league_code: The league identifier (e.g., 'bl3' for 3. Liga).
+        cache_ttl: The time-to-live for cached API responses in seconds.
+        request_timeout: The timeout for HTTP requests in seconds.
+        auth_token: An optional authentication token for the API.
+        rate_limit_per_minute: The maximum number of requests per minute.
+        retry_count: The number of retries for failed requests.
+        backoff_initial: The initial backoff delay for retries in seconds.
+        backoff_max: The maximum backoff delay for retries in seconds.
+        endpoints: A dictionary of API endpoint templates.
     """
 
     base_url: str = "https://api.openligadb.de"
@@ -215,39 +216,17 @@ class APIConfig:
 # Simplified config focusing on GoalDifferenceRegressor
 @dataclass
 class ModelConfig:
-    """Model hyperparameters and training configuration.
+    """Configuration for model hyperparameters and training.
 
-    Focuses on a single `GoalDifferenceRegressor` along with settings for
-    training, feature engineering, and probabilistic translation.
+    This class defines the parameters for the `GoalDifferenceRegressor`,
+    as well as settings for feature engineering, training, and probabilistic
+    translation.
 
-    Parameters:
-    - gd_n_estimators (int): Number of boosting rounds/trees. Typical range 100–2000.
-    - gd_max_depth (int): Maximum tree depth controlling model complexity. Range 3–12.
-    - gd_learning_rate (float): Learning rate (eta) for boosting. Range 0.01–0.3.
-    - gd_subsample (float): Row subsample fraction. Range 0.5–1.0.
-    - gd_reg_lambda (float): L2 regularization strength. Range 0.0–10.0.
-    - gd_min_child_weight (float): Minimum sum of instance weight in a child. Range 0.1–10.
-    - gd_colsample_bytree (float): Column subsample fraction per tree. Range 0.5–1.0.
-    - gd_gamma (float): Minimum loss reduction required to make a split. Range 0.0–10.0.
-    - gd_uncertainty_stddev (float): Legacy fixed stddev for probabilistic translation of goal
-      difference to scoreline/outcome. Used when dynamic parameters are not set.
-    - gd_uncertainty_base_stddev (float): Base stddev for dynamic uncertainty; must be > 0.
-    - gd_uncertainty_scale (float): Scale factor for dynamic stddev w.r.t. |predicted_gd|; must be ≥ 0.
-    - gd_uncertainty_min_stddev (float): Lower bound clamp for dynamic stddev. Default 0.2.
-    - gd_uncertainty_max_stddev (float): Upper bound clamp for dynamic stddev. Default 4.0.
-    - draw_margin (float): Half-width around 0 goal difference treated as draw in Normal CDF
-      calculation; typical range 0.1–1.0. Default 0.5.
-
-    General training knobs:
-    - max_goals (int): Upper bound for translation grid. Range 4–10.
-    - random_state (int): Seed for reproducibility.
-    - min_training_matches (int): Minimum matches before training. Range 10–100.
-    - val_fraction (float): Fraction of data for validation. Range 0.0–0.5.
-    - use_time_decay (bool): Whether to apply recency weighting.
-    - time_decay_half_life_days (float): Half-life for time decay in days.
-    - form_last_n (int): Number of recent matches to compute form features.
-    - n_jobs (int): Parallel threads for training/prediction.
-    - selected_features_file (str): YAML list of features to keep when present.
+    Attributes:
+        gd_n_estimators: The number of boosting rounds for the XGBoost model.
+        gd_max_depth: The maximum depth of each tree in the XGBoost model.
+        gd_learning_rate: The learning rate for the XGBoost model.
+        # ... and many other model-specific parameters.
     """
 
     # GoalDifferenceRegressor (XGBoost-like defaults)
@@ -323,10 +302,16 @@ class ModelConfig:
 # === Configuration Container ===
 @dataclass
 class Config:
-    """Main configuration container.
+    """Main configuration container for the Kicktipp Predictor.
 
-    Aggregates path, API, and model configuration sections and provides a
-    loader with YAML override support and a readable string summary.
+    This class aggregates all configuration sections (paths, API, model) and
+    provides a class method to load the configuration from a YAML file, with
+    support for environment variable overrides.
+
+    Attributes:
+        paths: The `PathConfig` instance.
+        api: The `APIConfig` instance.
+        model: The `ModelConfig` instance.
     """
 
     paths: PathConfig = field(default_factory=PathConfig)
@@ -335,18 +320,19 @@ class Config:
 
     @classmethod
     def load(cls, config_file: Path | None = None) -> "Config":
-        """Load configuration from file if available.
+        """Load configuration from a YAML file, with overrides.
 
-        Resolution order:
-        1. Explicit `config_file` argument when provided.
-        2. `KTP_CONFIG_FILE` environment variable when it points to a file.
-        3. Default `best_params.yaml` in the project config directory.
+        The configuration is loaded from a YAML file, with the following
+        resolution order:
+        1. The `config_file` argument, if provided.
+        2. The path specified by the `KTP_CONFIG_FILE` environment variable.
+        3. The default `best_params.yaml` file in the package's config directory.
 
         Args:
-            config_file: Path to config YAML file. If None, uses default.
+            config_file: An optional path to a YAML configuration file.
 
         Returns:
-            Config instance with loaded or default values.
+            A `Config` instance with the loaded or default values.
         """
         config = cls()
 
@@ -384,10 +370,14 @@ _config: Config | None = None
 
 
 def get_config() -> Config:
-    """Get or create the global configuration instance.
+    """Get the global configuration instance.
+
+    This function provides a singleton-like access to the configuration.
+    If the configuration has not been loaded yet, it will be loaded with
+    default settings.
 
     Returns:
-        The global Config instance.
+        The global `Config` instance.
     """
     global _config
     if _config is None:
@@ -396,6 +386,10 @@ def get_config() -> Config:
 
 
 def reset_config() -> None:
-    """Reset the global configuration (mainly for testing)."""
+    """Reset the global configuration.
+
+    This function is primarily used for testing to ensure that each test
+    case starts with a clean configuration.
+    """
     global _config
     _config = None

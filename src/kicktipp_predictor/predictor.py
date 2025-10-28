@@ -13,16 +13,24 @@ import numpy as np
 from .config import Config, get_config
 
 class GoalDifferencePredictor:
-    """
-    Predicts match goal differences using an XGBoost regressor.
+    """Predicts match goal differences using an XGBoost regressor.
 
-    This class encapsulates the model lifecycle, including training,
-    probabilistic prediction, and persistence, all driven by a central
-    configuration object.
+    This class encapsulates the entire model lifecycle, including training,
+    prediction, and persistence. It uses an XGBoost model to predict the goal
+    difference between two teams and then translates this prediction into
+    probabilistic outcomes (home win, draw, away win).
+
+    The behavior of the predictor is controlled by a configuration object,
+    which specifies model hyperparameters, feature sets, and other settings.
     """
 
     def __init__(self, config: Config | None = None):
-        """Initializes the predictor with its configuration."""
+        """Initializes the GoalDifferencePredictor.
+
+        Args:
+            config: An optional configuration object. If not provided, the
+                global configuration is loaded.
+        """
         self.config = config or get_config()
         self.model: XGBRegressor | None = None
         self.feature_columns: list[str] = []
@@ -30,11 +38,20 @@ class GoalDifferencePredictor:
         self.last_metrics: dict[str, float] | None = None
 
     def train(self, matches_df: pd.DataFrame) -> None:
-        """
-        Trains the XGBRegressor on the provided match data.
+        """Trains the goal difference predictor on the provided match data.
+
+        This method takes a DataFrame of historical matches, selects the relevant
+        features, and fits the XGBoost regressor to the goal difference target.
+        It also supports time-decay weighting to give more importance to recent
+        matches.
 
         Args:
-            matches_df: A DataFrame containing features and the 'goal_difference' target.
+            matches_df: A pandas DataFrame containing the training data, including
+                features and the 'goal_difference' target column.
+
+        Raises:
+            ValueError: If the training DataFrame is empty, lacks the target
+                column, or has insufficient samples.
         """
         # Validate input
         if matches_df is None or len(matches_df) == 0:
@@ -158,15 +175,23 @@ class GoalDifferencePredictor:
         self.last_metrics = metrics
 
     def predict(self, features_df: pd.DataFrame) -> list[dict]:
-        """
-        Makes predictions and derives H/D/A probabilities.
+        """Makes predictions for upcoming matches.
+
+        This method takes a DataFrame of features for upcoming matches, predicts
+        the goal difference, and then derives the probabilities for home win,
+        draw, and away win.
 
         Args:
-            features_df: DataFrame with features for upcoming matches.
+            features_df: A pandas DataFrame with the same features used for
+                training.
 
         Returns:
-            A list of prediction dictionaries, including goal differences
-            and outcome probabilities.
+            A list of prediction dictionaries, where each dictionary contains
+            the predicted goal difference, score, and outcome probabilities.
+
+        Raises:
+            RuntimeError: If the model has not been trained or loaded.
+            ValueError: If the features DataFrame is empty.
         """
         if self.model is None:
             raise RuntimeError("Model has not been trained or loaded. Call train() or load_model() first.")
@@ -282,7 +307,14 @@ class GoalDifferencePredictor:
         return predictions
 
     def save_model(self) -> None:
-        """Saves the trained model and metadata to the path specified in the config."""
+        """Saves the trained model and its metadata to disk.
+
+        The model and its associated metadata (feature columns, hyperparameters)
+        are saved to the paths specified in the configuration.
+
+        Raises:
+            RuntimeError: If there is no model to save.
+        """
         if self.model is None:
             raise RuntimeError("No model to save. Must train first.")
         # Persist model and minimal metadata
@@ -298,7 +330,16 @@ class GoalDifferencePredictor:
             raise RuntimeError(f"Failed to save model artifacts: {exc}")
 
     def load_model(self) -> None:
-        """Loads the model and metadata from the path specified in the config."""
+        """Loads a trained model and its metadata from disk.
+
+        This method loads the XGBoost model and its metadata from the paths
+        specified in the configuration. It also performs a dimensionality check
+        to ensure that the loaded model is compatible with the feature columns.
+
+        Raises:
+            RuntimeError: If the model or its metadata cannot be loaded, or if
+                there is a feature dimension mismatch.
+        """
         try:
             self.model = joblib.load(self.config.paths.gd_model_path)
         except FileNotFoundError as exc:

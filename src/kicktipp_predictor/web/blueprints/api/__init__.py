@@ -1,3 +1,7 @@
+"""Main API blueprint.
+
+This blueprint registers all the versioned API blueprints.
+"""
 from __future__ import annotations
 
 from flask import Blueprint

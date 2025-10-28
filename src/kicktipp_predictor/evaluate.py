@@ -1,9 +1,13 @@
 """Season dynamic evaluation (expanding-window) with rich console output.
 
-This module keeps only the season-long dynamic evaluation:
-- Expanding-window retraining (configurable cadence)
-- Rich-based console report (no image plots)
-- Minimal artifacts: metrics_season.json and per_matchday_metrics_season.csv
+This module provides functions for evaluating the performance of the prediction
+model over a full season. It uses an expanding-window approach to simulate a
+realistic prediction scenario, where the model is retrained periodically as
+more match data becomes available.
+
+The main entry point is the `run_season_dynamic_evaluation` function, which
+orchestrates the evaluation process and generates a detailed report in the
+console, as well as saving the results to JSON and CSV files.
 """
 
 from __future__ import annotations
@@ -43,14 +47,19 @@ from kicktipp_predictor.predictor import GoalDifferencePredictor
 def _process_prediction(
     pred: dict, actual: dict
 ) -> dict:
-    """Process a single prediction and add evaluation metrics.
+    """Processes a single prediction and enriches it with evaluation metrics.
+
+    This function compares a single prediction with the actual match result
+    and calculates various metrics, such as points earned, and whether the
+    predicted winner was correct.
 
     Args:
-        pred: Raw prediction dictionary from predictor
-        actual: Actual match data with results
+        pred: A dictionary containing the raw prediction from the model.
+        actual: A dictionary containing the actual match data, including the
+            final score.
 
     Returns:
-        Enhanced prediction with evaluation metrics
+        The prediction dictionary, enhanced with evaluation metrics.
     """
     pred_home = int(pred.get("predicted_home_score", 0))
     pred_away = int(pred.get("predicted_away_score", 0))
@@ -105,14 +114,20 @@ def _process_prediction(
 def _compute_overall_metrics(
     predictions: list[dict],
 ) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
-    """Compute overall evaluation metrics from predictions.
+    """Computes overall evaluation metrics from a list of predictions.
+
+    This function aggregates the results from all processed predictions and
+    calculates a comprehensive set of metrics, including Brier score, log loss,
+    accuracy, and total points.
 
     Args:
-        predictions: List of evaluated predictions
+        predictions: A list of evaluated prediction dictionaries.
 
     Returns:
-        Tuple of (metrics_dict, pred_home, pred_away, actual_home,
-                 actual_away, true_labels)
+        A tuple containing:
+        - A dictionary of overall metrics.
+        - NumPy arrays for predicted home/away scores, actual home/away scores,
+          and true outcome labels.
     """
     actual_home = np.array(
         [int(p.get("actual_home_score", 0)) for p in predictions], dtype=int
@@ -212,16 +227,20 @@ def _compute_baseline_comparison(
     actual_away: np.ndarray,
     points: np.ndarray,
 ) -> dict:
-    """Compute baseline (2-1 home) comparison metrics.
+    """Computes metrics for a baseline model and compares them to the main model.
+
+    The baseline model always predicts a 2-1 home win. This function calculates
+    the baseline's performance and provides a bootstrap confidence interval for
+    the difference in points per game between the main model and the baseline.
 
     Args:
-        n_matches: Number of matches
-        actual_home: Actual home scores
-        actual_away: Actual away scores
-        points: Model points earned
+        n_matches: The total number of matches.
+        actual_home: An array of actual home scores.
+        actual_away: An array of actual away scores.
+        points: An array of points earned by the main model.
 
     Returns:
-        Dictionary with baseline metrics and bootstrap CI
+        A dictionary with baseline metrics and the bootstrap CI.
     """
     true_labels = [
         "H" if actual_home[i] > actual_away[i]
@@ -279,15 +298,19 @@ def _compute_baseline_comparison(
 # ===========================================================================
 
 
-def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
-    """Evaluate current season with expanding-window retraining.
+def run_season_dynamic_evaluation(retrain_every: int = 1, season: int | None = None) -> None:
+    """Performs a dynamic evaluation of the model over a full season.
 
-    Retrains the predictor every N matchdays using all matches finished so far
-    (plus a few previous seasons for a warm start), then evaluates finished
-    matches in the current season. Produces:
-      - Rich console report
-      - data/predictions/metrics_season.json
-      - data/predictions/per_matchday_metrics_season.csv
+    This function simulates a realistic prediction scenario by iterating through
+    a season and periodically retraining the model with an expanding window of
+    historical data. It generates a detailed performance report in the console
+    and saves the results to files.
+
+    Args:
+        retrain_every: The number of matchdays after which the model is
+            retrained. Defaults to 1.
+        season: The season to evaluate (e.g., 2024 for the 2024/2025 season).
+            Defaults to the current season.
     """
     console = Console()
 
@@ -304,14 +327,14 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
         console.print("[red]No trained models found. Run training first.[/red]")
         raise SystemExit(1)
 
-    current_season = data_loader.get_current_season()
-    console.print(f"Fetching data for current season: [bold]{current_season}[/bold]")
-    season_matches = data_loader.fetch_season_matches(current_season)
+    eval_season = season if season is not None else data_loader.get_current_season()
+    console.print(f"Fetching data for season: [bold]{eval_season}/{eval_season + 1}[/bold]")
+    season_matches = data_loader.fetch_season_matches(eval_season)
 
     finished_matches = [m for m in season_matches if m.get("is_finished")]
     if not finished_matches:
         console.print(
-            "[yellow]No finished matches found for the current season.[/yellow]"
+            f"[yellow]No finished matches found for season {eval_season}/{eval_season + 1}.[/yellow]"
         )
         raise SystemExit(0)
 
@@ -323,7 +346,7 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
 
     console.print("Preparing historical warm start (previous seasons)...")
     all_historical_matches = data_loader.fetch_historical_seasons(
-        current_season - 5, current_season - 1
+        eval_season - 5, eval_season - 1
     )
     cumulative_training_matches = list(all_historical_matches)
     console.print(

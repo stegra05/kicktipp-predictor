@@ -1,200 +1,174 @@
-### Kicktipp Predictor — Final V3 Champion Architecture
+# Kicktipp Predictor
 
-**Installation**
+A Python-based tool for predicting football match outcomes, with a focus on the German football league system. It provides a command-line interface (CLI) for training models, making predictions, and evaluating performance, as well as a Flask web application for serving the predictions.
 
-Use a virtual environment and install via `pyproject.toml` extras:
+## Features
 
-```
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .[plots,dev]
-```
+*   **End-to-End Machine Learning Pipeline:** From data fetching and feature engineering to model training, evaluation, and prediction.
+*   **Command-Line Interface:** A powerful CLI built with Typer for easy interaction with the prediction pipeline.
+*   **Web Application:** A Flask-based web interface to view predictions and model status.
+*   **Automated Data Fetching:** Fetches historical and upcoming match data from the OpenLigaDB API.
+*   **Advanced Feature Engineering:** Creates a rich set of features, including team form, historical performance, and Elo ratings.
+*   **XGBoost Model:** Uses an XGBoost Regressor to predict the goal difference between two teams.
+*   **Probabilistic Predictions:** Derives home win, draw, and away win probabilities from the predicted goal difference.
+*   **Comprehensive Evaluation:** Includes a dynamic, expanding-window evaluation process to simulate a realistic prediction scenario over a season.
+*   **Hyperparameter Tuning:** Integrated with Optuna for automated hyperparameter tuning to find the best model configuration.
+*   **Code Quality and Testing:** Adheres to modern Python development standards with linting, formatting, and a suite of tests.
 
-- The `plots` extra includes `shap` for SHAP value analysis.
-- The `dev` extra includes `ruff`, `mypy`, and `pre-commit`.
-- For Optuna-based tuning, install the `tuning` extra: `pip install -e .[tuning]`.
-- zsh users: quote extras to avoid globbing: `pip install -e '.[plots,dev]'`.
+## Installation
 
-#### Executive Summary
+1.  **Clone the repository:**
 
-This repository now ships the final, production-ready V3 champion model. V3 centers on a single goal-difference regressor with a probabilistic bridge for H/D/A and a tuned, tiered scoreline heuristic that acts as a strong winner-picker.
+    ```bash
+    git clone https://github.com/your-username/kicktipp-predictor.git
+    cd kicktipp-predictor
+    ```
 
----
+2.  **Create and activate a virtual environment:**
 
-#### 1. Post-Mortem: Core Limitations of the V2 Architecture
+    ```bash
+    python -m venv .venv
+    source .venv/bin/activate
+    ```
 
-Our decision to rebuild is rooted in a clear understanding of the previous architecture's weaknesses:
+3.  **Install the project in editable mode:**
 
-*   **Problem-Framing Mismatch:** It treated "Home Win," "Draw," and "Away Win" as independent, nominal classes. In reality, they are ordered points on a continuum. A 3-0 win is an amplified version of a 1-0 win, a piece of information the standard classifier cannot use.
-*   **The "Draw" Problem:** The "Draw" outcome is typically the least frequent and most difficult to predict, leading to significant class imbalance. The V2 architecture tried to solve this with a `draw_boost` parameter—a crude patch on a fundamental problem. This often led to the observed trade-off between a balanced model (with low accuracy) and a biased one (ignoring draws to improve points per game).
-*   **Complexity and Error Propagation:** The pipeline involved three separate models. An error or bias in any one of them could negatively impact the final prediction. The blending logic and conditional scoreline selection added further layers of complexity and hard-coded assumptions (like the fixed `HYBRID_WEIGHT`).
-*   **Indirect Prediction:** The model predicted the final outcome indirectly. It was an assembly of parts, not a single coherent prediction. This made it difficult to answer a simple question: "Why does the model think this will be a home win?"
+    ```bash
+    pip install -e .
+    ```
 
----
+4.  **Install optional dependencies for tuning and analysis:**
 
-#### 1. Final V3 Architecture: Goal Difference Regression
+    ```bash
+    pip install -e .[tuning,plots]
+    ```
 
-The V3 architecture is built on a single, powerful premise: **the most direct path to predicting the outcome is to predict the goal difference.**
+## Usage
 
-**A. The Central Component: A Single Regression Model**
+The primary way to interact with the Kicktipp Predictor is through its CLI.
 
-The multi-model pipeline in `predictor.py` is replaced by a single class, the `GoalDifferencePredictor`.
+### Training the Model
 
-*   **Model:** A single `xgboost.XGBRegressor`.
-*   **Target Variable:** The model is trained directly on the `goal_difference` column (`home_score - away_score`), a continuous numerical target.
-*   **Input Features:** It uses the same rich feature set generated by `data.py` (Elo, form metrics, etc.).
+To train the prediction model on historical data, run the `train` command:
 
-**B. The Probabilistic Bridge: From Regression to Classification**
-
-A raw goal difference prediction (e.g., `+0.67`) is not enough; we need H/D/A probabilities for robust evaluation and betting-style applications. The "Probabilistic Bridge" is a new, crucial component that translates the regressor's output into a full probability distribution.
-
-1.  **Initial Implementation (Thresholding):** For a quick, working baseline, we will use simple thresholds:
-    *   Predicted `goal_diff > 0.5` → Home Win
-    *   Predicted `goal_diff < -0.5` → Away Win
-    *   Otherwise → Draw
-    *(Note: The `0.5` boundary is a sensible starting point but can be tuned).*
-
-2.  **Definitive Implementation (Probabilistic Translation):** The regressor's output is treated as the *mean* (μ) of a Normal distribution. We compute H/D/A via CDF integration, with calibrated σ and draw-margin.
-
-    *   **Distribution Choice:** We can use a Normal distribution (`scipy.stats.norm`) or, more appropriately, a Skellam distribution (`scipy.stats.skellam`), which models the difference between two Poisson variables.
-    *   **Calculation:**
-        *   `P(Home Win) = 1 - CDF(0.5)`
-        *   `P(Away Win) = CDF(-0.5)`
-        *   `P(Draw) = CDF(0.5) - CDF(-0.5)`
-    *   **New Hyperparameter:** The standard deviation (`σ`) of this distribution becomes a key, tunable hyperparameter that controls the model's confidence.
-
-**C. Retained Assets: What Stays the Same**
-
-This is a strategic rebuild, not a complete rewrite. We will retain the high-quality engineering components:
-*   **`data.py`:** The data loading, caching, and sophisticated feature engineering logic (especially the Elo system) are preserved.
-*   **`evaluate.py`:** The dynamic, expanding-window evaluation framework remains perfectly suited to the task, as it consumes the H/D/A probabilities produced by our new "Probabilistic Bridge."
-*   **`cli.py`:** The user-facing command-line interface will be re-wired to the new predictor but will maintain its familiar `train`, `predict`, and `evaluate` commands.
-
----
-
-**C. Tuned Tiered Scoreline Heuristic (Winner-Picker)**
-
-Final tips are generated via a configurable tiered heuristic on predicted goal difference `pred_gd`:
-
-- if `pred_gd ≥ t3`: 3-0
-- elif `pred_gd ≥ t2`: 2-0
-- elif `pred_gd ≥ t1`: 2-1
-- elif `pred_gd ≤ -t3`: 0-3
-- elif `pred_gd ≤ -t2`: 0-2
-- elif `pred_gd ≤ -t1`: 1-2
-- else: 1-1 (or 0-0 via config)
-
-Thresholds are tuned with Optuna to maximize points per game (PPG) on a validation season without retraining the model. See `scripts/tune_heuristic.py`.
-
-#### 2. Usage
-
-- Training: `kicktipp-predictor train`
-- Predict upcoming: `kicktipp-predictor predict --days 7`
-- Evaluate dynamic season: `kicktipp-predictor evaluate --retrain-every 1`
-- Tune heuristic only (no retrain): `python -m scripts.tune_heuristic --season 2024 --trials 200`
-
-#### 2.1 Run the Flask API
-
-This repository includes a minimal Flask API skeleton to integrate frontend endpoints.
-
-Run locally:
-
-```
-export FLASK_DEBUG=1
-python app.py
+```bash
+kicktipp-predictor train
 ```
 
-Health check:
+You can specify the number of past seasons to use for training with the `--seasons-back` option:
 
-```
-curl http://localhost:8000/health
-```
-
-API status (v1):
-
-```
-curl http://localhost:8000/api/v1/status
+```bash
+kicktipp-predictor train --seasons-back 5
 ```
 
-The tuned thresholds are stored in `src/kicktipp_predictor/config/best_params.yaml`:
+### Making Predictions
 
-```
-use_tiered_heuristic: true
-gd_tier_t1: 0.3861
-gd_tier_t2: 1.4134
-gd_tier_t3: 3.0336
-draw_goal: 1
+To predict outcomes for upcoming matches, use the `predict` command:
+
+```bash
+kicktipp-predictor predict
 ```
 
-#### 3. Notes on Evaluation
+By default, it predicts matches for the next 7 days. You can change this with the `--days` option:
 
-The dynamic season evaluation retrains each matchday. The tiered heuristic tuner optimizes thresholds for a fixed, pre-trained champion model. For apples-to-apples validation, run the tuner on a chosen season (e.g., 2024), which reports PPG directly for the frozen model.
-
-#### 4. Project History and V4 Experiments
-
-The prior V4 cascaded experiments and their findings have been archived under `docs/V4-experiments.md` to preserve the journey while keeping the repository focused on the V3 champion.
-
-This new architecture is a direct response to the failings of the old one. Here is a summary of our decisions:
-
-1.  **DECISION: Shift from Multi-Class Classification to Goal Difference Regression.**
-    *   **ADVANTAGE:** Aligns the model's objective with the ordinal nature of football outcomes, providing a more natural and powerful problem formulation.
-
-2.  **DECISION: Replace the three-model prediction pipeline with a single `XGBRegressor`.**
-    *   **ADVANTAGE:** Radically simplifies the architecture, eliminating error propagation and making the model easier to tune, debug, and interpret.
-
-3.  **DECISION: Create a "Probabilistic Bridge" to translate regression output into H/D/A probabilities.**
-    *   **ADVANTAGE:** Solves the "Draw" class imbalance problem elegantly. Draws are no longer a difficult minority class to predict but are simply the natural outcome when the predicted goal difference is near zero. This component also provides a principled way to model uncertainty.
-
-4.  **DECISION: Postpone further feature engineering and scoreline selection until the core model is perfected.**
-    *   **ADVANTAGE:** Enforces focus. By establishing a robust and accurate core model first, any future additions (like market data or a scoreline generator) will be built upon a solid foundation.
-
-5.  **DECISION: Retain and repurpose existing modules for data, evaluation, and the CLI.**
-    *   **ADVANTAGE:** Maximizes development efficiency by leveraging the strongest parts of the existing project.
-
-In conclusion, the V3 Alpha is not just an incremental improvement; it is a fundamental rethinking of the project's core. By simplifying the architecture and choosing a more appropriate mathematical framework, we are creating a system that is more robust, less prone to bias, and has a significantly higher ceiling for predictive accuracy. This is the right path forward.
-
----
-
-#### 4. Balanced Draw Optimization (V3)
-
-To produce realistic draw prediction rates while maintaining accuracy, the tuning system now uses a soft alignment objective: balanced accuracy nudges draw-rate toward a target while still optimizing predictive quality.
-
-**A. Objectives**
-
-*   `balanced_accuracy` — maximize. Computed as `0.8 * accuracy + 0.2 * (1 - |predicted_draw_rate - 0.25|)`.
-*   `log_loss` — minimize.
-
-**B. Optuna Configuration**
-
-*   Multi-objective directions: `directions=["maximize", "minimize"]`.
-*   Sampler: `NSGA-II`, well-suited for multi-objective search.
-
-**C. Trial Evaluation and Selection**
-
-*   Each trial records `accuracy`, `log_loss`, `predicted_draw_rate`, and `mean_draw_prob`.
-*   Balanced accuracy is computed with a target draw rate of `0.25` and a 80/20 weighting.
-*   Selection: choose the completed trial on the Pareto front with the highest `balanced_accuracy`.
-
-**D. Stability Checks and Analytics**
-
-*   Draw rate stability is evaluated across 3 splits of the validation set (by `matchday` or `date`), recording `draw_rate_std` and whether each split falls in `[0.15, 0.30]`.
-*   Study summary includes correlations (`balanced_accuracy` vs `log_loss`, `draw_balance_factor` vs `log_loss`) and draw-rate statistics. Per-trial uncertainty diagnostics capture the correlation between `|predicted_goal_difference|` and `uncertainty_stddev`, along with stddev min/mean/max.
-
-**E. Running Tuning**
-
-```
-python -m kicktipp_predictor.cli tune --n-trials 200 --seasons-back 5
+```bash
+kicktipp-predictor predict --days 14
 ```
 
-**F. Outputs**
+You can also predict matches for a specific matchday:
 
-*   Selected parameters: `src/kicktipp_predictor/config/best_params.yaml`.
-*   Study summary: `<data_dir>/optuna/gd_v3_tuning_summary.yaml` (or JSON fallback).
+```bash
+kicktipp-predictor predict --matchday 10
+```
 
-**G. Definition of Done**
+### Evaluating the Model
 
-*   Predicted draw rate clusters around `25%` and stays within `15–30%` across splits.
-*   Balanced accuracy is maintained or improved versus prior baselines.
-*   Stability checks across validation splits pass.
-*   Uncertainty diagnostics recorded and reviewed for convergence behavior.
-*   Documentation reflects the soft optimization strategy (this section).
+To evaluate the model's performance over a season, use the `evaluate` command:
+
+```bash
+kicktipp-predictor evaluate
+```
+
+This command performs a dynamic, expanding-window evaluation, which means it retrains the model periodically as the season progresses to simulate a real-world prediction scenario. You can control the retraining frequency with the `--retrain-every` option.
+
+### Tuning Hyperparameters
+
+To find the best hyperparameters for the model, use the `tune` command:
+
+```bash
+kicktipp-predictor tune
+```
+
+This will run an Optuna study to optimize the model's parameters. The results will be saved in `src/kicktipp_predictor/config/best_params.yaml`.
+
+### Web Application
+
+The project also includes a Flask web application to display predictions. To run the web server, use the `web` command:
+
+```bash
+kicktipp-predictor web
+```
+
+The application will be available at `http://127.0.0.1:8000`.
+
+## Architecture
+
+The project is structured as a Python package with the main source code in the `src/kicktipp_predictor` directory.
+
+### Data Pipeline
+
+The data pipeline is managed by the `DataLoader` class in `src/kicktipp_predictor/data.py`. It is responsible for:
+
+1.  **Fetching Data:** It fetches match data from the OpenLigaDB API and caches it locally.
+2.  **Feature Engineering:** It creates a wide range of features for the model, including:
+    *   **Team Form:** Rolling averages of goals scored, goals conceded, and points.
+    *   **Weighted Form:** Form metrics weighted by the opponent's rank.
+    *   **Elo Ratings:** A dynamic Elo rating system that is updated after each match.
+    *   **Historical Performance:** Averages of goals, points, and other metrics over multiple seasons.
+
+### Model
+
+The prediction model is a `GoalDifferencePredictor` class in `src/kicktipp_predictor/predictor.py`. It uses an XGBoost Regressor to predict the goal difference in a match. From the predicted goal difference, it derives the probabilities for a home win, draw, and away win using a normal distribution.
+
+### Evaluation
+
+The evaluation process, located in `src/kicktipp_predictor/evaluate.py`, is designed to provide a realistic assessment of the model's performance. The `run_season_dynamic_evaluation` function simulates a full season, retraining the model at regular intervals and making predictions on upcoming matches. This provides a more robust evaluation than a simple train-test split.
+
+## Development
+
+### Running Tests
+
+The project uses `pytest` for testing. To run the tests, execute:
+
+```bash
+pytest
+```
+
+### Code Style and Linting
+
+The project uses `ruff` for code formatting and linting. The configuration is in `pyproject.toml`. To check the code style, run:
+
+```bash
+ruff check .
+```
+
+To format the code, run:
+
+```bash
+ruff format .
+```
+
+### Pre-commit Hooks
+
+The project uses pre-commit hooks to automatically check and format the code before each commit. To install the hooks, run:
+
+```bash
+pre-commit install
+```
+
+## Future Work
+
+*   **More Advanced Models:** Experiment with different model architectures, such as Poisson or Negative Binomial models, which are often used for modeling football scores.
+*   **More Features:** Incorporate additional data sources, such as player statistics, team news, or betting odds.
+*   **Improved Web Interface:** Enhance the web interface with more detailed statistics, visualizations, and user accounts.
+*   **Cloud Deployment:** Deploy the application to a cloud platform to make it publicly accessible.

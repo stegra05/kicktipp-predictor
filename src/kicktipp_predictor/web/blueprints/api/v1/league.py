@@ -11,6 +11,20 @@ from kicktipp_predictor.data import DataLoader
 
 @v1_bp.get("/league/table")
 def get_league_table():
+    """Returns the league table for a given season.
+
+    This endpoint provides the current league table, including points, wins,
+    draws, losses, and goal difference for each team. It accepts an optional
+    'season' query parameter to retrieve the table for a specific season.
+
+    Query Parameters:
+        season (int, optional): The season year to retrieve the table for.
+            Defaults to the current season.
+
+    Returns:
+        A JSON response containing a list of team objects, where each object
+        represents a row in the league table.
+    """
     season_param = request.args.get("season")
     season: int | None = None
     try:

@@ -20,13 +20,18 @@ from .predictor import GoalDifferencePredictor
 
 
 def _prepare_datasets(seasons_back: int) -> tuple[pd.DataFrame, pd.DataFrame, DataLoader, int]:
-    """Prepare training and validation datasets using a time-based split.
+    """Prepares training and validation datasets for hyperparameter tuning.
 
-    - Training: older seasons (current_season - seasons_back .. current_season-1)
-    - Validation: most recent season (current_season)
+    This function creates a time-based split of the data, using older seasons
+    for training and the most recent season for validation. This ensures that
+    the tuning process evaluates the model on data it has not seen before.
+
+    Args:
+        seasons_back: The number of past seasons to use for the training set.
 
     Returns:
-        (train_df, val_df, loader, current_season)
+        A tuple containing the training DataFrame, validation DataFrame,
+        DataLoader instance, and the current season year.
     """
     loader = DataLoader()
     current_season = loader.get_current_season()
@@ -68,11 +73,14 @@ def _prepare_datasets(seasons_back: int) -> tuple[pd.DataFrame, pd.DataFrame, Da
 
 
 def _reset_optuna_storage(storage_url: str) -> None:
-    """Reset Optuna storage to a clean initial state.
+    """Resets the Optuna storage to a clean state.
 
-    - For SQLite URLs (sqlite:///path), deletes the DB file and ensures parent dir exists.
-    - For other RDB URLs, deletes all existing studies via Optuna API.
-    - Validates reset by checking that no studies remain.
+    This function deletes the underlying database file for SQLite storage or
+    deletes all studies for other database types. This ensures that each tuning
+    run starts from a fresh state.
+
+    Args:
+        storage_url: The URL of the Optuna storage.
     """
     if optuna is None:
         return
@@ -112,13 +120,19 @@ def run_tuning(
     study_name: str = "gd_v3_tuning",
     timeout: Optional[int] = None,
 ) -> None:
-    """Run an Optuna multi-objective study to tune V3 goal-difference model.
+    """Runs an Optuna study to tune the hyperparameters of the model.
 
-    Optimizes for:
-    - accuracy (maximize)
-    - log_loss (minimize)
+    This function uses Optuna to perform a multi-objective optimization of the
+    goal-difference model. It optimizes for both accuracy and log loss, and
+    saves the best parameters to a YAML file.
 
-    Saves selected parameters to `config/best_params.yaml`.
+    Args:
+        n_trials: The number of trials to run in the Optuna study.
+        seasons_back: The number of past seasons to use for training.
+        storage: The Optuna storage URL. If not provided, a local SQLite
+            database is used.
+        study_name: The name of the Optuna study.
+        timeout: An optional timeout in seconds for the study.
     """
     if optuna is None:
         raise RuntimeError(

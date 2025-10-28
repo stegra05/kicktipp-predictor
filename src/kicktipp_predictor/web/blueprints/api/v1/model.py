@@ -9,6 +9,16 @@ from kicktipp_predictor.config import get_config
 
 @v1_bp.get("/model/features")
 def get_model_features():
+    """Returns the features used by the prediction model.
+
+    This endpoint retrieves the list of feature names from the model's
+    metadata file. This can be used to understand what features the model
+    was trained on.
+
+    Returns:
+        A JSON response containing the model version, feature count, and a
+        list of feature names.
+    """
     cfg = get_config()
     metadata_path = cfg.paths.gd_model_path.with_name("metadata.joblib")
     try:

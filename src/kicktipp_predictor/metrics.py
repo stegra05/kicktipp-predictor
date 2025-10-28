@@ -1,15 +1,10 @@
 """Model evaluation metrics and utilities.
 
-This module provides:
-- Probability metrics: Brier score, log loss, Ranked Probability Score (RPS)
-- Calibration metrics: Expected Calibration Error (ECE)
-- Confusion matrix statistics
-- Confidence binning analysis
-- Kicktipp points calculation
-- Lightweight I/O helpers (JSON saving, directory creation)
-
-Public functions preserve the original API and semantics while the
-implementation is organized into logical classes and helpers.
+This module provides a collection of functions and classes for evaluating the
+performance of the prediction model. It includes metrics for assessing the
+accuracy of probabilistic predictions, calibration, and the quality of the
+confusion matrix. It also provides a function for calculating points based on
+the Kicktipp scoring system.
 """
 
 # === Imports ===
@@ -25,26 +20,25 @@ LABELS_ORDER: Tuple[str, str, str] = ("H", "D", "A")
 
 # === Utilities ===
 class MetricsUtils:
-    """Internal helpers for label mapping and probability normalization."""
+    """Provides internal helper functions for metric calculations."""
 
     @staticmethod
     def label_mapping() -> Dict[str, int]:
-        """Return a consistent label-to-index mapping using LABELS_ORDER."""
+        """Returns a consistent mapping from labels to integer indices."""
         return {lab: i for i, lab in enumerate(LABELS_ORDER)}
 
     @staticmethod
     def labels_to_indices(y_true: List[str]) -> np.ndarray:
-        """Map label strings to integer indices, -1 for unknown labels."""
+        """Converts a list of label strings to an array of integer indices."""
         mapping = MetricsUtils.label_mapping()
         return np.array([mapping.get(label, -1) for label in y_true], dtype=int)
 
     @staticmethod
     def normalize_proba(proba: np.ndarray) -> np.ndarray:
-        """Clip and row-normalize predicted probabilities safely.
+        """Safely clips and normalizes predicted probabilities.
 
-        - Clips values to [1e-15, 1.0] to avoid log(0) and instability.
-        - Normalizes rows so each row sums to 1.
-        - Works with any number of classes; current code uses 3.
+        This function ensures that probabilities are within the range [1e-15, 1.0]
+        and that each row sums to 1.
         """
         P = np.clip(np.asarray(proba, dtype=float), 1e-15, 1.0)
         row_sums = P.sum(axis=1, keepdims=True)
@@ -55,14 +49,15 @@ class MetricsUtils:
 
 # === File I/O ===
 def ensure_dir(path: str) -> None:
-    """Create a directory if it does not exist."""
+    """Ensures that a directory exists, creating it if necessary."""
     os.makedirs(path, exist_ok=True)
 
 
 def save_json(obj: dict, out_path: str) -> None:
-    """Save a dictionary to a JSON file.
+    """Saves a dictionary to a JSON file.
 
-    Ensures parent directory exists and writes UTF-8 JSON with indentation.
+    This function ensures that the parent directory of the output path exists
+    and writes the dictionary to a UTF-8 encoded JSON file with indentation.
     """
     ensure_dir(os.path.dirname(out_path) or ".")
     with open(out_path, "w", encoding="utf-8") as f:
@@ -71,13 +66,14 @@ def save_json(obj: dict, out_path: str) -> None:
 
 # === Probability Metrics ===
 class ProbabilityMetrics:
-    """Probability-based scoring rules for multiclass predictions."""
+    """A collection of probability-based scoring rules for multiclass predictions."""
 
     @staticmethod
     def brier_score_multiclass(y_true: List[str], proba: np.ndarray) -> float:
-        """Mean squared error between predicted probabilities and one-hot truth.
+        """Calculates the Brier score for multiclass predictions.
 
-        Returns NaN if no valid labels.
+        The Brier score measures the mean squared error between the predicted
+        probabilities and the actual outcomes.
         """
         y = MetricsUtils.labels_to_indices(y_true)
         P = MetricsUtils.normalize_proba(proba)
@@ -93,10 +89,9 @@ class ProbabilityMetrics:
 
     @staticmethod
     def log_loss_multiclass(y_true: List[str], proba: np.ndarray) -> float:
-        """Multiclass logarithmic loss.
+        """Calculates the logarithmic loss for multiclass predictions.
 
-        Penalizes confident but wrong predictions more heavily; lower is better.
-        Returns NaN if no valid labels.
+        Log loss penalizes confident but incorrect predictions more heavily.
         """
         y = MetricsUtils.labels_to_indices(y_true)
         P = MetricsUtils.normalize_proba(proba)
@@ -109,10 +104,10 @@ class ProbabilityMetrics:
 
     @staticmethod
     def ranked_probability_score_3c(y_true: List[str], proba: np.ndarray) -> float:
-        """Ranked Probability Score (RPS) for ordered 3-class outcomes.
+        """Calculates the Ranked Probability Score (RPS) for 3-class predictions.
 
-        Computes squared distance between cumulative distributions (pred vs true),
-        averaged over samples; lower is better. Returns NaN if no valid labels.
+        RPS is a measure of the squared distance between the cumulative
+        distributions of the predicted and actual outcomes.
         """
         y = MetricsUtils.labels_to_indices(y_true)
         P = MetricsUtils.normalize_proba(proba)
@@ -131,15 +126,16 @@ class ProbabilityMetrics:
 
 # === Calibration Metrics ===
 class CalibrationMetrics:
-    """Calibration assessment utilities (ECE and reliability-style bins)."""
+    """A collection of utilities for assessing model calibration."""
 
     @staticmethod
     def expected_calibration_error(
         y_true: List[str], proba: np.ndarray, n_bins: int = 10
     ) -> Dict[str, float]:
-        """Compute per-class Expected Calibration Error (ECE).
+        """Calculates the Expected Calibration Error (ECE) for each class.
 
-        ECE is the weighted average over bins of |accuracy - confidence|.
+        ECE measures the difference between the predicted probability and the
+        actual accuracy within different confidence bins.
         """
         y = MetricsUtils.labels_to_indices(y_true)
         P = MetricsUtils.normalize_proba(proba)
@@ -163,11 +159,11 @@ class CalibrationMetrics:
 
 # === Confusion Matrix ===
 class ConfusionMetrics:
-    """Confusion matrix and derived statistics (accuracy, precision, recall)."""
+    """Provides functions for calculating confusion matrices and related stats."""
 
     @staticmethod
     def _compute_matrix(y_true_idx: np.ndarray, y_pred_idx: np.ndarray) -> np.ndarray:
-        """Build a 3x3 confusion matrix from indexes for LABELS_ORDER."""
+        """Builds a 3x3 confusion matrix from integer indices."""
         cm = np.zeros((len(LABELS_ORDER), len(LABELS_ORDER)), dtype=int)
         for t, p in zip(y_true_idx, y_pred_idx):
             if t >= 0 and p >= 0:
@@ -176,7 +172,11 @@ class ConfusionMetrics:
 
     @staticmethod
     def confusion_matrix_stats(y_true: List[str], proba: np.ndarray) -> dict:
-        """Return confusion matrix, accuracy, and per-class precision/recall."""
+        """Calculates the confusion matrix, accuracy, and per-class stats.
+
+        This function returns a dictionary containing the confusion matrix,
+        overall accuracy, and precision and recall for each class.
+        """
         y_idx = MetricsUtils.labels_to_indices(y_true)
         P = MetricsUtils.normalize_proba(proba)
         y_pred = np.argmax(P, axis=1)
@@ -198,7 +198,7 @@ class ConfusionMetrics:
 
 # === Confidence Binning ===
 class ConfidenceAnalysis:
-    """Group performance by prediction confidence bins."""
+    """Provides functions for analyzing performance across confidence bins."""
 
     @staticmethod
     def bin_by_confidence(
@@ -208,9 +208,10 @@ class ConfidenceAnalysis:
         points: np.ndarray,
         n_bins: int = 5,
     ):
-        """Summarize average points and accuracy across confidence bins.
+        """Summarizes performance metrics across different confidence bins.
 
-        Returns a pandas DataFrame with per-bin statistics.
+        This function groups predictions into bins based on their confidence
+        and calculates the average points, accuracy, and confidence for each bin.
         """
         import pandas as pd
 
@@ -251,11 +252,18 @@ class ConfidenceAnalysis:
 
 # === Kicktipp Points ===
 class KicktippScoring:
-    """Scoring rules for Kicktipp predicted vs actual scorelines."""
+    """Implements the Kicktipp scoring system."""
 
     @staticmethod
     def compute_points(pred_home, pred_away, act_home, act_away):
-        """Calculate points: 4 exact, 3 correct diff, 2 correct outcome, 0 else."""
+        """Calculates Kicktipp points for a set of predictions.
+
+        The scoring is as follows:
+        - 4 points for the exact score.
+        - 3 points for the correct goal difference.
+        - 2 points for the correct outcome (win/draw/loss).
+        - 0 points otherwise.
+        """
         ph = np.asarray(list(pred_home), dtype=int)
         pa = np.asarray(list(pred_away), dtype=int)
         ah = np.asarray(list(act_home), dtype=int)

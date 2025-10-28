@@ -9,7 +9,20 @@ def train(
         5, help="Number of past seasons to use for training"
     ),
 ):
-    """Train the match predictor on historical data."""
+    """
+    Train the match predictor on historical data.
+
+    This command fetches historical match data, creates features, and trains the
+    goal difference predictor. The trained model is then saved to disk.
+
+    Args:
+        seasons_back: The number of past seasons to use for training.
+            Defaults to 5.
+
+    Example:
+        To train the model on the last 3 seasons of data:
+        $ kicktipp-predictor train --seasons-back 3
+    """
     from kicktipp_predictor.data import DataLoader
     from kicktipp_predictor.predictor import GoalDifferencePredictor
 
@@ -54,7 +67,25 @@ def predict(
     days: int = typer.Option(7, help="Days ahead to predict"),
     matchday: int | None = typer.Option(None, help="Specific matchday to predict"),
 ):
-    """Make predictions for upcoming matches."""
+    """
+    Make predictions for upcoming matches.
+
+    This command loads the trained model and makes predictions for upcoming
+    matches. You can specify a number of days ahead to predict or a specific
+    matchday.
+
+    Args:
+        days: The number of days ahead to predict. Defaults to 7.
+        matchday: The specific matchday to predict. If provided, 'days' is
+            ignored.
+
+    Example:
+        To predict matches for the next 10 days:
+        $ kicktipp-predictor predict --days 10
+
+        To predict matches for matchday 12:
+        $ kicktipp-predictor predict --matchday 12
+    """
     from kicktipp_predictor.data import DataLoader
     from kicktipp_predictor.predictor import GoalDifferencePredictor
 
@@ -127,9 +158,27 @@ def predict(
 def evaluate(
     retrain_every: int = typer.Option(
         1, help="Retrain every N matchdays during dynamic season evaluation"
-    )
+    ),
+    season: int | None = typer.Option(
+        None, help="Season to evaluate (e.g., 2024 for 2024/2025). Defaults to current season."
+    ),
 ):
-    """Evaluate performance across the current season using expanding-window retraining."""
+    """
+    Evaluate performance across a season using expanding-window retraining.
+
+    This command simulates a full season of predictions, retraining the model
+    at a specified frequency to provide a realistic performance evaluation.
+
+    Args:
+        retrain_every: The number of matchdays after which the model is
+            retrained. Defaults to 1.
+        season: The season to evaluate. Defaults to the current season.
+
+    Example:
+        To evaluate the model on the 2023/2024 season, retraining every 3
+        matchdays:
+        $ kicktipp-predictor evaluate --season 2023 --retrain-every 3
+    """
     from kicktipp_predictor.evaluate import run_season_dynamic_evaluation
 
     print("=" * 80)
@@ -139,11 +188,25 @@ def evaluate(
 
 
     # Run dynamic season evaluation
-    run_season_dynamic_evaluation(retrain_every=retrain_every)
+    run_season_dynamic_evaluation(retrain_every=retrain_every, season=season)
 
 
 @app.command()
 def web(host: str = "127.0.0.1", port: int = 8000):
+    """
+    Launch the Flask web application.
+
+    This command starts a local web server to provide a user interface for the
+    Kicktipp Predictor.
+
+    Args:
+        host: The hostname to bind to. Defaults to '127.0.0.1'.
+        port: The port to listen on. Defaults to 8000.
+
+    Example:
+        To run the web server on all available network interfaces on port 5000:
+        $ kicktipp-predictor web --host 0.0.0.0 --port 5000
+    """
     from kicktipp_predictor.web import create_app
 
     flask_app = create_app()
@@ -160,7 +223,26 @@ def tune(
     study_name: str = typer.Option("gd_v3_tuning", help="Optuna study name"),
     timeout: int | None = typer.Option(None, help="Timeout in seconds for optimize()"),
 ):
-    """Run Optuna multi-objective tuning for the V3 goal-difference model."""
+    """
+    Run Optuna multi-objective tuning for the V3 goal-difference model.
+
+    This command uses Optuna to search for the best hyperparameters for the
+    goal difference model. The results are saved to
+    `src/kicktipp_predictor/config/best_params.yaml`.
+
+    Args:
+        n_trials: The number of trials to run. Defaults to 100.
+        seasons_back: The number of past seasons to use for training the
+            tuning model. Defaults to 5.
+        storage: The Optuna storage URL. Defaults to a SQLite database in the
+            project's data directory.
+        study_name: The name of the Optuna study.
+        timeout: An optional timeout in seconds for the optimization process.
+
+    Example:
+        To run 200 tuning trials with a timeout of 1 hour:
+        $ kicktipp-predictor tune --n-trials 200 --timeout 3600
+    """
     from kicktipp_predictor.tune import run_tuning
 
     print("=" * 80)

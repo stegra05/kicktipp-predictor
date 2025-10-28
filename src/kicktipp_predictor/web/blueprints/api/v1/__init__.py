@@ -1,3 +1,7 @@
+"""Version 1 of the API blueprint.
+
+This blueprint groups all the endpoints for version 1 of the API.
+"""
 from __future__ import annotations
 
 from flask import Blueprint

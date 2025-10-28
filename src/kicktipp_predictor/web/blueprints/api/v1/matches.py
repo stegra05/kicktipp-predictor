@@ -20,6 +20,20 @@ def _iso(dt: datetime | None) -> str | None:
 
 @v1_bp.get("/matches/h2h")
 def get_h2h():
+    """Returns the head-to-head record for two teams.
+
+    This endpoint provides a summary of the head-to-head record between two
+    teams, including the number of wins for each team and the number of draws.
+    It also returns a list of recent matches between the two teams.
+
+    Query Parameters:
+        team1_id (int): The ID of the first team.
+        team2_id (int): The ID of the second team.
+
+    Returns:
+        A JSON response containing the head-to-head summary and a list of
+        recent matches.
+    """
     t1 = request.args.get("team1_id")
     t2 = request.args.get("team2_id")
     if not t1 or not t2:
@@ -78,6 +92,17 @@ def get_h2h():
 
 @v1_bp.get("/matches/<string:match_id>")
 def get_match_detail(match_id: str):
+    """Returns detailed information for a specific match.
+
+    This endpoint provides detailed information for a single match, including
+    the prediction, recent form of both teams, and the head-to-head record.
+
+    Args:
+        match_id: The ID of the match to retrieve.
+
+    Returns:
+        A JSON response containing the match details.
+    """
     loader = DataLoader()
     season = loader.get_current_season()
     matches = loader.fetch_season_matches(season)

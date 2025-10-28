@@ -9,11 +9,24 @@ from .blueprints.api import api_bp
 
 
 def create_app(config: AppConfig | None = None) -> Flask:
+    """Creates and configures the Flask application.
+
+    This function initializes the Flask app, loads the configuration, sets up
+    extensions like CORS and logging, and registers all necessary blueprints.
+
+    Args:
+        config: An optional application configuration object. If not provided,
+            the configuration is loaded from environment variables.
+
+    Returns:
+        The configured Flask application instance.
+    """
     app = Flask(__name__, static_folder="static", template_folder="templates")
 
     # Configuration
     app_config = config or load_config_from_env()
-    app.config.from_mapping(app_config.as_dict())
+    # Ensure lowercase keys like 'cors_origins' are preserved
+    app.config.update(app_config.as_dict())
 
     # Extensions
     configure_logging(app)

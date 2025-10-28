@@ -8,6 +8,21 @@ from kicktipp_predictor.data import DataLoader
 
 @v1_bp.get("/teams/<int:team_id>/recent-matches")
 def get_team_recent_matches(team_id: int):
+    """Returns the recent matches for a specific team.
+
+    This endpoint provides a list of recent matches for a given team, including
+    the opponent, location (home/away), result, and score.
+
+    Args:
+        team_id: The ID of the team to retrieve recent matches for.
+
+    Query Parameters:
+        limit (int, optional): The maximum number of recent matches to return.
+            Defaults to 5.
+
+    Returns:
+        A JSON response containing a list of recent match objects.
+    """
     limit_param = request.args.get("limit")
     try:
         limit = max(1, int(limit_param)) if limit_param else 5

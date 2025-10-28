@@ -29,14 +29,23 @@ logger = logging.getLogger(__name__)
 
 
 class DataLoader:
-    """Fetches match data and creates features for prediction.
+    """Fetches match data from the OpenLigaDB API and creates features for prediction.
 
-    Exposes a public API used by CLI and predictor modules while hiding
-    implementation details behind private helper methods.
+    This class provides a high-level interface to fetch historical and upcoming
+    match data, create a rich set of features for machine learning, and handle
+    caching to minimize API requests.
+
+    The public methods are designed to be used by the CLI and the predictor, while
+    the private methods contain the implementation details of data fetching,
+    parsing, and feature engineering.
     """
 
     def __init__(self):
-        """Initialize with configuration."""
+        """Initializes the DataLoader with configuration settings.
+
+        The configuration is loaded from the global config object, which includes
+        API settings, paths, and other parameters.
+        """
         self.config = get_config()
         self.cache_dir = str(self.config.paths.cache_dir)
         self.base_url = self.config.api.base_url
@@ -52,7 +61,15 @@ class DataLoader:
         self._elo_history: dict = {}
 
     def _is_cache_valid(self, cache_file: str) -> bool:
-        """Return True if cache file exists and is within TTL."""
+        """Checks if a cache file is valid based on its age.
+
+        Args:
+            cache_file: The path to the cache file.
+
+        Returns:
+            True if the cache file exists and is within the configured TTL,
+            False otherwise.
+        """
         try:
             age = time.time() - os.path.getmtime(cache_file)
             return age < self.cache_ttl
@@ -60,7 +77,15 @@ class DataLoader:
             return False
 
     def _load_cached_matches(self, cache_file: str) -> list[dict] | None:
-        """Load cached matches list from pickle file, or None on failure."""
+        """Loads a list of matches from a pickle cache file.
+
+        Args:
+            cache_file: The path to the cache file.
+
+        Returns:
+            A list of match dictionaries if the cache file is loaded successfully,
+            None otherwise.
+        """
         try:
             with open(cache_file, "rb") as f:
                 return pickle.load(f)
@@ -68,7 +93,12 @@ class DataLoader:
             return None
 
     def _save_cached_matches(self, cache_file: str, matches: list[dict]) -> None:
-        """Persist matches list to pickle cache, ignoring write errors."""
+        """Saves a list of matches to a pickle cache file.
+
+        Args:
+            cache_file: The path to the cache file.
+            matches: The list of match dictionaries to save.
+        """
         try:
             with open(cache_file, "wb") as f:
                 pickle.dump(matches, f)
@@ -76,9 +106,16 @@ class DataLoader:
             pass
 
     def _request_matches(self, url: str) -> list[dict]:
-        """Perform HTTP GET and return parsed JSON list of matches.
+        """Performs an HTTP GET request and returns the parsed JSON response.
 
-        Errors propagate to caller for context-appropriate handling.
+        Args:
+            url: The URL to request.
+
+        Returns:
+            A list of dictionaries from the JSON response.
+
+        Raises:
+            requests.exceptions.RequestException: For network-related errors.
         """
         response = requests.get(url, timeout=self.timeout)
         response.raise_for_status()
@@ -89,20 +126,27 @@ class DataLoader:
     # =================================================================
 
     def get_current_season(self) -> int:
-        """Get current season year (e.g., 2024 for 2024/2025 season)."""
+        """Determines the current football season based on the current date.
+
+        The season is assumed to start in July. For example, in August 2024,
+        the season is 2024 (representing the 2024/2025 season).
+
+        Returns:
+            The current season year.
+        """
         now = datetime.now()
         # Season typically starts in July/August
         return now.year if now.month >= 7 else now.year - 1
 
     def fetch_season_matches(self, season: int | None = None) -> list[dict]:
-        """Fetch all matches for a given season.
+        """Fetches all matches for a given season, using a cache if available.
 
         Args:
-            season: Season year (e.g., 2024 for 2024/2025).
-                Defaults to current season.
+            season: The season year (e.g., 2024 for the 2024/2025 season).
+                If None, the current season is used.
 
         Returns:
-            List of match dictionaries.
+            A list of match dictionaries for the specified season.
         """
         if season is None:
             season = self.get_current_season()
@@ -134,14 +178,14 @@ class DataLoader:
             return cached if cached is not None else []
 
     def fetch_matchday(self, matchday: int, season: int | None = None) -> list[dict]:
-        """Fetch matches for a specific matchday.
+        """Fetches all matches for a specific matchday.
 
         Args:
-            matchday: Matchday number (1-38 for 3. Liga).
-            season: Season year. Defaults to current season.
+            matchday: The matchday number (e.g., 1, 2, 3, ...).
+            season: The season year. If None, the current season is used.
 
         Returns:
-            List of match dictionaries.
+            A list of match dictionaries for the specified matchday.
         """
         if season is None:
             season = self.get_current_season()
@@ -166,14 +210,14 @@ class DataLoader:
     def get_upcoming_matches(
         self, days: int = 7, season: int | None = None
     ) -> list[dict]:
-        """Get matches in the next N days.
+        """Fetches upcoming matches within a specified number of days.
 
         Args:
-            days: Number of days to look ahead.
-            season: Season year. Defaults to current season.
+            days: The number of days to look ahead for upcoming matches.
+            season: The season year. If None, the current season is used.
 
         Returns:
-            List of upcoming match dictionaries.
+            A sorted list of upcoming match dictionaries.
         """
         matches = self.fetch_season_matches(season)
 
@@ -191,14 +235,14 @@ class DataLoader:
     def fetch_historical_seasons(
         self, start_season: int, end_season: int
     ) -> list[dict]:
-        """Fetch multiple seasons of historical data for training.
+        """Fetches all matches for a range of seasons.
 
         Args:
-            start_season: First season year (e.g., 2019).
-            end_season: Last season year (e.g., 2024).
+            start_season: The first season to fetch.
+            end_season: The last season to fetch.
 
         Returns:
-            List of all matches from all seasons.
+            A list containing all match dictionaries from the specified seasons.
         """
         all_matches = []
 
@@ -211,10 +255,16 @@ class DataLoader:
         return all_matches
 
     def _parse_matches(self, matches_raw: list[dict]) -> list[dict]:
-        """Parse raw API response into standardized match dictionaries.
+        """Parses the raw API response into a standardized format.
 
-        Converts OpenLigaDB response objects into a stable schema used by
-        downstream feature engineering.
+        This method converts the JSON response from the OpenLigaDB API into a
+        more usable format with consistent keys and data types.
+
+        Args:
+            matches_raw: A list of raw match dictionaries from the API.
+
+        Returns:
+            A list of parsed and standardized match dictionaries.
         """
         matches = []
 
@@ -508,13 +558,18 @@ class DataLoader:
         return long_hist, hist_cols
 
     def create_features_from_matches(self, matches: list[dict]) -> pd.DataFrame:
-        """Create feature dataset from match data using vectorized pandas ops.
+        """Creates a feature-rich DataFrame from a list of match dictionaries.
+
+        This is the main entry point for feature engineering. It takes a list of
+        matches, computes a wide range of features, and returns a DataFrame
+        ready for training or prediction.
 
         Args:
-            matches: List of match dictionaries.
+            matches: A list of match dictionaries, as returned by the data
+                fetching methods.
 
         Returns:
-            DataFrame with features and target variables.
+            A pandas DataFrame with features and target variables.
         """
         if not matches:
             return pd.DataFrame()
@@ -594,14 +649,19 @@ class DataLoader:
     def create_prediction_features(
         self, upcoming_matches: list[dict], historical_matches: list[dict]
     ) -> pd.DataFrame:
-        """Create features for upcoming matches using vectorized history merges.
+        """Creates features for upcoming matches using historical context.
+
+        This method is used to generate features for matches that have not yet
+        been played. It uses the historical match data to compute the necessary
+        features for the upcoming matches.
 
         Args:
-            upcoming_matches: List of upcoming match dictionaries.
-            historical_matches: List of all historical matches for context.
+            upcoming_matches: A list of upcoming match dictionaries.
+            historical_matches: A list of historical match dictionaries to use
+                as context.
 
         Returns:
-            DataFrame with features (no target variables).
+            A pandas DataFrame with features for the upcoming matches.
         """
         if not upcoming_matches:
             return pd.DataFrame()
@@ -666,8 +726,6 @@ class DataLoader:
                 else:
                     he = float(self._elo_base)
                     ae = float(self._elo_base)
-                r["home_elo"] = he
-                r["away_elo"] = ae
                 return he - ae
 
             upcoming["elo_diff"] = upcoming.apply(_row_elo_diff, axis=1)
@@ -1291,7 +1349,14 @@ class DataLoader:
         return long_df
 
     def _calculate_table(self, matches: list[dict]) -> dict:
-        """Calculate league table from matches."""
+        """Calculates the league table from a list of matches.
+
+        Args:
+            matches: A list of match dictionaries.
+
+        Returns:
+            A dictionary representing the league table, with team names as keys.
+        """
         table = defaultdict(
             lambda: {
                 "played": 0,
