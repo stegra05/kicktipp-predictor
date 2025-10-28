@@ -6,7 +6,7 @@ from typing import Any
 
 from flask import jsonify, request
 
-from ... import v1_bp
+from . import v1_bp
 
 
 DATA_DIR = Path(__file__).resolve().parents[7] / "data" / "predictions"

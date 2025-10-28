@@ -3,7 +3,7 @@ from __future__ import annotations
 import joblib
 from flask import jsonify
 
-from ... import v1_bp
+from . import v1_bp
 from kicktipp_predictor.config import get_config
 
 

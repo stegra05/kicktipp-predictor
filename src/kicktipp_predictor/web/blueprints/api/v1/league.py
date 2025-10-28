@@ -5,7 +5,7 @@ from typing import Any
 
 from flask import jsonify, request
 
-from ... import v1_bp
+from . import v1_bp
 from kicktipp_predictor.data import DataLoader
 
 

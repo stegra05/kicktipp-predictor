@@ -3,7 +3,7 @@ from __future__ import annotations
 from flask import current_app, jsonify
 from kicktipp_predictor.predictor import GoalDifferencePredictor
 
-from ... import v1_bp
+from . import v1_bp
 
 
 @v1_bp.get("/status")

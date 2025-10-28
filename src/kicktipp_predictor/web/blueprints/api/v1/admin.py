@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from flask import jsonify
 
-from ... import v1_bp
+from . import v1_bp
 
 
 @v1_bp.post("/admin/retrain")

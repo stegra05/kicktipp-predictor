@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from flask import jsonify, request
 
-from ... import v1_bp
+from . import v1_bp
 from kicktipp_predictor.data import DataLoader
 
 

@@ -144,8 +144,9 @@ def evaluate(
 
 @app.command()
 def web(host: str = "127.0.0.1", port: int = 8000):
-    from kicktipp_predictor.web.app import app as flask_app
+    from kicktipp_predictor.web import create_app
 
+    flask_app = create_app()
     flask_app.run(host=host, port=port)
 
 @app.command()
