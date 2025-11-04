@@ -9,24 +9,22 @@ produces summary and dependence plots, and writes a markdown report with key
 findings. It supports large datasets via chunked processing and will retrain a
 model if none is found.
 """
+
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
-from datetime import datetime
-import json
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import shap
-from joblib import Parallel, delayed
 import xgboost as xgb
+from joblib import Parallel, delayed
 
+from kicktipp_predictor.config import get_config
 from kicktipp_predictor.data import DataLoader
 from kicktipp_predictor.predictor import GoalDifferencePredictor
-from kicktipp_predictor.config import get_config
 
 
 def _ensure_dir(path: Path) -> None:
@@ -59,7 +57,9 @@ def validate_dataframe(df: pd.DataFrame, name: str) -> dict:
     return summary
 
 
-def load_or_train_model(predictor: GoalDifferencePredictor, train_df: pd.DataFrame) -> None:
+def load_or_train_model(
+    predictor: GoalDifferencePredictor, train_df: pd.DataFrame
+) -> None:
     """Load a trained model; if unavailable, train and save one."""
     try:
         predictor.load_model()
@@ -86,7 +86,9 @@ def _chunks(n: int, chunk_size: int) -> list[tuple[int, int]]:
     return bounds
 
 
-def compute_shap_values_tree(model, X: pd.DataFrame, n_jobs: int, chunk_size: int) -> tuple[np.ndarray, float]:
+def compute_shap_values_tree(
+    model, X: pd.DataFrame, n_jobs: int, chunk_size: int
+) -> tuple[np.ndarray, float]:
     """Compute SHAP values using XGBoost's native pred_contribs for tree models.
 
     Returns (shap_values, base_value).
@@ -98,12 +100,18 @@ def compute_shap_values_tree(model, X: pd.DataFrame, n_jobs: int, chunk_size: in
 
     def _compute_chunk(s: int, e: int) -> tuple[np.ndarray, np.ndarray]:
         dmat = xgb.DMatrix(X.iloc[s:e].values, feature_names=X.columns.tolist())
-        contribs = booster.predict(dmat, pred_contribs=True)  # shape: (rows, n_features+1)
+        contribs = booster.predict(
+            dmat, pred_contribs=True
+        )  # shape: (rows, n_features+1)
         return contribs[:, :-1], contribs[:, -1]
 
-    parts = Parallel(n_jobs=int(n_jobs), backend="loky")(
-        delayed(_compute_chunk)(s, e) for (s, e) in bounds
-    ) if bounds else []
+    parts = (
+        Parallel(n_jobs=int(n_jobs), backend="loky")(
+            delayed(_compute_chunk)(s, e) for (s, e) in bounds
+        )
+        if bounds
+        else []
+    )
 
     if not parts:
         return np.empty((0, X.shape[1])), 0.0
@@ -114,7 +122,9 @@ def compute_shap_values_tree(model, X: pd.DataFrame, n_jobs: int, chunk_size: in
     return shap_values, base_value
 
 
-def compute_shap_values_kernel(model, X: pd.DataFrame, n_jobs: int, chunk_size: int) -> tuple[np.ndarray, float]:
+def compute_shap_values_kernel(
+    model, X: pd.DataFrame, n_jobs: int, chunk_size: int
+) -> tuple[np.ndarray, float]:
     """Compute SHAP values using KernelExplainer for non-tree models."""
     # Background: use kmeans for a compact summary
     bg = shap.kmeans(X, min(100, len(X)))
@@ -125,9 +135,13 @@ def compute_shap_values_kernel(model, X: pd.DataFrame, n_jobs: int, chunk_size: 
     def _compute_chunk(s: int, e: int) -> np.ndarray:
         return np.array(explainer.shap_values(X.iloc[s:e], nsamples="auto"))
 
-    parts: list[np.ndarray] = Parallel(n_jobs=int(n_jobs), backend="loky")(
-        delayed(_compute_chunk)(s, e) for (s, e) in bounds
-    ) if bounds else []
+    parts: list[np.ndarray] = (
+        Parallel(n_jobs=int(n_jobs), backend="loky")(
+            delayed(_compute_chunk)(s, e) for (s, e) in bounds
+        )
+        if bounds
+        else []
+    )
 
     shap_values = np.vstack(parts) if parts else np.empty((0, X.shape[1]))
     # KernelExplainer expected_value typically scalar
@@ -139,7 +153,9 @@ def compute_shap_values_kernel(model, X: pd.DataFrame, n_jobs: int, chunk_size: 
     return shap_values, base_value
 
 
-def feature_importance(shap_values: np.ndarray, feature_names: list[str]) -> pd.DataFrame:
+def feature_importance(
+    shap_values: np.ndarray, feature_names: list[str]
+) -> pd.DataFrame:
     mean_abs = np.mean(np.abs(shap_values), axis=0)
     imp_df = pd.DataFrame({"feature": feature_names, "mean_abs_shap": mean_abs})
     imp_df.sort_values("mean_abs_shap", ascending=False, inplace=True)
@@ -147,7 +163,13 @@ def feature_importance(shap_values: np.ndarray, feature_names: list[str]) -> pd.
     return imp_df
 
 
-def save_array_artifacts(out_dir: Path, shap_values: np.ndarray, base_value: float, feature_names: list[str], index: pd.Index) -> None:
+def save_array_artifacts(
+    out_dir: Path,
+    shap_values: np.ndarray,
+    base_value: float,
+    feature_names: list[str],
+    index: pd.Index,
+) -> None:
     npz_path = out_dir / "shap_values.npz"
     np.savez_compressed(
         npz_path,
@@ -170,7 +192,9 @@ def plot_summary(shap_values: np.ndarray, X: pd.DataFrame, out_dir: Path) -> Non
     print(f"[INFO] Saved summary plots: {png.name}, {svg.name}")
 
 
-def plot_dependence_for_top_features(shap_values: np.ndarray, X: pd.DataFrame, top_features: list[str], out_dir: Path) -> None:
+def plot_dependence_for_top_features(
+    shap_values: np.ndarray, X: pd.DataFrame, top_features: list[str], out_dir: Path
+) -> None:
     for feat in top_features:
         try:
             plt.figure(figsize=(9, 6))
@@ -180,12 +204,16 @@ def plot_dependence_for_top_features(shap_values: np.ndarray, X: pd.DataFrame, t
             plt.savefig(out_png, bbox_inches="tight", dpi=200)
             plt.savefig(out_svg, bbox_inches="tight")
             plt.close()
-            print(f"[INFO] Saved dependence plot for '{feat}' -> {out_png.name}, {out_svg.name}")
+            print(
+                f"[INFO] Saved dependence plot for '{feat}' -> {out_png.name}, {out_svg.name}"
+            )
         except Exception as exc:
             print(f"[WARN] Failed dependence plot for '{feat}': {exc}")
 
 
-def analyze_tanh_tamed_elo(shap_values: np.ndarray, X: pd.DataFrame, out_dir: Path) -> dict:
+def analyze_tanh_tamed_elo(
+    shap_values: np.ndarray, X: pd.DataFrame, out_dir: Path
+) -> dict:
     results: dict = {"feature": "tanh_tamed_elo"}
     feat = "tanh_tamed_elo"
     if feat not in X.columns:
@@ -218,19 +246,43 @@ def analyze_tanh_tamed_elo(shap_values: np.ndarray, X: pd.DataFrame, out_dir: Pa
         plt.savefig(out_png, bbox_inches="tight", dpi=200)
         plt.savefig(out_svg, bbox_inches="tight")
         plt.close()
-        print(f"[INFO] Saved dependence plot for 'tanh_tamed_elo' -> {out_png.name}, {out_svg.name}")
+        print(
+            f"[INFO] Saved dependence plot for 'tanh_tamed_elo' -> {out_png.name}, {out_svg.name}"
+        )
     except Exception as exc:
         print(f"[WARN] Failed special dependence plot for tanh_tamed_elo: {exc}")
     return results
 
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run SHAP analysis for GoalDifferencePredictor")
-    parser.add_argument("--seasons-back", type=int, default=5, help="Number of past seasons for training data")
-    parser.add_argument("--max-samples", type=int, default=5000, help="Max samples for SHAP computation")
-    parser.add_argument("--chunk-size", type=int, default=2000, help="Chunk size for SHAP computation")
-    parser.add_argument("--plots-top-n", type=int, default=7, help="Top-N features for dependence plots")
-    parser.add_argument("--output-dir", type=str, default=None, help="Output directory for artifacts")
-    parser.add_argument("--explainer", type=str, default="auto", choices=["auto", "tree", "kernel"], help="Explainer backend")
+    parser = argparse.ArgumentParser(
+        description="Run SHAP analysis for GoalDifferencePredictor"
+    )
+    parser.add_argument(
+        "--seasons-back",
+        type=int,
+        default=5,
+        help="Number of past seasons for training data",
+    )
+    parser.add_argument(
+        "--max-samples", type=int, default=5000, help="Max samples for SHAP computation"
+    )
+    parser.add_argument(
+        "--chunk-size", type=int, default=2000, help="Chunk size for SHAP computation"
+    )
+    parser.add_argument(
+        "--plots-top-n", type=int, default=7, help="Top-N features for dependence plots"
+    )
+    parser.add_argument(
+        "--output-dir", type=str, default=None, help="Output directory for artifacts"
+    )
+    parser.add_argument(
+        "--explainer",
+        type=str,
+        default="auto",
+        choices=["auto", "tree", "kernel"],
+        help="Explainer backend",
+    )
     args = parser.parse_args()
 
     cfg = get_config()
@@ -279,9 +331,13 @@ def main() -> None:
     print(f"[INFO] Explainer backend: {backend}")
 
     if backend == "tree":
-        shap_values, base_value = compute_shap_values_tree(predictor.model, X, cfg.model.n_jobs, args.chunk_size)
+        shap_values, base_value = compute_shap_values_tree(
+            predictor.model, X, cfg.model.n_jobs, args.chunk_size
+        )
     else:
-        shap_values, base_value = compute_shap_values_kernel(predictor.model, X, cfg.model.n_jobs, args.chunk_size)
+        shap_values, base_value = compute_shap_values_kernel(
+            predictor.model, X, cfg.model.n_jobs, args.chunk_size
+        )
 
     # Save arrays
     save_array_artifacts(out_dir, shap_values, base_value, list(X.columns), X.index)
@@ -316,7 +372,9 @@ def main() -> None:
             "draw_margin": float(cfg.model.draw_margin),
         },
     }
-    write_findings_md(out_dir, imp_df, tanh_stats, top_k=int(args.plots_top_n), metadata=metadata)
+    # write_findings_md(
+    #     out_dir, imp_df, tanh_stats, top_k=int(args.plots_top_n), metadata=metadata
+    # )
 
     print("\nDone.")
 

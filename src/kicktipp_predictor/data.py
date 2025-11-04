@@ -146,9 +146,7 @@ class DataLoader:
         if season is None:
             season = self.get_current_season()
 
-        url = (
-            f"{self.base_url}/getmatchdata/{self.league_code}/{season}/{matchday}"
-        )
+        url = f"{self.base_url}/getmatchdata/{self.league_code}/{season}/{matchday}"
         try:
             matches_raw = self._request_matches(url)
             parsed = self._parse_matches(matches_raw)
@@ -314,11 +312,14 @@ class DataLoader:
             col = elo_diff_col
             if col not in df.columns:
                 # Attempt to derive elo_diff from home/away elos if available
-                if "elo_diff" not in df.columns and {"home_elo", "away_elo"}.issubset(df.columns):
-                    df["elo_diff"] = (
-                        pd.to_numeric(df["home_elo"], errors="coerce").fillna(0.0)
-                        - pd.to_numeric(df["away_elo"], errors="coerce").fillna(0.0)
-                    )
+                if "elo_diff" not in df.columns and {"home_elo", "away_elo"}.issubset(
+                    df.columns
+                ):
+                    df["elo_diff"] = pd.to_numeric(
+                        df["home_elo"], errors="coerce"
+                    ).fillna(0.0) - pd.to_numeric(
+                        df["away_elo"], errors="coerce"
+                    ).fillna(0.0)
                 # Attempt to derive normalized diff from raw Elo difference
                 if "elo_diff" in df.columns:
                     home_mp = self._series_or_zero(df, "home_matches_played", 0)
@@ -360,7 +361,8 @@ class DataLoader:
                 return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
             cols = list(df.columns)
             to_drop = [
-                c for c in cols
+                c
+                for c in cols
                 if ("elo" in str(c).lower()) and (str(c).lower() != "tanh_tamed_elo")
             ]
             # Optionally drop ELO-derived binary to enforce isolation
@@ -450,7 +452,9 @@ class DataLoader:
         """
         # Build long-format frame from context matches (finished only)
         try:
-            context_records = context_df.to_dict(orient="records") if not context_df.empty else []
+            context_records = (
+                context_df.to_dict(orient="records") if not context_df.empty else []
+            )
         except Exception:
             context_records = []
         long_hist = self._build_team_long_df(context_records)
@@ -458,7 +462,9 @@ class DataLoader:
             return long_hist, []
         # Ensure proper dtypes and ordering
         long_hist["date"] = pd.to_datetime(long_hist["date"])
-        long_hist = long_hist.sort_values(["team", "date", "match_id"]).reset_index(drop=True)
+        long_hist = long_hist.sort_values(["team", "date", "match_id"]).reset_index(
+            drop=True
+        )
         # Normalize key dtypes to avoid merge mismatches (e.g., int vs str)
         if "match_id" in long_hist.columns:
             try:
@@ -471,7 +477,9 @@ class DataLoader:
             except Exception:
                 pass
         # Prior matches played per team (leakage-safe count)
-        long_hist["matches_played_prior"] = long_hist.groupby("team", group_keys=False).cumcount()
+        long_hist["matches_played_prior"] = long_hist.groupby(
+            "team", group_keys=False
+        ).cumcount()
         # Cache current standings for opponent rank weighting
         try:
             self._current_table = self._calculate_table(context_records)
@@ -655,14 +663,19 @@ class DataLoader:
                         prior_presence,
                         int(self._elo_avg_k),
                     )
+
             # Map per-row elo
             def _row_elo_diff(r: pd.Series) -> float:
                 s = int(r.get("season")) if pd.notna(r.get("season")) else None
                 he = None
                 ae = None
                 if s is not None and s in season_current:
-                    he = float(season_current[s].get(str(r.get("home_team")), self._elo_base))
-                    ae = float(season_current[s].get(str(r.get("away_team")), self._elo_base))
+                    he = float(
+                        season_current[s].get(str(r.get("home_team")), self._elo_base)
+                    )
+                    ae = float(
+                        season_current[s].get(str(r.get("away_team")), self._elo_base)
+                    )
                 else:
                     he = float(self._elo_base)
                     ae = float(self._elo_base)
@@ -825,9 +838,12 @@ class DataLoader:
         # 3) Attempt JSON parse when applicable
         if not feats:
             try:
-                stripped = "\n".join([ln.split("#", 1)[0] for ln in text.splitlines()]).strip()
+                stripped = "\n".join(
+                    [ln.split("#", 1)[0] for ln in text.splitlines()]
+                ).strip()
                 if stripped.startswith("[") or stripped.startswith("{"):
                     import json
+
                     obj = json.loads(stripped)
                     if isinstance(obj, list):
                         feats = [str(x).strip() for x in obj if str(x).strip()]
@@ -984,10 +1000,14 @@ class DataLoader:
                 teams.add(str(at))
         return teams
 
-    def _identify_new_teams(self, season_teams: set[str], prev_season_teams: set[str]) -> set[str]:
+    def _identify_new_teams(
+        self, season_teams: set[str], prev_season_teams: set[str]
+    ) -> set[str]:
         return set(season_teams) - set(prev_season_teams)
 
-    def _build_prior_presence(self, seasons: list[int], by_season: dict[int, list[dict]]) -> set[str]:
+    def _build_prior_presence(
+        self, seasons: list[int], by_season: dict[int, list[dict]]
+    ) -> set[str]:
         prior: set[str] = set()
         for s in seasons:
             for m in by_season.get(s, []) or []:
@@ -1035,8 +1055,10 @@ class DataLoader:
             )
         except Exception:
             sorted_items = []
-        top_teams = [t for t, _ in sorted_items[:max(1, k)] if t in prev_final_elos]
-        bottom_teams = [t for t, _ in sorted_items[-max(1, k):] if t in prev_final_elos]
+        top_teams = [t for t, _ in sorted_items[: max(1, k)] if t in prev_final_elos]
+        bottom_teams = [
+            t for t, _ in sorted_items[-max(1, k) :] if t in prev_final_elos
+        ]
         if top_teams:
             top_avg = float(np.mean([prev_final_elos[t] for t in top_teams]))
         else:
@@ -1073,7 +1095,9 @@ class DataLoader:
             start[t] = float(prev_final_elos.get(t, self._elo_base))
         new_teams = self._identify_new_teams(teams_s, prev_teams)
         classes = self._classify_new_teams(new_teams, prior_presence)
-        top_avg, bottom_avg = self._compute_prev_season_bases(prev_final_elos, prev_table, k)
+        top_avg, bottom_avg = self._compute_prev_season_bases(
+            prev_final_elos, prev_table, k
+        )
         for t in new_teams:
             start[t] = float(bottom_avg if classes.get(t) == "promoted" else top_avg)
         # Any remaining (e.g., unseen teams) get neutral base
@@ -1110,18 +1134,32 @@ class DataLoader:
         for s in seasons_sorted:
             season_matches = sorted(
                 by_season.get(s, []),
-                key=lambda m: (m.get("date"), int(m.get("matchday", 0)), str(m.get("match_id"))),
+                key=lambda m: (
+                    m.get("date"),
+                    int(m.get("matchday", 0)),
+                    str(m.get("match_id")),
+                ),
             )
             teams_s = self._teams_in_season(season_matches)
             prev_teams = self._teams_in_season(by_season.get(s - 1, []))
             prior_presence = self._build_prior_presence(
                 [x for x in seasons_sorted if x < s], by_season
             )
-            prev_table = self._calculate_table(by_season.get(s - 1, [])) if (s - 1) in by_season else {}
+            prev_table = (
+                self._calculate_table(by_season.get(s - 1, []))
+                if (s - 1) in by_season
+                else {}
+            )
 
             # Initial elos for the season
             start_elos = self._compute_initial_elos_for_season(
-                s, teams_s, prev_teams, prev_final_elos, prev_table, prior_presence, int(self._elo_avg_k)
+                s,
+                teams_s,
+                prev_teams,
+                prev_final_elos,
+                prev_table,
+                prior_presence,
+                int(self._elo_avg_k),
             )
             season_initial[s] = dict(start_elos)
             current_elos = dict(start_elos)
@@ -1203,9 +1241,9 @@ class DataLoader:
         draw_prior = (
             grp["goals_for"].shift(1) == grp["goals_against"].shift(1)
         ).astype(float)
-        loss_prior = (
-            grp["goals_for"].shift(1) < grp["goals_against"].shift(1)
-        ).astype(float)
+        loss_prior = (grp["goals_for"].shift(1) < grp["goals_against"].shift(1)).astype(
+            float
+        )
 
         # Strength-of-Schedule: weight prior points by opponent rank
         try:
@@ -1259,9 +1297,7 @@ class DataLoader:
         long_df["form_goals_conceded"] = ga_roll
         long_df["form_goal_diff"] = gf_roll - ga_roll
         long_df["form_avg_goals_scored"] = gf_roll / np.minimum(N, grp.cumcount() + 1)
-        long_df["form_avg_goals_conceded"] = ga_roll / np.minimum(
-            N, grp.cumcount() + 1
-        )
+        long_df["form_avg_goals_conceded"] = ga_roll / np.minimum(N, grp.cumcount() + 1)
 
         # Multi-window form metrics (L3/L5/L10)
         for w in (3, 5, 10):

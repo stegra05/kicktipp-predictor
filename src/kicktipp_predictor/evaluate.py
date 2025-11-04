@@ -40,9 +40,7 @@ from kicktipp_predictor.predictor import GoalDifferencePredictor
 # ===========================================================================
 
 
-def _process_prediction(
-    pred: dict, actual: dict
-) -> dict:
+def _process_prediction(pred: dict, actual: dict) -> dict:
     """Process a single prediction and add evaluation metrics.
 
     Args:
@@ -59,7 +57,8 @@ def _process_prediction(
 
     # Determine actual winner
     actual_winner = (
-        "H" if actual_home > actual_away
+        "H"
+        if actual_home > actual_away
         else ("A" if actual_away > actual_home else "D")
     )
 
@@ -83,8 +82,7 @@ def _process_prediction(
         points = 3
     else:
         pred_winner_score = (
-            "H" if pred_home > pred_away
-            else ("A" if pred_away > pred_home else "D")
+            "H" if pred_home > pred_away else ("A" if pred_away > pred_home else "D")
         )
         points = 2 if pred_winner_score == actual_winner else 0
 
@@ -123,7 +121,8 @@ def _compute_overall_metrics(
 
     # Determine true outcome labels
     true_labels = [
-        "H" if actual_home[i] > actual_away[i]
+        "H"
+        if actual_home[i] > actual_away[i]
         else ("A" if actual_away[i] > actual_home[i] else "D")
         for i in range(len(predictions))
     ]
@@ -163,9 +162,7 @@ def _compute_overall_metrics(
         "accuracy": float(
             np.mean(
                 np.argmax(prob_matrix, axis=1)
-                == np.array(
-                    [{"H": 0, "D": 1, "A": 2}[t] for t in true_labels]
-                )
+                == np.array([{"H": 0, "D": 1, "A": 2}[t] for t in true_labels])
             )
         ),
         "n": int(len(predictions)),
@@ -224,7 +221,8 @@ def _compute_baseline_comparison(
         Dictionary with baseline metrics and bootstrap CI
     """
     true_labels = [
-        "H" if actual_home[i] > actual_away[i]
+        "H"
+        if actual_home[i] > actual_away[i]
         else ("A" if actual_away[i] > actual_home[i] else "D")
         for i in range(n_matches)
     ]
@@ -237,9 +235,7 @@ def _compute_baseline_comparison(
     )
 
     baseline = {
-        "avg_points": float(np.mean(baseline_points))
-        if len(baseline_points)
-        else 0.0,
+        "avg_points": float(np.mean(baseline_points)) if len(baseline_points) else 0.0,
         "total_points": int(np.sum(baseline_points)),
         "accuracy": float(np.mean(np.array(true_labels) == "H")),
     }
@@ -279,7 +275,9 @@ def _compute_baseline_comparison(
 # ===========================================================================
 
 
-def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
+def run_season_dynamic_evaluation(
+    retrain_every: int = 1, seasons_back: int = 5
+) -> None:
     """Evaluate current season with expanding-window retraining.
 
     Retrains the predictor every N matchdays using all matches finished so far
@@ -288,6 +286,10 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
       - Rich console report
       - data/predictions/metrics_season.json
       - data/predictions/per_matchday_metrics_season.csv
+
+    Args:
+        retrain_every: Retrain model every N matchdays
+        seasons_back: Number of previous seasons to include in training data
     """
     console = Console()
 
@@ -323,11 +325,11 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
 
     console.print("Preparing historical warm start (previous seasons)...")
     all_historical_matches = data_loader.fetch_historical_seasons(
-        current_season - 5, current_season - 1
+        current_season - seasons_back, current_season - 1
     )
     cumulative_training_matches = list(all_historical_matches)
     console.print(
-        f"Initialized training set with [bold]{len(cumulative_training_matches)}[/bold] matches from previous seasons."
+        f"Initialized training set with [bold]{len(cumulative_training_matches)}[/bold] matches from {seasons_back} previous seasons."
     )
 
     for matchday in range(first_matchday, last_matchday + 1):
@@ -416,14 +418,10 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
                 f"[bold]{os.path.join(out_dir, 'blend_debug.csv')}[/bold]"
             )
     except Exception as e:  # pragma: no cover
-        console.print(
-            f"[yellow]Warning: could not write blend_debug.csv: {e}[/yellow]"
-        )
+        console.print(f"[yellow]Warning: could not write blend_debug.csv: {e}[/yellow]")
 
     # Overall quality breakdown
-    exact_count = int(
-        np.sum((pred_home == actual_home) & (pred_away == actual_away))
-    )
+    exact_count = int(np.sum((pred_home == actual_home) & (pred_away == actual_away)))
     diff_count = int(
         np.sum(
             ((pred_home - pred_away) == (actual_home - actual_away))
@@ -477,18 +475,14 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
     # Confusion & per-class stats
     cm_stats = confusion_matrix_stats(true_labels, prob_matrix)
     cm = np.array(cm_stats["matrix"], dtype=int)
-    per_class = (
-        cm_stats.get("per_class", {}) if isinstance(cm_stats, dict) else {}
-    )
+    per_class = cm_stats.get("per_class", {}) if isinstance(cm_stats, dict) else {}
 
     # Confidence buckets (numeric only)
     max_prob = np.max(prob_matrix, axis=1)
     sorted_probs = np.sort(prob_matrix, axis=1)[:, ::-1]
     margin = sorted_probs[:, 0] - sorted_probs[:, 1]
     confidence = 0.6 * max_prob + 0.4 * margin
-    conf_df = bin_by_confidence(
-        confidence, true_labels, prob_matrix, points, n_bins=5
-    )
+    conf_df = bin_by_confidence(confidence, true_labels, prob_matrix, points, n_bins=5)
 
     # Save season metrics
     save_json({"main": metrics}, os.path.join(out_dir, "metrics_season.json"))
@@ -526,29 +520,35 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
             accuracy_md = float(
                 np.mean(
                     np.argmax(prob_md, axis=1)
-                    == np.array(
-                        [{"H": 0, "D": 1, "A": 2}[t] for t in labels_md]
-                    )
+                    == np.array([{"H": 0, "D": 1, "A": 2}[t] for t in labels_md])
                 )
             )
 
             exact_md = int(
                 np.sum(
-                    (pred_home_md == actual_home_md)
-                    & (pred_away_md == actual_away_md)
+                    (pred_home_md == actual_home_md) & (pred_away_md == actual_away_md)
                 )
             )
             diff_md = int(
                 np.sum(
                     ((pred_home_md - pred_away_md) == (actual_home_md - actual_away_md))
-                    & ((pred_home_md != actual_home_md) | (pred_away_md != actual_away_md))
+                    & (
+                        (pred_home_md != actual_home_md)
+                        | (pred_away_md != actual_away_md)
+                    )
                 )
             )
             result_md = int(
                 np.sum(
                     ((pred_home_md > pred_away_md) & (actual_home_md > actual_away_md))
-                    | ((pred_home_md == pred_away_md) & (actual_home_md == actual_away_md))
-                    | ((pred_home_md < pred_away_md) & (actual_home_md < actual_away_md))
+                    | (
+                        (pred_home_md == pred_away_md)
+                        & (actual_home_md == actual_away_md)
+                    )
+                    | (
+                        (pred_home_md < pred_away_md)
+                        & (actual_home_md < actual_away_md)
+                    )
                 )
                 - exact_md
                 - diff_md
@@ -560,9 +560,7 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
                 baseline_home_md, baseline_away_md, actual_home_md, actual_away_md
             )
             baseline_total = int(np.sum(baseline_pts_md))
-            baseline_avg = (
-                float(np.mean(baseline_pts_md)) if n_matches else 0.0
-            )
+            baseline_avg = float(np.mean(baseline_pts_md)) if n_matches else 0.0
 
             rows.append(
                 {
@@ -662,7 +660,7 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
     for lab in LABELS_ORDER:
         a = int(label_counts.get(lab, 0))
         p = int(pred_counts.get(lab, 0))
-        dist_table.add_row(lab, str(a), f"{a/total:.1%}", str(p), f"{p/total:.1%}")
+        dist_table.add_row(lab, str(a), f"{a / total:.1%}", str(p), f"{p / total:.1%}")
 
     # Points distribution
     points_table = Table(title="Points Distribution", box=box.SIMPLE_HEAVY)
@@ -671,7 +669,7 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
     points_table.add_column("Percent", justify="right")
     for point_value in [0, 2, 3, 4]:
         count = int(np.sum(points == point_value))
-        points_table.add_row(str(point_value), str(count), f"{(count/total):.1%}")
+        points_table.add_row(str(point_value), str(count), f"{(count / total):.1%}")
 
     console.print(Columns([dist_table, points_table], equal=True))
 
@@ -692,12 +690,17 @@ def run_season_dynamic_evaluation(retrain_every: int = 1) -> None:
         draw_table.add_row("Within 15–30% target", "Yes" if target_ok else "No")
 
         # Uncertainty scaling stats from predictions
-        gd_abs = np.array([
-            abs(float(p.get("predicted_goal_difference", 0.0))) for p in all_predictions
-        ], dtype=float)
-        stddevs = np.array([
-            float(p.get("uncertainty_stddev", float("nan"))) for p in all_predictions
-        ], dtype=float)
+        gd_abs = np.array(
+            [
+                abs(float(p.get("predicted_goal_difference", 0.0)))
+                for p in all_predictions
+            ],
+            dtype=float,
+        )
+        stddevs = np.array(
+            [float(p.get("uncertainty_stddev", float("nan"))) for p in all_predictions],
+            dtype=float,
+        )
         if len(gd_abs) > 1 and np.all(np.isfinite(stddevs)):
             corr = float(np.corrcoef(gd_abs, stddevs)[0, 1])
         else:

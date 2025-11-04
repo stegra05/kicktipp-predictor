@@ -63,7 +63,6 @@ def predict(
     print("=" * 80)
     print()
 
-
     # Load data
     loader = DataLoader()
     predictor = GoalDifferencePredictor()
@@ -127,7 +126,10 @@ def predict(
 def evaluate(
     retrain_every: int = typer.Option(
         1, help="Retrain every N matchdays during dynamic season evaluation"
-    )
+    ),
+    seasons_back: int = typer.Option(
+        5, help="Number of previous seasons to include in training data"
+    ),
 ):
     """Evaluate performance across the current season using expanding-window retraining."""
     from kicktipp_predictor.evaluate import run_season_dynamic_evaluation
@@ -137,9 +139,10 @@ def evaluate(
     print("=" * 80)
     print()
 
-
     # Run dynamic season evaluation
-    run_season_dynamic_evaluation(retrain_every=retrain_every)
+    run_season_dynamic_evaluation(
+        retrain_every=retrain_every, seasons_back=seasons_back
+    )
 
 
 @app.command()
@@ -147,6 +150,7 @@ def web(host: str = "127.0.0.1", port: int = 8000):
     from kicktipp_predictor.web.app import app as flask_app
 
     flask_app.run(host=host, port=port)
+
 
 @app.command()
 def tune(
@@ -178,6 +182,7 @@ def tune(
     except RuntimeError as e:
         print(f"ERROR: {e}")
         raise typer.Exit(code=1)
+
 
 if __name__ == "__main__":
     app()

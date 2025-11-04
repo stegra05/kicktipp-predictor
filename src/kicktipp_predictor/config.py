@@ -7,9 +7,10 @@ model hyperparameters, and API settings.
 # === Imports ===
 import os
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 try:
     import yaml  # type: ignore
@@ -18,6 +19,7 @@ except ImportError:
 
 # === Project Root ===
 PROJECT_ROOT = Path(__file__).parent.parent.parent
+
 
 # === Utilities ===
 def _resolve_config_file(paths: "PathConfig", override: str | None) -> Path:
@@ -59,7 +61,7 @@ def _read_yaml_params(config_file: Path) -> dict[str, Any] | None:
         A dictionary of parameters if loaded, else None.
     """
     if yaml is None:
-        warnings.warn("YAML support not available; using defaults.")
+        warnings.warn("YAML support not available; using defaults.", stacklevel=2)
         return None
     if not config_file.exists():
         return None
@@ -68,7 +70,7 @@ def _read_yaml_params(config_file: Path) -> dict[str, Any] | None:
             data = yaml.safe_load(f)
         return data if isinstance(data, dict) else None
     except Exception as exc:  # pragma: no cover - robust error path
-        warnings.warn(f"Failed to read config file '{config_file}': {exc}")
+        warnings.warn(f"Failed to read config file '{config_file}': {exc}", stacklevel=2)
         return None
 
 
@@ -121,7 +123,8 @@ def _apply_model_params_from_dict(config: "Config", params: dict[str, Any]) -> N
                 value = caster(params[key])
                 setattr(config.model, key, value)
             except Exception as exc:  # pragma: no cover - robust error path
-                warnings.warn(f"Invalid value for '{key}': {exc}")
+                warnings.warn(f"Invalid value for '{key}': {exc}", stacklevel=2)
+
 
 # === Paths ===
 @dataclass
@@ -154,13 +157,11 @@ class PathConfig:
         self.models_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-
-
-
     @property
     def gd_model_path(self) -> Path:
         """Path to the goal difference regressor model."""
         return self.models_dir / "goal_diff_regressor.joblib"
+
 
 # === API Settings ===
 @dataclass
@@ -204,6 +205,7 @@ class APIConfig:
             "team": "getteam/{team_id}",
         }
     )
+
 
 # === Model Hyperparameters ===
 # Simplified config focusing on GoalDifferenceRegressor
@@ -307,6 +309,7 @@ class ModelConfig:
             "n_jobs": self.n_jobs,
         }
 
+
 # === Configuration Container ===
 @dataclass
 class Config:
@@ -341,9 +344,7 @@ class Config:
         chosen_file = (
             config_file
             if config_file is not None
-            else _resolve_config_file(
-                config.paths, os.getenv("KTP_CONFIG_FILE")
-            )
+            else _resolve_config_file(config.paths, os.getenv("KTP_CONFIG_FILE"))
         )
 
         # Load parameters and apply
@@ -364,6 +365,7 @@ class Config:
             f"  n_jobs={self.model.n_jobs}\n"
             f")"
         )
+
 
 # === Global Access ===
 # Global config instance

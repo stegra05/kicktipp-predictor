@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -13,13 +12,15 @@ try:
 except Exception as exc:  # pragma: no cover - optional dependency
     optuna = None  # type: ignore
 
-from .config import Config, get_config
+from .config import Config
 from .data import DataLoader
-from .metrics import ProbabilityMetrics, ConfusionMetrics
+from .metrics import ConfusionMetrics, ProbabilityMetrics
 from .predictor import GoalDifferencePredictor
 
 
-def _prepare_datasets(seasons_back: int) -> tuple[pd.DataFrame, pd.DataFrame, DataLoader, int]:
+def _prepare_datasets(
+    seasons_back: int,
+) -> tuple[pd.DataFrame, pd.DataFrame, DataLoader, int]:
     """Prepare training and validation datasets using a time-based split.
 
     - Training: older seasons (current_season - seasons_back .. current_season-1)
@@ -43,7 +44,9 @@ def _prepare_datasets(seasons_back: int) -> tuple[pd.DataFrame, pd.DataFrame, Da
     vm = pd.DataFrame(val_matches).copy()
     vm["match_id"] = vm["match_id"].astype(str)
     mask = vm["home_score"].notna() & vm["away_score"].notna()
-    vm.loc[mask, "goal_difference"] = vm.loc[mask, "home_score"] - vm.loc[mask, "away_score"]
+    vm.loc[mask, "goal_difference"] = (
+        vm.loc[mask, "home_score"] - vm.loc[mask, "away_score"]
+    )
     vm.loc[mask, "result"] = np.where(
         vm.loc[mask, "goal_difference"] > 0,
         "H",
@@ -58,7 +61,9 @@ def _prepare_datasets(seasons_back: int) -> tuple[pd.DataFrame, pd.DataFrame, Da
 
     # Sanity checks
     if len(train_df) == 0:
-        raise RuntimeError("No training samples found. Increase seasons_back or check data availability.")
+        raise RuntimeError(
+            "No training samples found. Increase seasons_back or check data availability."
+        )
     if len(val_df) == 0:
         raise RuntimeError("No validation samples found in the current season.")
     if "result" not in val_df.columns:
@@ -87,7 +92,9 @@ def _reset_optuna_storage(storage_url: str) -> None:
             # Force schema re-init and validate empty state
             summaries = optuna.study.get_all_study_summaries(storage_url)
             if len(summaries) != 0:
-                raise RuntimeError("Database reset verification failed: studies still present.")
+                raise RuntimeError(
+                    "Database reset verification failed: studies still present."
+                )
         else:
             # Best-effort cleanup for non-SQLite storages
             summaries = optuna.study.get_all_study_summaries(storage_url)
@@ -100,7 +107,9 @@ def _reset_optuna_storage(storage_url: str) -> None:
             # Validate empty
             summaries_after = optuna.study.get_all_study_summaries(storage_url)
             if len(summaries_after) != 0:
-                raise RuntimeError("Database reset verification failed: studies still present.")
+                raise RuntimeError(
+                    "Database reset verification failed: studies still present."
+                )
     except Exception as exc:
         raise RuntimeError(f"Failed to reset Optuna storage '{storage_url}': {exc}")
 
@@ -108,9 +117,9 @@ def _reset_optuna_storage(storage_url: str) -> None:
 def run_tuning(
     n_trials: int = 100,
     seasons_back: int = 5,
-    storage: Optional[str] = None,
+    storage: str | None = None,
     study_name: str = "gd_v3_tuning",
-    timeout: Optional[int] = None,
+    timeout: int | None = None,
 ) -> None:
     """Run an Optuna multi-objective study to tune V3 goal-difference model.
 
@@ -122,7 +131,7 @@ def run_tuning(
     """
     if optuna is None:
         raise RuntimeError(
-            "Optuna not installed. Install with `pip install \"kicktipp-predictor[tuning]\"` or `pip install optuna`."
+            'Optuna not installed. Install with `pip install "kicktipp-predictor[tuning]"` or `pip install optuna`.'
         )
 
     train_df, val_df, loader, current_season = _prepare_datasets(seasons_back)
@@ -133,14 +142,24 @@ def run_tuning(
         # --- Tune core XGB params ---
         cfg.model.gd_n_estimators = trial.suggest_int("gd_n_estimators", 100, 2000)
         cfg.model.gd_max_depth = trial.suggest_int("gd_max_depth", 3, 10)
-        cfg.model.gd_learning_rate = trial.suggest_float("gd_learning_rate", 0.01, 0.3, log=True)
-        cfg.model.gd_reg_lambda = trial.suggest_float("gd_reg_lambda", 1e-6, 10.0, log=True)
-        cfg.model.gd_min_child_weight = trial.suggest_float("gd_min_child_weight", 0.1, 10.0, log=True)
+        cfg.model.gd_learning_rate = trial.suggest_float(
+            "gd_learning_rate", 0.01, 0.3, log=True
+        )
+        cfg.model.gd_reg_lambda = trial.suggest_float(
+            "gd_reg_lambda", 1e-6, 10.0, log=True
+        )
+        cfg.model.gd_min_child_weight = trial.suggest_float(
+            "gd_min_child_weight", 0.1, 10.0, log=True
+        )
         # --- Stochasticity ---
         cfg.model.gd_subsample = trial.suggest_float("gd_subsample", 0.6, 1.0)
-        cfg.model.gd_colsample_bytree = trial.suggest_float("gd_colsample_bytree", 0.6, 1.0)
+        cfg.model.gd_colsample_bytree = trial.suggest_float(
+            "gd_colsample_bytree", 0.6, 1.0
+        )
         # --- Architecture-specific uncertainty (static baseline) ---
-        cfg.model.gd_uncertainty_stddev = trial.suggest_float("gd_uncertainty_stddev", 0.5, 3.0)
+        cfg.model.gd_uncertainty_stddev = trial.suggest_float(
+            "gd_uncertainty_stddev", 0.5, 3.0
+        )
         # Force static uncertainty during tuning to reduce complexity
         cfg.model.gd_uncertainty_base_stddev = cfg.model.gd_uncertainty_stddev
         cfg.model.gd_uncertainty_scale = 0.0
@@ -188,25 +207,45 @@ def run_tuning(
         trial.set_user_attr("n_val", int(len(y_true)))
         # Draw stats
         pred_labels = np.argmax(proba, axis=1)
-        predicted_draw_rate = float(np.mean(pred_labels == 1)) if len(pred_labels) else float("nan")
+        predicted_draw_rate = (
+            float(np.mean(pred_labels == 1)) if len(pred_labels) else float("nan")
+        )
         mean_draw_prob = float(np.mean(proba[:, 1])) if proba.size else float("nan")
         trial.set_user_attr("predicted_draw_rate", predicted_draw_rate)
         trial.set_user_attr("mean_draw_prob", mean_draw_prob)
         # Uncertainty diagnostics: correlation between |predicted GD| and stddev
         try:
-            gd_abs = np.array([abs(float(p.get("predicted_goal_difference", 0.0))) for p in preds], dtype=float)
-            stddevs = np.array([float(p.get("uncertainty_stddev", float("nan"))) for p in preds], dtype=float)
+            gd_abs = np.array(
+                [abs(float(p.get("predicted_goal_difference", 0.0))) for p in preds],
+                dtype=float,
+            )
+            stddevs = np.array(
+                [float(p.get("uncertainty_stddev", float("nan"))) for p in preds],
+                dtype=float,
+            )
             mask = np.isfinite(gd_abs) & np.isfinite(stddevs)
-            if mask.sum() >= 2 and np.std(gd_abs[mask]) > 0 and np.std(stddevs[mask]) > 0:
+            if (
+                mask.sum() >= 2
+                and np.std(gd_abs[mask]) > 0
+                and np.std(stddevs[mask]) > 0
+            ):
                 corr = float(np.corrcoef(gd_abs[mask], stddevs[mask])[0, 1])
             else:
                 corr = float("nan")
             trial.set_user_attr("uncertainty_corr_abs_predgd_stddev", corr)
             if stddevs[mask].size:
-                trial.set_user_attr("uncertainty_stddev_min", float(np.min(stddevs[mask])))
-                trial.set_user_attr("uncertainty_stddev_mean", float(np.mean(stddevs[mask])))
-                trial.set_user_attr("uncertainty_stddev_max", float(np.max(stddevs[mask])))
-                trial.set_user_attr("uncertainty_stddev_std", float(np.std(stddevs[mask])))
+                trial.set_user_attr(
+                    "uncertainty_stddev_min", float(np.min(stddevs[mask]))
+                )
+                trial.set_user_attr(
+                    "uncertainty_stddev_mean", float(np.mean(stddevs[mask]))
+                )
+                trial.set_user_attr(
+                    "uncertainty_stddev_max", float(np.max(stddevs[mask]))
+                )
+                trial.set_user_attr(
+                    "uncertainty_stddev_std", float(np.std(stddevs[mask]))
+                )
             else:
                 trial.set_user_attr("uncertainty_stddev_min", float("nan"))
                 trial.set_user_attr("uncertainty_stddev_mean", float("nan"))
@@ -226,7 +265,11 @@ def run_tuning(
         try:
             rates: list[float] = []
             if "matchday" in val_df.columns:
-                md = pd.to_numeric(val_df["matchday"], errors="coerce").astype(float).values
+                md = (
+                    pd.to_numeric(val_df["matchday"], errors="coerce")
+                    .astype(float)
+                    .values
+                )
                 order = np.argsort(md)
                 splits = np.array_split(order, 3)
             elif "date" in val_df.columns:
@@ -283,7 +326,9 @@ def run_tuning(
     pareto = study.best_trials
     completed = [t for t in pareto if t.state == optuna.trial.TrialState.COMPLETE]
     if not completed:
-        completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+        completed = [
+            t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE
+        ]
     if not completed:
         print("No completed trials to select from.")
         return
@@ -292,26 +337,43 @@ def run_tuning(
     try:
         selected = max(completed, key=lambda t: float(t.values[0]))
     except Exception:
-        print("Selection fallback: no completed trials; using study.best_trials or study.trials.")
-        pool = [t for t in study.best_trials if t.state == optuna.trial.TrialState.COMPLETE] or \
-               [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
-        selected = max(pool, key=lambda t: float(t.values[0])) if pool else study.best_trial
+        print(
+            "Selection fallback: no completed trials; using study.best_trials or study.trials."
+        )
+        pool = [
+            t for t in study.best_trials if t.state == optuna.trial.TrialState.COMPLETE
+        ] or [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+        selected = (
+            max(pool, key=lambda t: float(t.values[0])) if pool else study.best_trial
+        )
 
     params = dict(selected.params)
     out = {
         # Tuned core params
-        "gd_n_estimators": int(params.get("gd_n_estimators", cfg.model.gd_n_estimators)),
+        "gd_n_estimators": int(
+            params.get("gd_n_estimators", cfg.model.gd_n_estimators)
+        ),
         "gd_max_depth": int(params.get("gd_max_depth", cfg.model.gd_max_depth)),
-        "gd_learning_rate": float(params.get("gd_learning_rate", cfg.model.gd_learning_rate)),
+        "gd_learning_rate": float(
+            params.get("gd_learning_rate", cfg.model.gd_learning_rate)
+        ),
         "gd_subsample": float(params.get("gd_subsample", cfg.model.gd_subsample)),
         "gd_reg_lambda": float(params.get("gd_reg_lambda", cfg.model.gd_reg_lambda)),
-        "gd_min_child_weight": float(params.get("gd_min_child_weight", cfg.model.gd_min_child_weight)),
-        "gd_colsample_bytree": float(params.get("gd_colsample_bytree", cfg.model.gd_colsample_bytree)),
+        "gd_min_child_weight": float(
+            params.get("gd_min_child_weight", cfg.model.gd_min_child_weight)
+        ),
+        "gd_colsample_bytree": float(
+            params.get("gd_colsample_bytree", cfg.model.gd_colsample_bytree)
+        ),
         # Not tuned; explicit default retained for clarity
         "gd_gamma": float(cfg.model.gd_gamma),
         # Uncertainty parameters (static baseline; dynamic scale fixed to 0)
-        "gd_uncertainty_stddev": float(params.get("gd_uncertainty_stddev", cfg.model.gd_uncertainty_stddev)),
-        "gd_uncertainty_base_stddev": float(params.get("gd_uncertainty_stddev", cfg.model.gd_uncertainty_stddev)),
+        "gd_uncertainty_stddev": float(
+            params.get("gd_uncertainty_stddev", cfg.model.gd_uncertainty_stddev)
+        ),
+        "gd_uncertainty_base_stddev": float(
+            params.get("gd_uncertainty_stddev", cfg.model.gd_uncertainty_stddev)
+        ),
         "gd_uncertainty_scale": 0.0,
         "gd_uncertainty_min_stddev": float(cfg.model.gd_uncertainty_min_stddev),
         "gd_uncertainty_max_stddev": float(cfg.model.gd_uncertainty_max_stddev),
@@ -325,10 +387,11 @@ def run_tuning(
     out_path = pkg_config_dir / "best_params.yaml"
     try:
         import yaml  # type: ignore
+
         with open(out_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(out, f, sort_keys=False, indent=2)
         # Validate YAML syntax by reading back
-        with open(out_path, "r", encoding="utf-8") as f:
+        with open(out_path, encoding="utf-8") as f:
             _validate_params = yaml.safe_load(f)
         if not isinstance(_validate_params, dict):
             raise ValueError("Invalid YAML: expected a mapping of parameters")
@@ -353,19 +416,41 @@ def run_tuning(
                 "values": list(map(float, t.values)),
                 "params": t.params,
                 "accuracy": float(t.user_attrs.get("accuracy", float("nan"))),
-                "balanced_accuracy": float(t.user_attrs.get("balanced_accuracy", float("nan"))),
-                "draw_balance_factor": float(t.user_attrs.get("draw_balance_factor", float("nan"))),
+                "balanced_accuracy": float(
+                    t.user_attrs.get("balanced_accuracy", float("nan"))
+                ),
+                "draw_balance_factor": float(
+                    t.user_attrs.get("draw_balance_factor", float("nan"))
+                ),
                 "log_loss": float(t.user_attrs.get("log_loss", float("nan"))),
-                "predicted_draw_rate": float(t.user_attrs.get("predicted_draw_rate", float("nan"))),
-                "mean_draw_prob": float(t.user_attrs.get("mean_draw_prob", float("nan"))),
+                "predicted_draw_rate": float(
+                    t.user_attrs.get("predicted_draw_rate", float("nan"))
+                ),
+                "mean_draw_prob": float(
+                    t.user_attrs.get("mean_draw_prob", float("nan"))
+                ),
                 "draw_rate_std": float(t.user_attrs.get("draw_rate_std", float("nan"))),
-                "draw_rate_splits": [float(r) for r in t.user_attrs.get("draw_rate_splits", [])],
-                "draw_rate_splits_target_ok": bool(t.user_attrs.get("draw_rate_splits_target_ok", False)),
-                "uncertainty_corr_abs_predgd_stddev": float(t.user_attrs.get("uncertainty_corr_abs_predgd_stddev", float("nan"))),
-                "uncertainty_stddev_min": float(t.user_attrs.get("uncertainty_stddev_min", float("nan"))),
-                "uncertainty_stddev_mean": float(t.user_attrs.get("uncertainty_stddev_mean", float("nan"))),
-                "uncertainty_stddev_max": float(t.user_attrs.get("uncertainty_stddev_max", float("nan"))),
-                "uncertainty_stddev_std": float(t.user_attrs.get("uncertainty_stddev_std", float("nan"))),
+                "draw_rate_splits": [
+                    float(r) for r in t.user_attrs.get("draw_rate_splits", [])
+                ],
+                "draw_rate_splits_target_ok": bool(
+                    t.user_attrs.get("draw_rate_splits_target_ok", False)
+                ),
+                "uncertainty_corr_abs_predgd_stddev": float(
+                    t.user_attrs.get("uncertainty_corr_abs_predgd_stddev", float("nan"))
+                ),
+                "uncertainty_stddev_min": float(
+                    t.user_attrs.get("uncertainty_stddev_min", float("nan"))
+                ),
+                "uncertainty_stddev_mean": float(
+                    t.user_attrs.get("uncertainty_stddev_mean", float("nan"))
+                ),
+                "uncertainty_stddev_max": float(
+                    t.user_attrs.get("uncertainty_stddev_max", float("nan"))
+                ),
+                "uncertainty_stddev_std": float(
+                    t.user_attrs.get("uncertainty_stddev_std", float("nan"))
+                ),
             }
             for t in pareto
         ],
@@ -377,13 +462,23 @@ def run_tuning(
     }
     # Compute trial-level analytics
     try:
-        balanced_accuracies = [float(t.user_attrs.get("balanced_accuracy", float("nan"))) for t in pareto]
-        raw_accuracies = [float(t.user_attrs.get("accuracy", float("nan"))) for t in pareto]
-        draw_factors = [float(t.user_attrs.get("draw_balance_factor", float("nan"))) for t in pareto]
+        balanced_accuracies = [
+            float(t.user_attrs.get("balanced_accuracy", float("nan"))) for t in pareto
+        ]
+        raw_accuracies = [
+            float(t.user_attrs.get("accuracy", float("nan"))) for t in pareto
+        ]
+        draw_factors = [
+            float(t.user_attrs.get("draw_balance_factor", float("nan"))) for t in pareto
+        ]
         log_losses = [float(t.user_attrs.get("log_loss", float("nan"))) for t in pareto]
-        draw_rates = [float(t.user_attrs.get("predicted_draw_rate", float("nan"))) for t in pareto]
-        ba = np.array(balanced_accuracies, dtype=float); aa = np.array(raw_accuracies, dtype=float)
-        df = np.array(draw_factors, dtype=float); ll = np.array(log_losses, dtype=float)
+        draw_rates = [
+            float(t.user_attrs.get("predicted_draw_rate", float("nan"))) for t in pareto
+        ]
+        ba = np.array(balanced_accuracies, dtype=float)
+        aa = np.array(raw_accuracies, dtype=float)
+        df = np.array(draw_factors, dtype=float)
+        ll = np.array(log_losses, dtype=float)
         mask_ba = np.isfinite(ba) & np.isfinite(ll)
         mask_df = np.isfinite(df) & np.isfinite(ll)
         if mask_ba.sum() >= 2 and np.std(ba[mask_ba]) > 0 and np.std(ll[mask_ba]) > 0:
@@ -412,10 +507,11 @@ def run_tuning(
         pass
     try:
         import yaml  # type: ignore
+
         with open(summary_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(summary, f, sort_keys=False, indent=2)
         # Validate YAML syntax by reading back
-        with open(summary_path, "r", encoding="utf-8") as f:
+        with open(summary_path, encoding="utf-8") as f:
             _validate_summary = yaml.safe_load(f)
         if not isinstance(_validate_summary, dict):
             raise ValueError("Invalid YAML: summary must be a mapping")
@@ -430,7 +526,11 @@ def run_tuning(
     print("TUNING COMPLETE")
     print("=" * 80)
     sel_dr = float(selected.user_attrs.get("predicted_draw_rate", float("nan")))
-    ba = float(selected.user_attrs.get("balanced_accuracy", float("nan"))) if hasattr(selected, "user_attrs") else float("nan")
+    ba = (
+        float(selected.user_attrs.get("balanced_accuracy", float("nan")))
+        if hasattr(selected, "user_attrs")
+        else float("nan")
+    )
     print(
         f"Selected Trial #{selected.number}: balanced_accuracy={selected.values[0]:.4f}, "
         f"log_loss={selected.values[1]:.4f}, predicted_draw_rate={sel_dr:.3f}"

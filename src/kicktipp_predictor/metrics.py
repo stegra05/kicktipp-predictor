@@ -15,12 +15,11 @@ implementation is organized into logical classes and helpers.
 # === Imports ===
 import json
 import os
-from typing import Dict, List, Tuple
 
 import numpy as np
 
 # === Constants ===
-LABELS_ORDER: Tuple[str, str, str] = ("H", "D", "A")
+LABELS_ORDER: tuple[str, str, str] = ("H", "D", "A")
 
 
 # === Utilities ===
@@ -28,12 +27,12 @@ class MetricsUtils:
     """Internal helpers for label mapping and probability normalization."""
 
     @staticmethod
-    def label_mapping() -> Dict[str, int]:
+    def label_mapping() -> dict[str, int]:
         """Return a consistent label-to-index mapping using LABELS_ORDER."""
         return {lab: i for i, lab in enumerate(LABELS_ORDER)}
 
     @staticmethod
-    def labels_to_indices(y_true: List[str]) -> np.ndarray:
+    def labels_to_indices(y_true: list[str]) -> np.ndarray:
         """Map label strings to integer indices, -1 for unknown labels."""
         mapping = MetricsUtils.label_mapping()
         return np.array([mapping.get(label, -1) for label in y_true], dtype=int)
@@ -74,7 +73,7 @@ class ProbabilityMetrics:
     """Probability-based scoring rules for multiclass predictions."""
 
     @staticmethod
-    def brier_score_multiclass(y_true: List[str], proba: np.ndarray) -> float:
+    def brier_score_multiclass(y_true: list[str], proba: np.ndarray) -> float:
         """Mean squared error between predicted probabilities and one-hot truth.
 
         Returns NaN if no valid labels.
@@ -92,7 +91,7 @@ class ProbabilityMetrics:
         return float(np.mean(np.sum(diffs * diffs, axis=1)))
 
     @staticmethod
-    def log_loss_multiclass(y_true: List[str], proba: np.ndarray) -> float:
+    def log_loss_multiclass(y_true: list[str], proba: np.ndarray) -> float:
         """Multiclass logarithmic loss.
 
         Penalizes confident but wrong predictions more heavily; lower is better.
@@ -108,7 +107,7 @@ class ProbabilityMetrics:
         return float(-np.mean(np.log(np.clip(p_true, 1e-15, 1.0))))
 
     @staticmethod
-    def ranked_probability_score_3c(y_true: List[str], proba: np.ndarray) -> float:
+    def ranked_probability_score_3c(y_true: list[str], proba: np.ndarray) -> float:
         """Ranked Probability Score (RPS) for ordered 3-class outcomes.
 
         Computes squared distance between cumulative distributions (pred vs true),
@@ -119,7 +118,7 @@ class ProbabilityMetrics:
         valid = y >= 0
         if not np.any(valid):
             return float("nan")
-        scores: List[float] = []
+        scores: list[float] = []
         # Construct true CDF per sample from the integer class index
         for i in np.where(valid)[0]:
             cdf_pred = np.cumsum(P[i, :])
@@ -135,15 +134,15 @@ class CalibrationMetrics:
 
     @staticmethod
     def expected_calibration_error(
-        y_true: List[str], proba: np.ndarray, n_bins: int = 10
-    ) -> Dict[str, float]:
+        y_true: list[str], proba: np.ndarray, n_bins: int = 10
+    ) -> dict[str, float]:
         """Compute per-class Expected Calibration Error (ECE).
 
         ECE is the weighted average over bins of |accuracy - confidence|.
         """
         y = MetricsUtils.labels_to_indices(y_true)
         P = MetricsUtils.normalize_proba(proba)
-        ece: Dict[str, float] = {}
+        ece: dict[str, float] = {}
         for class_index, label in enumerate(LABELS_ORDER):
             probs = P[:, class_index]
             bins = np.linspace(0.0, 1.0, n_bins + 1)
@@ -175,7 +174,7 @@ class ConfusionMetrics:
         return cm
 
     @staticmethod
-    def confusion_matrix_stats(y_true: List[str], proba: np.ndarray) -> dict:
+    def confusion_matrix_stats(y_true: list[str], proba: np.ndarray) -> dict:
         """Return confusion matrix, accuracy, and per-class precision/recall."""
         y_idx = MetricsUtils.labels_to_indices(y_true)
         P = MetricsUtils.normalize_proba(proba)
@@ -185,7 +184,7 @@ class ConfusionMetrics:
         y_pred_v = y_pred[valid]
         cm = ConfusionMetrics._compute_matrix(y_true_v, y_pred_v)
         acc = float(np.mean(y_true_v == y_pred_v)) if len(y_true_v) else float("nan")
-        per_class: Dict[str, Dict[str, float]] = {}
+        per_class: dict[str, dict[str, float]] = {}
         for i, lab in enumerate(LABELS_ORDER):
             tp = int(cm[i, i])
             fp = int(np.sum(cm[:, i]) - tp)
@@ -203,7 +202,7 @@ class ConfidenceAnalysis:
     @staticmethod
     def bin_by_confidence(
         conf: np.ndarray,
-        y_true: List[str],
+        y_true: list[str],
         proba: np.ndarray,
         points: np.ndarray,
         n_bins: int = 5,
@@ -274,36 +273,36 @@ class KicktippScoring:
 
 
 # === Backward-Compatible Public API (wrappers) ===
-def brier_score_multiclass(y_true: List[str], proba: np.ndarray) -> float:
+def brier_score_multiclass(y_true: list[str], proba: np.ndarray) -> float:
     """Wrapper for ProbabilityMetrics.brier_score_multiclass."""
     return ProbabilityMetrics.brier_score_multiclass(y_true, proba)
 
 
-def log_loss_multiclass(y_true: List[str], proba: np.ndarray) -> float:
+def log_loss_multiclass(y_true: list[str], proba: np.ndarray) -> float:
     """Wrapper for ProbabilityMetrics.log_loss_multiclass."""
     return ProbabilityMetrics.log_loss_multiclass(y_true, proba)
 
 
-def ranked_probability_score_3c(y_true: List[str], proba: np.ndarray) -> float:
+def ranked_probability_score_3c(y_true: list[str], proba: np.ndarray) -> float:
     """Wrapper for ProbabilityMetrics.ranked_probability_score_3c."""
     return ProbabilityMetrics.ranked_probability_score_3c(y_true, proba)
 
 
 def expected_calibration_error(
-    y_true: List[str], proba: np.ndarray, n_bins: int = 10
-) -> Dict[str, float]:
+    y_true: list[str], proba: np.ndarray, n_bins: int = 10
+) -> dict[str, float]:
     """Wrapper for CalibrationMetrics.expected_calibration_error."""
     return CalibrationMetrics.expected_calibration_error(y_true, proba, n_bins)
 
 
-def confusion_matrix_stats(y_true: List[str], proba: np.ndarray) -> dict:
+def confusion_matrix_stats(y_true: list[str], proba: np.ndarray) -> dict:
     """Wrapper for ConfusionMetrics.confusion_matrix_stats."""
     return ConfusionMetrics.confusion_matrix_stats(y_true, proba)
 
 
 def bin_by_confidence(
     conf: np.ndarray,
-    y_true: List[str],
+    y_true: list[str],
     proba: np.ndarray,
     points: np.ndarray,
     n_bins: int = 5,

@@ -1,5 +1,5 @@
-import types
 import time
+import types
 from pathlib import Path
 
 import pandas as pd
@@ -10,32 +10,37 @@ from kicktipp_predictor.data import DataLoader
 
 def _build_dummy_df():
     # Minimal DataFrame containing several expected columns from kept_features.yaml
-    return pd.DataFrame({
-        "match_id": ["1"],
-        "matchday": [1],
-        "date": [pd.Timestamp("2024-01-01")],
-        "home_team": ["A"],
-        "away_team": ["B"],
-        "is_finished": [True],
-        "home_score": [1],
-        "away_score": [0],
-        # Some features expected in YAML (not all need to exist)
-        "tanh_tamed_elo": [0.1],
-        "home_form_points_weighted_by_opponent_rank": [1.0],
-        "away_form_points_weighted_by_opponent_rank": [0.5],
-        "home_form_points_L3": [3.0],
-        "away_form_points_L3": [2.0],
-    })
+    return pd.DataFrame(
+        {
+            "match_id": ["1"],
+            "matchday": [1],
+            "date": [pd.Timestamp("2024-01-01")],
+            "home_team": ["A"],
+            "away_team": ["B"],
+            "is_finished": [True],
+            "home_score": [1],
+            "away_score": [0],
+            # Some features expected in YAML (not all need to exist)
+            "tanh_tamed_elo": [0.1],
+            "home_form_points_weighted_by_opponent_rank": [1.0],
+            "away_form_points_weighted_by_opponent_rank": [0.5],
+            "home_form_points_L3": [3.0],
+            "away_form_points_L3": [2.0],
+        }
+    )
 
 
 def test_load_selected_features_with_yaml(monkeypatch):
     dl = DataLoader()
     # Point config dir to actual package config containing kept_features.yaml
     sel_path = dl.config.paths.config_dir / "kept_features.yaml"
-    assert sel_path.exists(), "kept_features.yaml must exist in package config directory"
+    assert sel_path.exists(), (
+        "kept_features.yaml must exist in package config directory"
+    )
 
     # Inject a stub 'yaml' module to simulate availability
     import kicktipp_predictor.data as data_mod
+
     stub = types.SimpleNamespace()
 
     def safe_load(text: str):
@@ -59,16 +64,26 @@ def test_load_selected_features_with_yaml(monkeypatch):
     out = dl._apply_selected_features(df)
     assert "tanh_tamed_elo" in out.columns
     # Meta columns remain
-    for col in ["match_id", "matchday", "date", "home_team", "away_team", "is_finished"]:
+    for col in [
+        "match_id",
+        "matchday",
+        "date",
+        "home_team",
+        "away_team",
+        "is_finished",
+    ]:
         assert col in out.columns
 
 
 def test_load_selected_features_without_yaml(monkeypatch):
     dl = DataLoader()
     sel_path = dl.config.paths.config_dir / "kept_features.yaml"
-    assert sel_path.exists(), "kept_features.yaml must exist in package config directory"
+    assert sel_path.exists(), (
+        "kept_features.yaml must exist in package config directory"
+    )
 
     import kicktipp_predictor.data as data_mod
+
     # Simulate PyYAML unavailable
     monkeypatch.setattr(data_mod, "yaml", None, raising=True)
 
@@ -112,7 +127,9 @@ def test_apply_selected_features_warns_missing(monkeypatch, caplog):
     new_dir = Path(str(cfg_dir)) / "_tmp_test"
     new_dir.mkdir(exist_ok=True)
     yaml_path = new_dir / "kept_features.yaml"
-    yaml_path.write_text("# test\n- tanh_tamed_elo\n- non_existing_feature\n", encoding="utf-8")
+    yaml_path.write_text(
+        "# test\n- tanh_tamed_elo\n- non_existing_feature\n", encoding="utf-8"
+    )
     monkeypatch.setattr(dl.config.paths, "config_dir", new_dir, raising=True)
 
     with caplog.at_level("WARNING"):

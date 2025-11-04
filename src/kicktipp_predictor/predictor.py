@@ -5,12 +5,13 @@ Goal difference predictor for the Kicktipp Predictor V3 architecture.
 from __future__ import annotations
 
 import joblib
-import pandas as pd
-from xgboost import XGBRegressor
-from scipy.stats import norm
 import numpy as np
+import pandas as pd
+from scipy.stats import norm
+from xgboost import XGBRegressor
 
 from .config import Config, get_config
+
 
 class GoalDifferencePredictor:
     """
@@ -40,12 +41,16 @@ class GoalDifferencePredictor:
         if matches_df is None or len(matches_df) == 0:
             raise ValueError("Empty training DataFrame provided.")
         if "goal_difference" not in matches_df.columns:
-            raise ValueError("Training DataFrame must include 'goal_difference' target column.")
+            raise ValueError(
+                "Training DataFrame must include 'goal_difference' target column."
+            )
 
         # Enforce minimum training size from config
         min_n = int(self.config.model.min_training_matches)
         if len(matches_df) < min_n:
-            raise ValueError(f"Insufficient training samples: {len(matches_df)} < {min_n}")
+            raise ValueError(
+                f"Insufficient training samples: {len(matches_df)} < {min_n}"
+            )
 
         # --- Feature selection: use all relevant features from matches_df ---
         # Exclude meta/target columns; keep numeric features only
@@ -60,7 +65,9 @@ class GoalDifferencePredictor:
             "goal_difference",
             "result",
         }
-        numeric_cols = matches_df.select_dtypes(include=["number", "bool"]).columns.tolist()
+        numeric_cols = matches_df.select_dtypes(
+            include=["number", "bool"]
+        ).columns.tolist()
         self.feature_columns = [c for c in numeric_cols if c not in exclude]
         # ELO hard guard removed: allow all ELO-related features
         if not self.feature_columns:
@@ -92,7 +99,9 @@ class GoalDifferencePredictor:
         val_n = int(n * val_fraction) if 0.0 < val_fraction < 0.5 else 0
         if val_n > 0:
             if "date" in matches_df.columns:
-                order = np.argsort(pd.to_datetime(matches_df["date"], errors="coerce").values)
+                order = np.argsort(
+                    pd.to_datetime(matches_df["date"], errors="coerce").values
+                )
             else:
                 rng = np.random.RandomState(int(self.config.model.random_state))
                 order = rng.permutation(n)
@@ -104,7 +113,9 @@ class GoalDifferencePredictor:
 
         X_train = X_all.iloc[idx_train]
         y_train = y_all.iloc[idx_train]
-        sw_train = sample_weight_all[idx_train] if sample_weight_all is not None else None
+        sw_train = (
+            sample_weight_all[idx_train] if sample_weight_all is not None else None
+        )
 
         # --- Model initialization from gd_* params in config ---
         try:
@@ -112,7 +123,9 @@ class GoalDifferencePredictor:
         except Exception as exc:
             raise RuntimeError(f"Failed to load gd_params from config: {exc}")
         if not params:
-            raise RuntimeError("Missing gd_* parameters in config ModelConfig (gd_params empty).")
+            raise RuntimeError(
+                "Missing gd_* parameters in config ModelConfig (gd_params empty)."
+            )
 
         self.model = XGBRegressor(**params)
         # --- Fit with optional early stopping ---
@@ -137,23 +150,39 @@ class GoalDifferencePredictor:
         if len(idx_val) > 0:
             X_val = X_all.iloc[idx_val]
             y_val = y_all.iloc[idx_val]
-            sw_val = sample_weight_all[idx_val] if sample_weight_all is not None else None
+            sw_val = (
+                sample_weight_all[idx_val] if sample_weight_all is not None else None
+            )
             y_pred = self.model.predict(X_val)
             # Basic numeric metrics (weighted where applicable)
             diff = y_pred - y_val.values
             if sw_val is not None:
                 w = sw_val
                 mae = float(np.sum(np.abs(diff) * w) / np.sum(w))
-                rmse = float(np.sqrt(np.sum((diff ** 2) * w) / np.sum(w)))
+                rmse = float(np.sqrt(np.sum((diff**2) * w) / np.sum(w)))
             else:
                 mae = float(np.mean(np.abs(diff)))
-                rmse = float(np.sqrt(np.mean(diff ** 2)))
+                rmse = float(np.sqrt(np.mean(diff**2)))
             # Naive R^2 (unweighted)
             var = float(np.var(y_val.values))
-            r2 = float(1.0 - (float(np.mean(diff ** 2)) / var)) if var > 0 else float("nan")
-            metrics = {"val_mae": mae, "val_rmse": rmse, "val_r2": r2, "n_val": float(len(idx_val))}
+            r2 = (
+                float(1.0 - (float(np.mean(diff**2)) / var))
+                if var > 0
+                else float("nan")
+            )
+            metrics = {
+                "val_mae": mae,
+                "val_rmse": rmse,
+                "val_r2": r2,
+                "n_val": float(len(idx_val)),
+            }
         else:
-            metrics = {"val_mae": float("nan"), "val_rmse": float("nan"), "val_r2": float("nan"), "n_val": 0.0}
+            metrics = {
+                "val_mae": float("nan"),
+                "val_rmse": float("nan"),
+                "val_r2": float("nan"),
+                "n_val": 0.0,
+            }
 
         self.last_metrics = metrics
 
@@ -169,7 +198,9 @@ class GoalDifferencePredictor:
             and outcome probabilities.
         """
         if self.model is None:
-            raise RuntimeError("Model has not been trained or loaded. Call train() or load_model() first.")
+            raise RuntimeError(
+                "Model has not been trained or loaded. Call train() or load_model() first."
+            )
         if not isinstance(features_df, pd.DataFrame) or features_df.empty:
             raise ValueError("features_df must be a non-empty pandas DataFrame.")
         # Align features and predict
@@ -185,13 +216,21 @@ class GoalDifferencePredictor:
                 "goal_difference",
                 "result",
             }
-            numeric_cols = features_df.select_dtypes(include=["number", "bool"]).columns.tolist()
+            numeric_cols = features_df.select_dtypes(
+                include=["number", "bool"]
+            ).columns.tolist()
             self.feature_columns = [c for c in numeric_cols if c not in exclude]
         X = features_df.reindex(columns=self.feature_columns).fillna(0.0)
         pred_gd = self.model.predict(X)
         # Probabilistic bridge using Normal around predicted GD (dynamic stddev)
 
-        base = float(getattr(self.config.model, "gd_uncertainty_base_stddev", self.config.model.gd_uncertainty_stddev))
+        base = float(
+            getattr(
+                self.config.model,
+                "gd_uncertainty_base_stddev",
+                self.config.model.gd_uncertainty_stddev,
+            )
+        )
         scale = float(getattr(self.config.model, "gd_uncertainty_scale", 0.0))
         min_std = float(getattr(self.config.model, "gd_uncertainty_min_stddev", 0.2))
         max_std = float(getattr(self.config.model, "gd_uncertainty_max_stddev", 4.0))
@@ -287,7 +326,9 @@ class GoalDifferencePredictor:
         }
         try:
             joblib.dump(self.model, self.config.paths.gd_model_path)
-            joblib.dump(metadata, self.config.paths.gd_model_path.with_name("metadata.joblib"))
+            joblib.dump(
+                metadata, self.config.paths.gd_model_path.with_name("metadata.joblib")
+            )
         except Exception as exc:
             raise RuntimeError(f"Failed to save model artifacts: {exc}")
 
@@ -300,7 +341,9 @@ class GoalDifferencePredictor:
         except Exception as exc:
             raise RuntimeError(f"Failed to load model: {exc}")
         try:
-            metadata = joblib.load(self.config.paths.gd_model_path.with_name("metadata.joblib"))
+            metadata = joblib.load(
+                self.config.paths.gd_model_path.with_name("metadata.joblib")
+            )
             if not isinstance(metadata, dict):
                 raise RuntimeError("Invalid metadata format.")
             cols = metadata.get("feature_columns")
@@ -310,7 +353,9 @@ class GoalDifferencePredictor:
             # Dimensionality check
             n_in = getattr(self.model, "n_features_in_", None)
             if n_in is not None and int(n_in) != len(self.feature_columns):
-                raise RuntimeError("Feature dimension mismatch between model and metadata.")
+                raise RuntimeError(
+                    "Feature dimension mismatch between model and metadata."
+                )
         except FileNotFoundError as exc:
             raise RuntimeError("Model metadata not found; retrain required.") from exc
         except Exception as exc:

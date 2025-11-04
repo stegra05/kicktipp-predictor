@@ -1,142 +1,88 @@
-### Analysis and Blueprint for the Kicktipp Predictor V3 Architecture
+# Kicktipp Predictor V3
 
-**Installation**
+**A modern, data-driven approach to predicting football match outcomes using ordinal regression.**
 
-Use a virtual environment and install via `pyproject.toml` extras:
+[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Code style: ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-```
+---
+
+## Project Overview
+
+This project provides a complete framework for predicting football match outcomes, built around a powerful and elegant **goal difference regression** model. It moves beyond traditional classification approaches to better capture the ordinal nature of football results (Win, Draw, Loss).
+
+The system is architected for robustness and ease of use, featuring:
+- **A single, powerful `XGBoost` model** at its core.
+- **A "Probabilistic Bridge"** to translate regression output into accurate H/D/A probabilities.
+- **A flexible CLI** for training, prediction, and evaluation.
+- **Comprehensive evaluation metrics** to assess model performance.
+
+## Project Status
+
+This project is a functional and well-documented proof-of-concept. The V3 architecture represents a significant improvement over previous versions, delivering more accurate and reliable predictions.
+
+## Installation
+
+To get started, clone the repository and install the dependencies using a virtual environment:
+
+```bash
+git clone https://github.com/your-username/kicktipp-predictor.git
+cd kicktipp-predictor
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .[plots,dev]
+pip install -e .
 ```
 
-- The `plots` extra includes `shap` for SHAP value analysis.
-- The `dev` extra includes `ruff`, `mypy`, and `pre-commit`.
-- For Optuna-based tuning, install the `tuning` extra: `pip install -e .[tuning]`.
-- zsh users: quote extras to avoid globbing: `pip install -e '.[plots,dev]'`.
-
-#### Executive Summary
-
-The project is undergoing a strategic pivot. Analysis of the V2 architecture revealed that despite its sophistication, it had reached a performance ceiling, often producing biased or low-accuracy results. The complexity of its multi-model pipeline (outcome classifier, two goal regressors, blending logic) created multiple points of failure and made true optimization difficult.
-
-The new V3 architecture represents a radical simplification designed to overcome these fundamental issues. We are moving from a complex, multi-class classification approach to a more elegant and powerful **ordinal regression framework.** The core of the project will be a single, focused model trained to predict **goal difference**. This change better reflects the nature of the problem, solves inherent class imbalance issues, and provides a much stronger foundation for achieving high accuracy.
-
----
-
-#### 1. Post-Mortem: Core Limitations of the V2 Architecture
-
-Our decision to rebuild is rooted in a clear understanding of the previous architecture's weaknesses:
-
-*   **Problem-Framing Mismatch:** It treated "Home Win," "Draw," and "Away Win" as independent, nominal classes. In reality, they are ordered points on a continuum. A 3-0 win is an amplified version of a 1-0 win, a piece of information the standard classifier cannot use.
-*   **The "Draw" Problem:** The "Draw" outcome is typically the least frequent and most difficult to predict, leading to significant class imbalance. The V2 architecture tried to solve this with a `draw_boost` parameter—a crude patch on a fundamental problem. This often led to the observed trade-off between a balanced model (with low accuracy) and a biased one (ignoring draws to improve points per game).
-*   **Complexity and Error Propagation:** The pipeline involved three separate models. An error or bias in any one of them could negatively impact the final prediction. The blending logic and conditional scoreline selection added further layers of complexity and hard-coded assumptions (like the fixed `HYBRID_WEIGHT`).
-*   **Indirect Prediction:** The model predicted the final outcome indirectly. It was an assembly of parts, not a single coherent prediction. This made it difficult to answer a simple question: "Why does the model think this will be a home win?"
-
----
-
-#### 2. The New V3 Architecture: A Blueprint for "Goal Difference Regression"
-
-The V3 architecture is built on a single, powerful premise: **the most direct path to predicting the outcome is to predict the goal difference.**
-
-**A. The Central Component: A Single Regression Model**
-
-The multi-model pipeline in `predictor.py` is replaced by a single class, the `GoalDifferencePredictor`.
-
-*   **Model:** A single `xgboost.XGBRegressor`.
-*   **Target Variable:** The model is trained directly on the `goal_difference` column (`home_score - away_score`), a continuous numerical target.
-*   **Input Features:** It uses the same rich feature set generated by `data.py` (Elo, form metrics, etc.).
-
-**B. The Probabilistic Bridge: From Regression to Classification**
-
-A raw goal difference prediction (e.g., `+0.67`) is not enough; we need H/D/A probabilities for robust evaluation and betting-style applications. The "Probabilistic Bridge" is a new, crucial component that translates the regressor's output into a full probability distribution.
-
-1.  **Initial Implementation (Thresholding):** For a quick, working baseline, we will use simple thresholds:
-    *   Predicted `goal_diff > 0.5` → Home Win
-    *   Predicted `goal_diff < -0.5` → Away Win
-    *   Otherwise → Draw
-    *(Note: The `0.5` boundary is a sensible starting point but can be tuned).*
-
-2.  **Definitive Implementation (Probabilistic Translation):** The core innovation is to treat the regressor's output not as a point estimate, but as the *mean* (`μ`) of a probability distribution. This acknowledges the uncertainty in the prediction. We then calculate the probabilities by integrating over the relevant parts of the distribution.
-
-    *   **Distribution Choice:** We can use a Normal distribution (`scipy.stats.norm`) or, more appropriately, a Skellam distribution (`scipy.stats.skellam`), which models the difference between two Poisson variables.
-    *   **Calculation:**
-        *   `P(Home Win) = 1 - CDF(0.5)`
-        *   `P(Away Win) = CDF(-0.5)`
-        *   `P(Draw) = CDF(0.5) - CDF(-0.5)`
-    *   **New Hyperparameter:** The standard deviation (`σ`) of this distribution becomes a key, tunable hyperparameter that controls the model's confidence.
-
-**C. Retained Assets: What Stays the Same**
-
-This is a strategic rebuild, not a complete rewrite. We will retain the high-quality engineering components:
-*   **`data.py`:** The data loading, caching, and sophisticated feature engineering logic (especially the Elo system) are preserved.
-*   **`evaluate.py`:** The dynamic, expanding-window evaluation framework remains perfectly suited to the task, as it consumes the H/D/A probabilities produced by our new "Probabilistic Bridge."
-*   **`cli.py`:** The user-facing command-line interface will be re-wired to the new predictor but will maintain its familiar `train`, `predict`, and `evaluate` commands.
-
----
-
-#### 3. Summary of Key Decisions and Strategic Advantages
-
-This new architecture is a direct response to the failings of the old one. Here is a summary of our decisions:
-
-1.  **DECISION: Shift from Multi-Class Classification to Goal Difference Regression.**
-    *   **ADVANTAGE:** Aligns the model's objective with the ordinal nature of football outcomes, providing a more natural and powerful problem formulation.
-
-2.  **DECISION: Replace the three-model prediction pipeline with a single `XGBRegressor`.**
-    *   **ADVANTAGE:** Radically simplifies the architecture, eliminating error propagation and making the model easier to tune, debug, and interpret.
-
-3.  **DECISION: Create a "Probabilistic Bridge" to translate regression output into H/D/A probabilities.**
-    *   **ADVANTAGE:** Solves the "Draw" class imbalance problem elegantly. Draws are no longer a difficult minority class to predict but are simply the natural outcome when the predicted goal difference is near zero. This component also provides a principled way to model uncertainty.
-
-4.  **DECISION: Postpone further feature engineering and scoreline selection until the core model is perfected.**
-    *   **ADVANTAGE:** Enforces focus. By establishing a robust and accurate core model first, any future additions (like market data or a scoreline generator) will be built upon a solid foundation.
-
-5.  **DECISION: Retain and repurpose existing modules for data, evaluation, and the CLI.**
-    *   **ADVANTAGE:** Maximizes development efficiency by leveraging the strongest parts of the existing project.
-
-In conclusion, the V3 Alpha is not just an incremental improvement; it is a fundamental rethinking of the project's core. By simplifying the architecture and choosing a more appropriate mathematical framework, we are creating a system that is more robust, less prone to bias, and has a significantly higher ceiling for predictive accuracy. This is the right path forward.
-
----
-
-#### 4. Balanced Draw Optimization (V3)
-
-To produce realistic draw prediction rates while maintaining accuracy, the tuning system now uses a soft alignment objective: balanced accuracy nudges draw-rate toward a target while still optimizing predictive quality.
-
-**A. Objectives**
-
-*   `balanced_accuracy` — maximize. Computed as `0.8 * accuracy + 0.2 * (1 - |predicted_draw_rate - 0.25|)`.
-*   `log_loss` — minimize.
-
-**B. Optuna Configuration**
-
-*   Multi-objective directions: `directions=["maximize", "minimize"]`.
-*   Sampler: `NSGA-II`, well-suited for multi-objective search.
-
-**C. Trial Evaluation and Selection**
-
-*   Each trial records `accuracy`, `log_loss`, `predicted_draw_rate`, and `mean_draw_prob`.
-*   Balanced accuracy is computed with a target draw rate of `0.25` and a 80/20 weighting.
-*   Selection: choose the completed trial on the Pareto front with the highest `balanced_accuracy`.
-
-**D. Stability Checks and Analytics**
-
-*   Draw rate stability is evaluated across 3 splits of the validation set (by `matchday` or `date`), recording `draw_rate_std` and whether each split falls in `[0.15, 0.30]`.
-*   Study summary includes correlations (`balanced_accuracy` vs `log_loss`, `draw_balance_factor` vs `log_loss`) and draw-rate statistics. Per-trial uncertainty diagnostics capture the correlation between `|predicted_goal_difference|` and `uncertainty_stddev`, along with stddev min/mean/max.
-
-**E. Running Tuning**
-
-```
-python -m kicktipp_predictor.cli tune --n-trials 200 --seasons-back 5
+For development and generating plots, install the `dev` and `plots` extras:
+```bash
+pip install -e '.[dev,plots]'
 ```
 
-**F. Outputs**
+## Usage
 
-*   Selected parameters: `src/kicktipp_predictor/config/best_params.yaml`.
-*   Study summary: `<data_dir>/optuna/gd_v3_tuning_summary.yaml` (or JSON fallback).
+The project is controlled via a command-line interface.
 
-**G. Definition of Done**
+### Training the Model
 
-*   Predicted draw rate clusters around `25%` and stays within `15–30%` across splits.
-*   Balanced accuracy is maintained or improved versus prior baselines.
-*   Stability checks across validation splits pass.
-*   Uncertainty diagnostics recorded and reviewed for convergence behavior.
-*   Documentation reflects the soft optimization strategy (this section).
+To train the model on the latest data:
+```bash
+kicktipp-predictor train
+```
+
+### Making Predictions
+
+To generate predictions for upcoming matches:
+```bash
+kicktipp-predictor predict
+```
+
+### Evaluating Performance
+
+To run a full back-testing evaluation of the model:
+```bash
+kicktipp-predictor evaluate
+```
+
+## The V3 Architecture
+
+The V3 architecture is a strategic redesign focused on simplicity and predictive power. It replaces a complex, multi-model pipeline with a single `XGBRegressor` trained to predict the **goal difference** of a match.
+
+This approach has several key advantages:
+- **Solves Class Imbalance:** The "draw" outcome is no longer a rare class but a natural result of a predicted goal difference near zero.
+- **Improves Accuracy:** By modeling the ordinal relationship between outcomes, the model learns a more nuanced representation of team strength.
+- **Reduces Complexity:** A single model is easier to tune, debug, and interpret.
+
+For a more detailed explanation of the architecture, please see the [Architecture Documentation](docs/architecture.md).
+
+## Results
+
+The model's performance is continuously evaluated using a rigorous back-testing methodology. Here are the latest results:
+
+- **Accuracy:** 40.8%
+- **Average Points:** 1.177
+- **Log Loss:** 1.0999
+
+**Note:** The current model configuration does not predict any draws. This is a known issue and a key area for future improvement. 
+
+For a more detailed analysis of the results, including SHAP plots and performance metrics, please see the [Results Documentation](docs/results.md).
